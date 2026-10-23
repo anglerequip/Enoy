@@ -149,7 +149,7 @@ function renderSidebar() {
     b.setAttribute("aria-selected", on);
   });
   $("project-switch").innerHTML = m === "chat" ? (p && p.kind === "space" ? `<div class="space-chip">
-      <button data-action="project-page" title="Open the project page"><span>▣</span><span class="pname">${esc(p.name)}</span></button>
+      <button data-action="project-page" title="Open the project page">${FOLDER_ICON}<span class="pname">${esc(p.name)}</span></button>
       <button class="icon-btn" data-action="switch-default" title="Leave the project (plain chats)" aria-label="Leave project">✕</button></div>` : "") : `<button data-action="project-menu" title="${esc(p ? p.path : "Open a project folder")}">
     ${FOLDER_ICON}<span class="pname">${p ? esc(p.name) : "Open a folder…"}</span>${CHEV}</button>`;
   const groups = { Today: [], Yesterday: [], "Previous 7 days": [], Older: [] };
@@ -179,7 +179,7 @@ function renderStatusLine() {
   const claudeText = !cl.available ? "Claude off" : (cl.verified || st.claude_last_verified ? "Claude ready" : "Claude not tested");
   el.innerHTML = `<span class="pill"><span class="dot ${st.local.available ? "ok" : "bad"}"></span>${st.local.available ? "Qwen ready" : "Qwen offline"}
     <span class="dot ${cl.available ? (cl.verified || st.claude_last_verified ? "ok" : "warn") : ""}" style="margin-left:8px"></span>${claudeText}</span>
-    <span>⚙ Settings</span>`;
+    <span class="settings-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</span>`;
 }
 
 // ---------------------------------------------------------------- top bar
@@ -210,7 +210,8 @@ function renderTeamToggle() {
 // Top bar: the open chat's title opens its menu (rename, move, delete…), as in Claude.
 function renderChatMenu() {
   renderTeamToggle();
-  $("chat-menu").innerHTML = S.chat ? `<button class="title-btn" data-action="chat-menu" title="Chat options">
+  const space = S.chat && S.project && S.project.kind === "space";
+  $("chat-menu").innerHTML = S.chat ? `${space ? `<button class="crumb-btn" data-action="project-page" title="Open the project page">${esc(S.project.name)}</button><span class="crumb-sep">/</span>` : ""}<button class="title-btn" data-action="chat-menu" title="Chat options">
     <span class="t">${esc(S.chat.task.title)}</span>${CHEV}</button>` : "";
   $("files-btn").classList.toggle("hidden", mode() === "chat" || !S.project);
 }

@@ -641,3 +641,9 @@ button:focus:not(:focus-visible) { outline: none; }
 .chat-more:hover { background: var(--active); color: var(--text); }
 .danger-text { color: var(--bad); }
 @media (hover: none) { .chat-more { opacity: 1; } }
+#chat-menu { display: flex; align-items: center; min-width: 0; }
+.crumb-btn { border: 0; background: none; color: var(--muted); height: 32px; padding: 0 8px; border-radius: var(--r); cursor: pointer; font-size: 14px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb-btn:hover { background: var(--hover); color: var(--text); }
+.crumb-sep { color: var(--faint); margin: 0 -2px; }
+.settings-link { display: inline-flex; align-items: center; gap: 6px; }
+#project-switch .space-chip button svg { color: var(--muted); flex: none; }
