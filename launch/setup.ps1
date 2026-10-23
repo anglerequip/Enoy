@@ -83,6 +83,10 @@ foreach ($lnkPath in $targets) {
     $lnk.Save()
     Write-Host "      $lnkPath"
 }
+# Give the shortcuts Enoy's taskbar ID, so Windows shows Enoy instead of Python.
+Push-Location $Root
+& $venvPython -m fusion_ai.winshell @targets | Out-Null
+Pop-Location
 }
 
 # 5. Ollama check (information only)

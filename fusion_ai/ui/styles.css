@@ -512,8 +512,13 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* Top bar */
 #topbar { min-height: 50px; padding: 7px 12px; }
-.picker-btn { font-size: 15px; font-weight: 600; border-radius: var(--r); }
+.picker-btn { font-size: 15px; font-weight: 600; border-radius: var(--r); height: 34px; padding: 0 8px 0 10px; gap: 7px; line-height: 1; color: var(--text); }
+.picker-btn .chev { color: var(--muted); margin-left: -1px; flex: none; }
+.picker-btn .mini-mark { vertical-align: 0; flex: none; }
 .icon-btn { border-radius: var(--r); transition: background var(--t-fast), color var(--t-fast); }
+#topbar .icon-btn.text { height: 32px; padding: 0 10px; font-size: 13.5px; font-weight: 500; line-height: 1; }
+#topbar .icon-btn:hover { background: var(--hover); color: var(--text); }
+#topbar .icon-btn svg { flex: none; }
 
 /* Welcome */
 #main.empty #scroll { min-height: 30vh; }

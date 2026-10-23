@@ -187,7 +187,7 @@ function renderStatusLine() {
 function renderModelPicker() {
   const m = MODELS[S.model] || MODELS.auto;
   $("model-picker").innerHTML = `<button class="picker-btn" data-action="model-menu">
-    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${m.title} <span class="chev">⌄</span></button>`;
+    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${m.title}<svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
 }
 
 function teamOn() { return S.chat ? !!S.chat.task.state.team : !!S.team; }
@@ -221,7 +221,7 @@ function renderThread(forceBottom = false) {
     if (!S.project) {
       $("thread").innerHTML = `<div class="hello">
         <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">Code</h1>
-        <p>Open a project folder to let Enoy read and change its code. Changes always wait for your OK.</p>
+        <p>Open a project folder to let Enoy read and change its code, or just type below and pick the folder when you send. Changes always wait for your OK.</p>
         <div class="suggest"><button data-action="pick-folder">Open folder…</button></div></div>`;
       return;
     }
@@ -491,7 +491,7 @@ setInterval(() => {
 function renderComposer() {
   const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
   const general = S.project && S.project.is_default;
-  const placeholder = S.chat ? "Reply…" : general ? "Message Enoy…" : `Ask about ${S.project ? S.project.name : "your project"}, or describe a change…`;
+  const placeholder = S.chat ? "Reply…" : general ? "Message Enoy…" : S.project ? `Ask about ${S.project.name}, or describe a change…` : "Describe what to build or change. You'll pick the folder next.";
   $("composer-wrap").innerHTML = `
     <div class="composer">
       ${S.images.length ? `<div class="img-chips">${S.images.map(im => `<span class="img-chip"><img src="${im.src}" alt="Attached image">
@@ -540,7 +540,13 @@ async function send(textOverride) {
   if (S.uploading) { toast("Wait a moment: an image is still being added."); return; }
   const images = textOverride === undefined ? S.images.map(im => im.id) : [];
   if (!text && images.length) text = images.length > 1 ? "What is in these images?" : "What is in this image?";
-  if (!text || !S.project || S.sending) return;
+  if (!text || S.sending) return;
+  if (!S.project) {
+    // Code mode with no folder: ask for one, then send this message into it.
+    S.draft = text; S.sendAfterOpen = true;
+    await pickFolder();
+    return;
+  }
   if (S.chat && ["running", "queued"].includes(S.chat.task.status)) return;
   const backend = S.model === "auto" ? null : S.model;
   if (!S.status) await loadStatus();  // Sent before the first status check finished.
@@ -889,6 +895,7 @@ async function pickFolder() {
   try {
     const d = await api("POST", "/api/projects/pick");
     if (d.project) { closeModal(); await openProject(d.project.id); }
+    else S.sendAfterOpen = false;  // Dialog cancelled: keep the draft, send nothing.
   } catch (e) {
     // No native dialog (e.g. running in a normal browser): ask for the path.
     openModal(`<h2>Open a project folder</h2><label class="field">Folder path<input type="text" id="path-input" placeholder="C:\\Projects\\MyGame"></label>
@@ -909,6 +916,7 @@ async function openProject(id) {
   S.chat = null; S.chatId = null;
   await loadProjects();
   renderAll();
+  if (S.sendAfterOpen) { S.sendAfterOpen = false; await send(); }
 }
 
 // On narrow windows the sidebar floats over the chat, so it starts closed and

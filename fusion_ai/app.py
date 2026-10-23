@@ -21,7 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import __version__, config as config_mod, paths
+from . import __version__, config as config_mod, paths, winshell
 from .backends.base import CLAUDE, LOCAL
 from .backends.claude_code import ClaudeCodeBackend
 from .backends.ollama import OllamaBackend
@@ -115,8 +115,17 @@ def open_with_pywebview(url: str, app: App) -> bool:
     except ImportError:
         log.info("pywebview is not installed; trying Edge app mode.")
         return False
+    winshell.set_app_id()  # Taskbar shows Enoy, not Python.
     window = webview.create_window("Enoy", url, width=1440, height=920, min_size=(1000, 640),
                                    background_color="#1f1e1c")
+
+    def on_shown() -> None:
+        try:
+            winshell.set_window_icon(int(window.native.Handle.ToInt64()))
+        except Exception as exc:
+            log.info("Could not set the window icon: %s", exc)
+
+    window.events.shown += on_shown
 
     def picker() -> str | None:
         result = window.create_file_dialog(webview.FOLDER_DIALOG)
