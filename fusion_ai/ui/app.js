@@ -223,6 +223,12 @@ function renderChatMenu() {
 function nearBottom() { const s = $("scroll"); return s.scrollHeight - s.scrollTop - s.clientHeight < 140; }
 function toBottom() { const s = $("scroll"); s.scrollTop = s.scrollHeight; }
 
+const TIP_ICONS = [
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.9L19 9.7l-5.2 1.8L12 16.5l-1.8-5L5 9.7l5.2-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>',
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/></svg>',
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1V14M12 17h.01"/></svg>',
+];
+
 function renderThread(forceBottom = false) {
   const stick = forceBottom || nearBottom();
   const main = $("main");
@@ -245,7 +251,7 @@ function renderThread(forceBottom = false) {
       <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">${greet}</h1>
       <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code in the sidebar to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
       ${!qwenOk() && S.status ? `<p style="margin-top:10px;color:var(--bad)">Qwen is offline. Start Ollama, then try again. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
-      <div class="suggest">${tips.map(t => `<button data-action="suggest" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>`;
+      <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic">${TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
     return;
   }
   main.classList.remove("empty");
@@ -388,18 +394,28 @@ function testCommands() {
   return [...new Set([...s, ...((S.facts && S.facts.test_commands) || [])])];
 }
 
+// A check that failed because a tool is not installed, not because the code is wrong.
+function missingTool(out) {
+  const m = out.match(/No module named '?([\w.-]+)'?/) || out.match(/'([\w.-]+)' is not recognized as an internal or external command/)
+    || out.match(/([\w.-]+): (?:command )?not found/);
+  return m ? m[1] : "";
+}
+
 function runHtml(r, isLatest) {
   const out = [r.stdout, r.stderr].filter(Boolean).join("\n").trim();
+  const missing = r.status === "failed" ? missingTool(out) : "";
   const state = r.status === "running" ? `<span class="muted">running…</span>`
     : r.status === "passed" ? `<span class="badge-ok">✓ Passed</span>`
     : `<span class="badge-bad">✗ ${r.status === "timeout" ? "Timed out" : r.status === "cancelled" ? "Stopped" : "Failed"}</span>`;
   return `<div class="card">
     <div class="card-title">▶ <code>${esc(r.command)}</code> ${state}</div>
     ${r.status !== "running" ? `<div class="card-sub">Exit code ${r.exit_code ?? "–"} · ${r.duration_s != null ? r.duration_s.toFixed(1) : "?"} s</div>` : ""}
-    ${out ? `<details ${r.status !== "passed" && isLatest ? "open" : ""}><summary>Output</summary><pre class="run-out">${esc(out.slice(-8000))}</pre></details>` : ""}
+    ${missing ? `<div class="note-box">The check could not run: <strong>${esc(missing)}</strong> is not installed for this project's Python or PATH. Your code was not tested, so there is nothing to fix yet.
+      ${/^[\w-]+$/.test(missing) ? ` Install it with <code>python -m pip install ${esc(missing)}</code> in a terminal, then use Run tests.` : ""}</div>` : ""}
+    ${out ? `<details ${r.status !== "passed" && isLatest && !missing ? "open" : ""}><summary>Output</summary><pre class="run-out">${esc(out.slice(-8000))}</pre></details>` : ""}
     <div class="row">
       ${r.status === "running" ? `<button class="btn small" data-action="stop-run" data-id="${r.id}">Stop</button>` : ""}
-      ${isLatest && ["failed", "timeout", "error"].includes(r.status) && !(S.chat && S.chat.task.workflow === "team") ? `<button class="btn primary small" data-action="fix-run" data-id="${r.id}">Fix it</button>` : ""}
+      ${isLatest && !missing && ["failed", "timeout", "error"].includes(r.status) && !(S.chat && S.chat.task.workflow === "team") ? `<button class="btn primary small" data-action="fix-run" data-id="${r.id}">Fix it</button>` : ""}
     </div></div>`;
 }
 

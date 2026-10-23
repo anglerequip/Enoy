@@ -238,6 +238,7 @@ const MD = (() => {
           <button class="btn ghost small" data-action="copy-code" title="Copy the code">Copy</button></span></div><pre><code>${highlight(b.code, b.lang)}</code></pre></div>`;
       }
       case "fusion": {
+        if (DUPES.has(b)) return `<span class="chip-dup" hidden></span>`;  // Same file again: one chip is enough.
         if (b.verb === "DELETE") return `<div class="chip-row"><span class="file-chip">🗑 Delete <code>${escape(b.path)}</code></span></div>`;
         if (b.verb === "RUN") return `<div class="chip-row"><span class="file-chip">▶ Suggested check <code>${escape(b.path)}</code>
           <button class="btn small" data-action="run-cmd" data-cmd="${escape(b.path)}">Run</button></span></div>`;
@@ -262,8 +263,21 @@ const MD = (() => {
     }
   }
 
+  // File blocks (EDIT/FILE/DELETE) that repeat an earlier one for the same file and action.
+  let DUPES = new Set();
+  function markDupes(blocks) {
+    const seen = new Set();
+    DUPES = new Set();
+    for (const b of blocks) {
+      if (b.type !== "fusion" || b.verb === "RUN") continue;
+      const key = b.verb + " " + b.path;
+      if (seen.has(key)) DUPES.add(b); else seen.add(key);
+    }
+  }
+
   function render(text, streaming = false) {
     const blocks = parse(text);
+    markDupes(blocks);
     return blocks.map((b, i) => renderBlock(b, streaming && i === blocks.length - 1)).join("");
   }
 
@@ -282,6 +296,7 @@ const MD = (() => {
   // Update `el` to show `text`, touching only the blocks that changed.
   function renderInto(el, text, streaming) {
     const blocks = parse(text);
+    markDupes(blocks);
     const keys = el._mdKeys && el.childElementCount === el._mdKeys.length ? el._mdKeys : (el.textContent = "", []);
     const next = [];
     blocks.forEach((b, i) => {

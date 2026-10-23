@@ -674,6 +674,150 @@ input[type=text]:focus, input[type=number]:focus, input[type=search]:focus, sele
 .settings-link { display: inline-flex; align-items: center; gap: 6px; }
 #project-switch .space-chip button svg { color: var(--muted); flex: none; }
 
+/* ======================================================================
+   Enoy "Ember" layer: depth, a warm red-to-amber accent gradient and
+   gentle motion on top of the tokens above. Only opacity/transform and
+   static gradients animate or paint, so it stays cheap; the reduced-motion
+   rule switches every animation off.
+   ====================================================================== */
+:root {
+  --accent-2: #e8823a;
+  --grad: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  --glow: color-mix(in srgb, var(--accent) 22%, transparent);
+  --glow-soft: color-mix(in srgb, var(--accent) 9%, transparent);
+  --ring: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  --lift: 0 1px 2px rgba(30, 25, 15, .05), 0 8px 24px rgba(40, 30, 10, .08);
+  --lift-hover: 0 2px 4px rgba(30, 25, 15, .06), 0 14px 34px rgba(40, 30, 10, .12);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161514; --sidebar: #100f0e; --panel: #1e1d1b; --raised: #252422; --hover: #2a2926; --active: #33312d;
+    --border: #2c2a27; --border-strong: #423f3a; --user-bubble: #262422; --code-bg: #121110;
+    --accent-2: #f2944c;
+    --lift: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 30px rgba(0, 0, 0, .35);
+    --lift-hover: 0 2px 4px rgba(0, 0, 0, .4), 0 16px 40px rgba(0, 0, 0, .45);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161514; --sidebar: #100f0e; --panel: #1e1d1b; --raised: #252422; --hover: #2a2926; --active: #33312d;
+  --border: #2c2a27; --border-strong: #423f3a; --user-bubble: #262422; --code-bg: #121110;
+  --accent-2: #f2944c;
+  --lift: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 30px rgba(0, 0, 0, .35);
+  --lift-hover: 0 2px 4px rgba(0, 0, 0, .4), 0 16px 40px rgba(0, 0, 0, .45);
+}
+
+/* Ambient light: a soft warm glow at the top of the conversation area. */
+#main {
+  background:
+    radial-gradient(900px 420px at 50% -120px, var(--glow-soft), transparent 70%),
+    radial-gradient(600px 300px at 85% -80px, color-mix(in srgb, var(--accent-2) 6%, transparent), transparent 70%),
+    var(--bg);
+}
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+
+/* Home ----------------------------------------------------------------- */
+#main.empty #scroll { min-height: 36vh; }
+.hello { position: relative; }
+.hello h1.serif {
+  font-family: var(--font-display); font-weight: 650; letter-spacing: -.025em; font-size: clamp(30px, 4vw, 42px);
+  background: linear-gradient(120deg, var(--text) 30%, color-mix(in srgb, var(--accent) 75%, var(--text)) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hello .hello-mark { width: 40px; height: 40px; filter: drop-shadow(0 6px 18px var(--glow)); animation: ember-breathe 5s ease-in-out infinite; }
+@keyframes ember-breathe { 0%, 100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-3px) scale(1.04); } }
+.hello p { color: var(--muted); }
+.suggest { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 22px; text-align: left; }
+.suggest button {
+  display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--border); color: var(--text);
+  font-size: 13.5px; line-height: 1.4; box-shadow: var(--shadow-sm); text-align: left;
+  transition: transform var(--t) var(--ease-out), box-shadow var(--t), border-color var(--t), background var(--t);
+}
+.suggest button:hover { transform: translateY(-2px); box-shadow: var(--lift-hover); border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); color: var(--text); }
+.suggest button:active { transform: translateY(0) scale(.99); }
+.suggest .tip-ic {
+  flex: none; width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.suggest .tip-ic svg { width: 15px; height: 15px; }
+.suggest button:only-child { justify-self: center; grid-column: 1 / -1; }
+
+/* Composer ------------------------------------------------------------- */
+.composer {
+  border: 1px solid var(--border); box-shadow: var(--lift);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); box-shadow: var(--ring), var(--lift-hover); }
+.round-btn.send { background: var(--grad); color: #fff; box-shadow: 0 4px 14px var(--glow); }
+.round-btn.send:hover:not(:disabled) { background: var(--grad); filter: brightness(1.07); transform: translateY(-1px); }
+.round-btn.send:disabled { background: var(--hover); color: var(--faint); box-shadow: none; }
+.round-btn.stop { background: var(--text); color: var(--bg); }
+.comp-chip, .picker-btn { transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast); }
+.comp-chip:hover, .picker-btn:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
+
+/* Sidebar -------------------------------------------------------------- */
+#sidebar { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, var(--sidebar)) 0%, var(--sidebar) 220px); }
+.chat-item { position: relative; transition: background var(--t-fast), color var(--t-fast), padding var(--t) var(--ease-out); }
+.chat-item:hover { padding-left: 13px; }
+.chat-item.active { background: color-mix(in srgb, var(--accent) 9%, var(--active)); font-weight: 550; }
+.chat-item.active::before {
+  content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 3px; background: var(--grad);
+}
+.new-chat.primary-nav span:first-child {
+  display: inline-flex; width: 22px; height: 22px; border-radius: 7px; align-items: center; justify-content: center;
+  background: var(--grad); color: #fff; box-shadow: 0 3px 10px var(--glow);
+}
+.new-chat.primary-nav span:first-child svg { width: 14px; height: 14px; }
+.brand { letter-spacing: -.02em; }
+
+/* Messages ------------------------------------------------------------- */
+.msg-user {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--user-bubble)), var(--user-bubble));
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border)); box-shadow: var(--shadow-sm);
+}
+.avatar { border-radius: 8px; box-shadow: 0 2px 8px color-mix(in srgb, currentColor 0%, rgba(0, 0, 0, .12)); }
+.avatar.qwen { background: linear-gradient(135deg, var(--qwen), color-mix(in srgb, var(--qwen) 70%, #3b82f6)); }
+.avatar.claude { background: linear-gradient(135deg, var(--claude), var(--accent-2)); }
+.ai-head { letter-spacing: -.005em; }
+.typing span { background: var(--grad); }
+.ai-actions button { border-radius: 8px; }
+
+/* Cards (changes, questions, errors) ------------------------------------ */
+.card { border-radius: var(--r-lg); box-shadow: var(--lift); position: relative; overflow: hidden; }
+.card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-strong); }
+.card.accent::before { background: var(--grad); }
+.card.bad::before { background: var(--bad); }
+.card:has(.badge-ok)::before { background: var(--ok); }
+.card.accent { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.btn { transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast), transform var(--t-fast) var(--ease-out), box-shadow var(--t-fast); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.btn.accent { background: var(--grad); border-color: transparent; color: #fff; box-shadow: 0 4px 14px var(--glow); }
+.btn.accent:hover:not(:disabled) { background: var(--grad); filter: brightness(1.06); border-color: transparent; }
+
+/* Code ----------------------------------------------------------------- */
+.codeblock { border-radius: var(--r-md); box-shadow: var(--shadow-sm); position: relative; }
+.codeblock::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--grad); opacity: .55; border-radius: var(--r-md) var(--r-md) 0 0; }
+.ai-body :not(pre) > code { background: color-mix(in srgb, var(--accent) 7%, var(--code-bg)); border: 1px solid var(--border); }
+
+/* File chips from one answer sit on one wrapping row instead of one row each. */
+.ai-body .chip-row { display: inline-flex; margin: 0 6px 8px 0; vertical-align: top; }
+.ai-body .chip-row .file-chip { margin: 0; border-radius: 999px; padding: 4px 12px 4px 10px; background: var(--raised); }
+.ai-body .chip-row + :not(.chip-row):not(.chip-dup) { margin-top: 6px; }
+
+.note-box { border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border)); background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  border-radius: var(--r); padding: 9px 12px; font-size: 13.5px; line-height: 1.5; }
+
+/* Menus and modals ------------------------------------------------------ */
+.menu { box-shadow: var(--lift-hover); border: 1px solid var(--border); animation: ember-pop .14s var(--ease-out) both; }
+.modal-box { box-shadow: 0 30px 80px rgba(0, 0, 0, .35); animation: ember-pop .18s var(--ease-out) both; }
+@keyframes ember-pop { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .hello .hello-mark { animation: none; }
+  .suggest button:hover, .round-btn.send:hover:not(:disabled), .chat-item:hover { transform: none; padding-left: 10px; }
+}
+
 /* Desktop window: Enoy's own header (winframe.js / winframe.py). The header rows are the
    real Windows title bar through WebView2's app-region support; controls stay clickable. */
 body.custom-frame { --frame-h: 48px; --wc-w: 46px; }

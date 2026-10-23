@@ -1969,6 +1969,10 @@ class Orchestrator:
         run = self.db.get_command_run(run_id)
         if not run or run["status"] == "passed":
             raise TaskError("That check did not fail.")
+        missing = missing_tool((run["stdout"] or "") + "\n" + (run["stderr"] or ""))
+        if missing:  # Nothing in the code to fix: asking a model would only produce a pointless change.
+            raise TaskError(f"The check could not run because {missing} is not installed. Install it, then run the "
+                            "tests again.")
         task = self._require(task_id)
         attempts = task["test_fix_attempts"] + 1
         self.db.update_task(task_id, test_fix_attempts=attempts, kind="edit")
@@ -2547,6 +2551,20 @@ _TIMING = re.compile(r"\b\d+(\.\d+)?\s?(s|ms|seconds?)\b")
 
 
 PROJECT_INSTRUCTIONS_MAX = 8000
+
+
+_MISSING_TOOL = (re.compile(r"No module named '?([\w.-]+)'?"),
+                 re.compile(r"'([\w.-]+)' is not recognized as an internal or external command"),
+                 re.compile(r"([\w.-]+): (?:command )?not found"))
+
+
+def missing_tool(output: str) -> str:
+    """The tool a check needed but could not find (pytest, npm, ...), or ""."""
+    for pattern in _MISSING_TOOL:
+        m = pattern.search(output or "")
+        if m:
+            return m.group(1)
+    return ""
 
 
 def _clean_text(text, limit: int, multiline: bool = False) -> str:
