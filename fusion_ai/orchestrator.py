@@ -1839,7 +1839,29 @@ class Orchestrator:
         if finish:
             self._set(task["id"], status="completed", summary=f"Applied changes to {files}.")
         self.bus.publish({"type": "changeset", "task_id": task["id"], "changeset_id": cs_id})
+        if finish:
+            self._check_after_apply(task, ws)
         return self.db.get_changeset(cs_id)
+
+    def _check_after_apply(self, task: dict, ws: Workspace) -> None:
+        """Run the project's tests right after you apply a change, when that command needs no approval."""
+        if not self.cfg["permissions"].get("test_after_apply", True):
+            return
+        candidates = list(task["state"].get("suggested_commands") or []) + ws.suggest_test_commands()
+        for command in candidates:
+            policy = cmdpolicy.classify(command, self.cfg["permissions"]["command_allowlist"])
+            if policy.level == "allowlisted":
+                try:
+                    self.run_command(task["project_id"], command, task_id=task["id"])
+                    self._act(task["id"], "test.auto", f"Running `{command}` to check the change you applied.",
+                              "system", "testing", reason="Checks run after each applied change (Settings → Safety).")
+                except TaskError as exc:
+                    self._act(task["id"], "test.auto", f"Could not start `{command}`: {exc}", "system", "testing",
+                              outcome="failed")
+                return
+        if candidates:
+            self._event(task["id"], "note", f"`{candidates[0]}` needs your approval, so it was not run automatically. "
+                                            "Use Run tests when you are ready.")
 
     def reject_changeset(self, cs_id: int, reason: str = "") -> dict:
         cs = self.db.get_changeset(cs_id)

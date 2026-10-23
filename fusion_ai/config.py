@@ -143,6 +143,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "permissions": {
         "auto_apply_patches": False,
+        "test_after_apply": True,       # After you apply a change, run the project's tests if that command is allowlisted.
         "command_allowlist": DEFAULT_ALLOWLIST,
         "command_timeout_s": 300,
         "extra_excluded_globs": [],
@@ -258,6 +259,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
     },
     "permissions": {
         "auto_apply_patches": (bool, None),
+        "test_after_apply": (bool, None),
         "command_allowlist": (list, lambda v: None if all(isinstance(x, str) for x in v) else "must be a list of strings"),
         "command_timeout_s": ((int, float), _range(1, 7200)),
         "extra_excluded_globs": (list, lambda v: None if all(isinstance(x, str) for x in v) else "must be a list of strings"),

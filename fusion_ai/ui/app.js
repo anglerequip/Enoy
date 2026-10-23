@@ -865,6 +865,7 @@ function settingsSafety() {
   $("set-body").innerHTML = `
     <div class="set-section"><h3>Changes to your files</h3>
       ${toggleRow("permissions", "auto_apply_patches", "Apply changes without asking", "Off is safer. Deleting a file always asks.")}
+      ${toggleRow("permissions", "test_after_apply", "Run the tests after each applied change", "Only when the test command is on the allowed list below; anything else still asks.")}
       <div class="small muted">Before a change is applied, Enoy checks that the files have not changed since the AI read them, keeps a backup of each, and lets you undo it.</div></div>
     <div class="set-section"><h3>Commands</h3>
       <label class="field">Commands that run without asking (one per line)

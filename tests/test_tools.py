@@ -412,3 +412,21 @@ def test_brave_stops_at_the_monthly_limit_and_falls_back(cfg, monkeypatch, tmp_p
     providers = [ToolRunner(cfg, tools_mod.registry()).run("web_search", {"query": f"q{i}"}).data["provider"] for i in range(3)]
     assert providers == ["brave", "brave", "wikipedia"] and len(sent) == 2
     assert search.brave_usage()["count"] == 2
+
+
+def test_tests_run_after_an_applied_change_when_allowlisted(cfg, tmp_path, monkeypatch):
+    cfg["permissions"]["test_after_apply"] = True
+    orc = _orc(cfg, tmp_path, [])
+    ran = []
+    monkeypatch.setattr(orc, "run_command", lambda pid, command, approved=False, task_id=None, wait=False: ran.append(command) or {})
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "a.py").write_text("x = 1\n")
+    pid = orc.open_project(str(project))["id"]
+    task = orc.db.create_task(pid, "t", "change a", "edit", state={"suggested_commands": ["python -m pytest -q", "rm -rf /"]})
+    orc._check_after_apply(orc.db.get_task(task["id"]), orc.workspace(pid))
+    assert ran == ["python -m pytest -q"]
+    cfg["permissions"]["command_allowlist"] = []
+    ran.clear()
+    orc._check_after_apply(orc.db.get_task(task["id"]), orc.workspace(pid))
+    assert ran == [] and any("needs your approval" in e["text"] for e in orc.db.events(task["id"]))
