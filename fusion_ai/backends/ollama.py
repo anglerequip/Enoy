@@ -126,7 +126,7 @@ class OllamaBackend:
                          for m in request.messages],
             "stream": True,
             "think": bool(s["think"]),
-            "keep_alive": s["keep_alive"],
+            "keep_alive": s["keep_alive"] if request.keep_alive is None else request.keep_alive,
             "options": {
                 "num_ctx": int(request.num_ctx or s["num_ctx"]),
                 "num_predict": int(s["num_predict"]),

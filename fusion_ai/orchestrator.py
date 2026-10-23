@@ -692,6 +692,7 @@ class Orchestrator:
             self._event(task_id, "status", f"{BACKEND_LABEL[LOCAL]} is working ({backend.settings['model']}).", LOCAL)
             req = ChatRequest(
                 messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, num_ctx=num_ctx,
+                keep_alive=self.memory.keep_alive(backend.settings.get("keep_alive")) if self.memory is not None else None,
                 on_thinking=lambda t: self.bus.publish({"type": "thinking", "task_id": task_id, "backend": LOCAL, "text": t}),
             )
             if self.memory is not None:

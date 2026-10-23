@@ -28,6 +28,7 @@ briefly exceed the ceiling before it is stopped.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Callable
@@ -40,6 +41,21 @@ MIB = winproc.MIB
 MODES = {"chill": 700, "medium": 1500, "full": 2800}
 LABEL = {"chill": "Chill", "medium": "Medium", "full": "Full"}
 CTX_STEPS = (32768, 16384, 8192, 4096, 2048)
+# How long Ollama keeps the model in RAM after an answer. Shorter in the low modes so the
+# memory is given back soon; Full keeps the configured value.
+KEEP_ALIVE_S = {"chill": 60, "medium": 300, "full": None}
+
+
+def duration_s(value) -> float | None:
+    """Ollama keep_alive ("15m", "30s", "1h", 300, "-1") in seconds; None means forever or unknown."""
+    text = str(value).strip().lower()
+    m = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*([smh]?)", text)
+    if not m:
+        return None
+    n = float(m.group(1))
+    if n < 0:
+        return None
+    return n * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 RUNNER_NAMES = {"llama-server.exe", "ollama_llama_server.exe", "ollama.exe"}
 CTX_COST_MIB_PER_16K = 450       # Measured on this PC: 16k vs 4k context differed by ~440 MiB.
 WEIGHT_SHARE = 0.16              # Measured: ~1,075 MiB for a 6.3 GB model fully on the GPU.
@@ -57,6 +73,7 @@ class MemorySupervisor:
         self.notify = notify            # notify(kind, text, reason="", outcome="")
         self.state = "idle"
         self.last_action: dict | None = None
+        self.blocked: dict | None = None  # Last request refused before loading, until one is allowed again.
         self.peak_mib = 0.0
         self.current: dict = {"total_mib": 0.0, "processes": [], "measured": False}
         self.active: dict | None = None
@@ -165,6 +182,7 @@ class MemorySupervisor:
         for c in steps:
             est, source = self.estimate(model, c)
             if est is None:
+                self.blocked = None
                 return {"ok": True, "ctx": ctx, "estimate": None, "source": source,
                         "note": f"No memory estimate for {model} yet; the {label} limit ({ceiling:,} MiB) is watched while it runs."}
             if first_est is None:
@@ -174,15 +192,25 @@ class MemorySupervisor:
                 if c != ctx:
                     note = (f"Context reduced from {ctx:,} to {c:,} tokens so {model} stays under the {label} limit "
                             f"({ceiling:,} MiB): about {est:,.0f} MiB {source}.")
+                self.blocked = None
                 return {"ok": True, "ctx": c, "estimate": est, "source": source, "note": note}
         est, source = first_est
         smallest, s_src = self.estimate(model, steps[-1])
+        self.blocked = {"at": time.time(), "model": model}
         fits = [LABEL[m] for m, v in MODES.items() if smallest is not None and smallest <= v * (1 - self.cfg["margin_percent"] / 100)]
         return {"ok": False, "estimate": est, "source": source,
                 "reason": (f"{model} needs about {smallest:,.0f} MiB of RAM even with a {steps[-1]:,}-token context "
                            f"({s_src}), but {label} mode allows {ceiling:,} MiB. Loading it was blocked to keep Windows responsive. "
                            + (f"Switch to {' or '.join(fits)} mode in Settings → Memory & PC, or pick a smaller model."
                               if fits else "Pick a smaller model in Settings."))}
+
+    def keep_alive(self, configured) -> str | int:
+        """The configured keep_alive, shortened to the mode's cap. Never lengthened."""
+        cap = KEEP_ALIVE_S[self.mode]
+        if cap is None or configured is None:
+            return configured if cap is None else int(cap)
+        own = duration_s(configured)
+        return int(cap) if own is None or own > cap else configured
 
     def begin(self, task_id: int | None, cancel, model: str, ctx: int) -> None:
         with self._lock:
@@ -316,4 +344,9 @@ class MemorySupervisor:
                             "Hard cap unavailable: Ollama starts its runner itself, so Windows cannot cap it without "
                             "crashing it. A fast spike can exceed the limit for about a second."),
             "enforce": self.cfg["enforce"],
+            "hard_cap": False,
+            "blocked": self.blocked,
+            "keep_alive_s": KEEP_ALIVE_S[self.mode],
+            "shared_note": ("Ollama is shared: if another program uses the same Ollama, its model counts toward this "
+                            "limit and can be unloaded too."),
         }

@@ -242,7 +242,8 @@ def continuation_brief(task: dict, project: dict, changesets: list[dict], runs: 
         lines += ["", "## Open questions"] + [f"- {q}" for q in state["open_questions"]]
     if state.get("limitations"):
         lines += ["", "## Backend limitations noted"] + [f"- {x}" for x in state["limitations"]]
-    last = [m for m in messages if m["role"] == "assistant"][-1:] if messages else []
+    # PC results (window titles, processes, hardware) stay on this PC: never in a brief.
+    last = [m for m in messages if m["role"] == "assistant" and m["backend"] != "enoy"][-1:] if messages else []
     if last:
         lines += ["", f"## Last answer ({last[0]['backend']})", last[0]["content"][:3000]]
     lines += ["", "## Remaining work", state.get("remaining") or "Continue from the objective and the state above."]

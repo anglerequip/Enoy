@@ -403,3 +403,44 @@ def test_api_hardware_permission(server):
     cfg["pc"]["hardware_read"] = False
     assert call(server, "POST", "/api/config", {"config": cfg})[0] == 200
     assert call(server, "GET", "/api/hardware")[0] == 403
+
+
+# ---------------------------------------------------------------- keep-alive, blocked status, briefs
+
+def test_keep_alive_is_shortened_per_mode_never_lengthened(cfg):
+    assert memory_guard.duration_s("15m") == 900 and memory_guard.duration_s("30s") == 30
+    assert memory_guard.duration_s(-1) is None and memory_guard.duration_s("soon") is None
+    sup, _ = supervisor(cfg, "chill")
+    assert sup.keep_alive("15m") == 60 and sup.keep_alive("10s") == "10s" and sup.keep_alive(-1) == 60
+    sup, _ = supervisor(cfg, "medium")
+    assert sup.keep_alive("15m") == 300
+    sup, _ = supervisor(cfg, "full")
+    assert sup.keep_alive("15m") == "15m"
+
+
+def test_keep_alive_reaches_ollama(cfg, tmp_path):
+    orc = make_orc(cfg, tmp_path, qwen=["Hi."])
+    orc.backends[LOCAL].settings.update(num_ctx=16384, keep_alive="15m")
+    orc.memory, _ = supervisor(cfg, "medium")
+    orc.memory.plan = lambda model, ctx: {"ok": True, "ctx": ctx, "note": ""}
+    orc.start_task(orc.open_project(str(paths.general_chat_dir()))["id"], "Say hi")
+    assert orc.backends[LOCAL].requests[-1].keep_alive == 300
+
+
+def test_blocked_status_is_reported_until_a_request_fits(cfg):
+    sup, _ = supervisor(cfg, "chill")
+    assert not sup.plan("qwen3.5:9b", 16384)["ok"]
+    st = sup.status()
+    assert st["blocked"]["model"] == "qwen3.5:9b" and st["hard_cap"] is False and "shared" in st["shared_note"]
+    cfg["memory"]["mode"] = "full"
+    assert sup.plan("qwen3.5:9b", 16384)["ok"]
+    assert sup.status()["blocked"] is None
+
+
+def test_pc_results_stay_out_of_the_claude_code_brief(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(pc, "list_windows", lambda: [pc.Window(1, "Secret Discord channel", 5, "discord.exe", "normal")])
+    orc = make_orc(cfg, tmp_path, qwen=["(normal answer)"])
+    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
+    t = orc.start_task(pid, "which windows are open?")
+    assert "Secret Discord channel" in orc.db.messages(t["id"])[-1]["content"]
+    assert "Secret Discord channel" not in orc.continuation_brief(t["id"])

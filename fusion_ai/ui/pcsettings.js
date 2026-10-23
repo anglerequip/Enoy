@@ -54,12 +54,14 @@ const MEM_STATE = {
 
 function memLiveHtml(m) {
   if (!m.available) return `<div class="small muted" style="margin-top:8px">${esc(m.detail || "Not running.")}</div>`;
-  const [label, cls] = MEM_STATE[m.state] || [m.state, ""];
+  const blocked = m.blocked && ["idle", "within"].includes(m.state) && !m.active;
+  const [label, cls] = blocked ? ["Model loading blocked", "bad"] : MEM_STATE[m.state] || [m.state, ""];
   const pct = Math.min(100, (m.total_mib / m.ceiling_mib) * 100);
   const procs = m.processes.map(p => `${esc(p.name)} (pid ${p.pid}, ${p.role}): ${p.private_ws_mib == null ? "access denied" : `${p.private_ws_mib.toLocaleString()} MiB`}`).join("<br>");
   const profiles = Object.entries(m.profiles || {}).map(([k, v]) => { const [model, ctx] = k.split("|"); return `${esc(model)} at ${Number(ctx).toLocaleString()} tokens: ${v.toLocaleString()} MiB`; });
   return `<div class="mem-live">
-    <div class="row"><span class="dot ${cls}"></span><strong>${esc(label)}</strong><span class="grow"></span>
+    <div class="row"><span class="dot ${cls}"></span><strong>${esc(label)}</strong>
+      ${m.hard_cap ? "" : `<span class="pill small" title="${esc(m.enforcement)}">Hard cap unavailable</span>`}<span class="grow"></span>
       <span class="small">${m.total_mib.toLocaleString()} / ${m.ceiling_mib.toLocaleString()} MiB · peak ${m.peak_mib.toLocaleString()} MiB</span></div>
     <div class="mem-bar"><span style="width:${pct.toFixed(1)}%" class="${cls}"></span><i style="left:${(m.warn_mib / m.ceiling_mib * 100).toFixed(1)}%" title="Warning threshold"></i></div>
     <div class="small muted">Measured: ${esc(m.metric)}. GPU memory (VRAM) is not counted.</div>
@@ -67,7 +69,9 @@ function memLiveHtml(m) {
     ${m.active ? `<div class="small">Working: ${esc(m.active.model)}, ${Number(m.active.ctx).toLocaleString()}-token context.</div>` : ""}
     ${m.last_action ? `<div class="small">Last action: ${esc(m.last_action.text)} (${new Date(m.last_action.at * 1000).toLocaleTimeString()})</div>` : ""}
     ${profiles.length ? `<details class="small"><summary>Measured model sizes</summary>${profiles.join("<br>")}</details>` : ""}
-    <div class="small muted" style="margin-top:6px"><strong>How it is enforced:</strong> ${esc(m.enforcement)}</div></div>`;
+    ${blocked ? `<div class="small">The last request for ${esc(m.blocked.model)} was refused before loading (${new Date(m.blocked.at * 1000).toLocaleTimeString()}): it would not fit in this mode.</div>` : ""}
+    <div class="small muted" style="margin-top:6px"><strong>How it is enforced:</strong> ${esc(m.enforcement)}</div>
+    <div class="small muted">${esc(m.shared_note || "")}${m.keep_alive_s ? ` In this mode the model is unloaded ${m.keep_alive_s >= 60 ? `${m.keep_alive_s / 60} minute${m.keep_alive_s === 60 ? "" : "s"}` : `${m.keep_alive_s} seconds`} after an answer to give the memory back.` : ""}</div></div>`;
 }
 
 Object.assign(actions, {

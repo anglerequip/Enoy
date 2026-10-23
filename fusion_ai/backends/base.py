@@ -50,6 +50,7 @@ class ChatRequest:
     on_thinking: Callable[[str], None] | None = None
     resume_session: str | None = None  # Claude Code session to continue, if any.
     num_ctx: int | None = None         # Local model context size for this request (memory mode may lower it).
+    keep_alive: str | int | None = None  # Local model: how long it stays loaded after this request.
 
 
 @dataclass

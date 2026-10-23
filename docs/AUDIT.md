@@ -15,13 +15,13 @@ Enoy works end to end with Qwen on this PC:
 
 The three biggest risks are not code quality but process and verification:
 
-1. there is **no version control**;
+1. ~~there is **no version control**~~ (fixed: Git repository with history since 2026-10-23);
 2. **none of the Claude paths added on 2026-10-23 has run against real Claude**;
 3. the **default memory mode blocks the default model**.
 
 ## Critical
 
-1. **No Git repository.** The project folder is not under version control. Every change
+1. **Fixed: no Git repository.** The project is now under Git. Before that, the project folder is not under version control. Every change
    made in this session (thousands of lines) exists only on disk, with no history and no
    way to roll back one feature. *Fix:* `git init`, commit the current state, and commit
    per feature from now on. This is the single most valuable thing to do next.
@@ -46,8 +46,8 @@ The three biggest risks are not code quality but process and verification:
 
 4. **The memory supervisor acts on the shared Ollama.** It measures and unloads Ollama's
    runner, which every program using Ollama shares. During testing it stopped another
-   client's request; that was the dev preview stopping the integration test. *Fix:* say
-   so in the Memory tab (done in the docs, not yet in the UI). Optionally, only enforce
+   client's request; that was the dev preview stopping the integration test. *Fixed:* the
+   Memory tab now says so. Optionally, only enforce
    while Enoy itself has a request running or has loaded the model.
 5. **Not a hard cap.** Windows cannot cap a process Ollama starts without making it crash.
    The supervisor reacts within about one second, so a fast spike can briefly exceed the
@@ -76,10 +76,11 @@ The three biggest risks are not code quality but process and verification:
    (for example a screenshot of an API key) are not, and the approval card only says so.
    *Fix:* optional local OCR (Windows has a built-in OCR API) to warn about visible keys
    before sending.
-10. **PC request results stay in the chat history.** A window list can contain private
+10. **Fixed: PC request results stay in the chat history.** A window list can contain private
     titles, such as a Discord channel name. If you later continue that chat with Claude,
-    those earlier messages can be part of the conversation sent. *Fix:* exclude `enoy`
-    PC-result messages from the history sent to cloud models.
+    those earlier messages can be part of the conversation sent. *Checked:* Claude's own requests never contained them; the one path
+    that could carry one was the brief for *Continue in Claude Code*, which now leaves PC
+    results out.
 11. **Project knowledge is keyword-only and text-only.** No PDF or Word, and no semantic
     search. It works well for exact terms (it found "smoked paprika" in the test) but
     misses paraphrases. *Fix:* local embeddings through Ollama (`nomic-embed-text`, about
@@ -87,9 +88,10 @@ The three biggest risks are not code quality but process and verification:
 12. **Startup of very long chats.** A 300-message chat takes about 86 ms to open the first
     time (richer Markdown and highlighting). Re-renders are fast (3 ms). Above about 1,000
     messages, load older messages on scroll instead of all at once.
-13. **Ollama keep-alive.** `keep_alive = 15m` keeps about 1.1–1.5 GB of RAM and 5+ GB of
+13. **Fixed: Ollama keep-alive.** `keep_alive = 15m` keeps about 1.1–1.5 GB of RAM and 5+ GB of
     VRAM in use after each answer. That is fine in Full mode, but it fights the point of
-    Medium and Chill. *Fix:* a shorter keep-alive per mode.
+    Medium and Chill. Now the model is unloaded 1 minute (Chill) or 5 minutes (Medium)
+    after an answer; Full keeps the configured value.
 14. **CSS has two layers.** The redesign was added as a second layer over the original
     rules to avoid breaking screens. *Fix:* merge the two into one token-based sheet.
 
@@ -131,3 +133,23 @@ The three biggest risks are not code quality but process and verification:
 3. Approve one real Claude test per new path (images, projects, Opus/high).
 4. Add ruff and mypy, then split `orchestrator.py`.
 5. Claude streaming, image secret warning, and history exclusion for PC results.
+
+## Update (later on 2026-10-23)
+
+- **Fixed:**
+  - Sending in Code mode with no folder open did nothing.
+  - The taskbar showed Python instead of Enoy.
+  - Chats could not be renamed or deleted.
+  - Stopping an answer threw away the text written so far.
+- **New Memory tab statuses:** *Model loading blocked* and *Hard cap unavailable*.
+- **Measured:** Qwen 3.5 9B at a 16k context reached 2,018 MiB in Full mode, more than the
+  1,515 MiB measured earlier. Medium mode handles this by lowering the context, and the
+  supervisor unloaded it when the preview was switched to Medium.
+- **Still open, not built:**
+  - Clicking and typing in other apps.
+  - Browser form filling and logins.
+  - Screenshots.
+
+  These are shown as unavailable in the app. They need a reviewed design and a new
+  dependency (UI Automation through `pywinauto`, or a browser driver), so they were not
+  added without your decision.
