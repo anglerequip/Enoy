@@ -129,10 +129,12 @@ class OllamaBackend:
             "keep_alive": s["keep_alive"] if request.keep_alive is None else request.keep_alive,
             "options": {
                 "num_ctx": int(request.num_ctx or s["num_ctx"]),
-                "num_predict": int(s["num_predict"]),
+                "num_predict": int(request.num_predict or s["num_predict"]),
                 "temperature": float(s["temperature"]),
             },
         }
+        if request.num_batch:
+            body["options"]["num_batch"] = int(request.num_batch)
         if request.json_schema is not None:
             body["format"] = request.json_schema
         total_timeout = float(s["request_timeout_s"])

@@ -20,6 +20,7 @@ from fusion_ai.backends.ollama import OllamaBackend
 class FakeOllama:
     def __init__(self, mode="ok", models=("qwen3.5:9b",)):
         self.mode = mode
+        self.bodies = []
         self.models = list(models)
         outer = self
 
@@ -49,6 +50,7 @@ class FakeOllama:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                outer.bodies.append(body)
                 if self.path == "/api/show":
                     self._json(200, {"capabilities": ["completion", "tools", "thinking"]})
                     return
@@ -125,6 +127,19 @@ def test_ollama_streaming_success(fake_ollama):
     status = backend.status()
     assert status.available and status.extra["loaded"]["gpu_percent"] == 80
     assert "tools" in status.extra["capabilities"]
+
+
+def test_ollama_receives_the_memory_mode_settings(fake_ollama):
+    srv = fake_ollama()
+    backend = OllamaBackend(ollama_settings(srv.url, num_ctx=16384, num_predict=4096))
+    backend.chat(req(num_ctx=4096, num_predict=2048, num_batch=256, keep_alive=60))
+    chat = [b for b in srv.bodies if "messages" in b][-1]
+    assert chat["options"]["num_ctx"] == 4096 and chat["options"]["num_predict"] == 2048
+    assert chat["options"]["num_batch"] == 256 and chat["keep_alive"] == 60
+    backend.chat(req())  # Without a memory mode: the user's own settings, Ollama's own batch size.
+    chat = [b for b in srv.bodies if "messages" in b][-1]
+    assert chat["options"]["num_ctx"] == 16384 and chat["options"]["num_predict"] == 4096
+    assert "num_batch" not in chat["options"]
 
 
 def test_ollama_service_missing():

@@ -19,7 +19,7 @@ from . import paths
 ROUTING_MODES = ("auto", "local_first", "claude_first", "manual")
 AGGRESSIVENESS = ("prefer_qwen", "balanced", "prefer_claude")
 CLOUD_POLICIES = ("auto", "never")
-MEMORY_MODES = ("chill", "medium", "full")   # Ceilings in memory_guard.MODES (700 / 1,500 / 2,800 MiB).
+MEMORY_MODES = ("chill", "medium", "full")   # Chill / Middle / Full: memory_guard.MODES (1,200 / 1,600 / 1,900 MiB).
 PC_PROFILES = ("observe", "assist", "automation")
 CLAUDE_EFFORT = ("", "low", "medium", "high", "xhigh", "max")  # "" = Claude Code's own default.
 WORKFLOWS = (
@@ -97,7 +97,8 @@ DEFAULTS: dict[str, Any] = {
     "memory": {
         "mode": "chill",                # Default on a new install. The 9B model does not fit Chill.
         "margin_percent": 10,           # Warning threshold below the ceiling (monitoring delay, spikes).
-        "enforce": True,                # Unload / stop the local model when the ceiling is crossed.
+        "enforce": True,                # No longer used: enforcement is always on. Kept so old config files load.
+        "os_cap": True,                 # Windows hard RAM cap (working-set maximum) on Ollama's model runner.
         "allow_terminate_runner": True, # Last resort: end Ollama's model runner if unloading fails.
         "unload_on_exit": True,         # Free the model's memory when Enoy closes.
     },
@@ -189,6 +190,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "mode": (str, _choice(MEMORY_MODES)),
         "margin_percent": (int, _range(5, 25)),
         "enforce": (bool, None),
+        "os_cap": (bool, None),
         "allow_terminate_runner": (bool, None),
         "unload_on_exit": (bool, None),
     },

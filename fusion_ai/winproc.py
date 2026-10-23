@@ -1,8 +1,8 @@
 """Read-only Windows process information through the Win32 API (ctypes, no extra packages).
 
 Used to find the local model's processes and measure their memory. Nothing here
-changes or ends a process except `terminate`, which the memory supervisor calls
-only for a process it has identified as an Ollama model runner.
+changes or ends a process except `terminate` and `cap_working_set`, which the memory
+supervisor calls only for a process it has identified as an Ollama model runner.
 
 Memory metric: the **private working set**, the same number Task Manager shows in
 its "Memory" column: private memory that currently sits in RAM. Two other numbers
@@ -24,6 +24,11 @@ IS_WINDOWS = os.name == "nt"
 TH32CS_SNAPPROCESS = 0x00000002
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_TERMINATE = 0x0001
+PROCESS_SET_QUOTA = 0x0100
+PROCESS_QUERY_INFORMATION = 0x0400
+QUOTA_LIMITS_HARDWS_MIN_DISABLE = 0x2
+QUOTA_LIMITS_HARDWS_MAX_ENABLE = 0x4
+QUOTA_LIMITS_HARDWS_MAX_DISABLE = 0x8
 
 
 @dataclass
@@ -71,6 +76,9 @@ if IS_WINDOWS:
     _k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
     _k32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
     _psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+    _k32.SetProcessWorkingSetSizeEx.argtypes = [wintypes.HANDLE, ctypes.c_size_t, ctypes.c_size_t, wintypes.DWORD]
+    _k32.GetProcessWorkingSetSizeEx.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                                ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(wintypes.DWORD)]
 
 
 def list_processes() -> list[ProcInfo]:
@@ -139,5 +147,47 @@ def terminate(pid: int) -> bool:
         return False
     try:
         return bool(_k32.TerminateProcess(h, 1))
+    finally:
+        _k32.CloseHandle(h)
+
+
+def cap_working_set(pid: int, max_bytes: int) -> int | None:
+    """Windows hard maximum on a process's working set: the RAM it may hold. Returns the cap
+    Windows reports afterwards (bytes), or None if Windows refused.
+
+    Pages above the cap are moved out by Windows (to the page file); the process keeps
+    running, possibly slower. The cap lasts until the process ends. It does not limit
+    commit or page file use.
+    """
+    if not IS_WINDOWS:
+        return None
+    h = _k32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION, False, pid)
+    if not h:
+        return None
+    try:
+        if not _k32.SetProcessWorkingSetSizeEx(h, MIB, max_bytes,
+                                               QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_ENABLE):
+            return None
+        lo, hi, flags = ctypes.c_size_t(), ctypes.c_size_t(), wintypes.DWORD()
+        if not _k32.GetProcessWorkingSetSizeEx(h, ctypes.byref(lo), ctypes.byref(hi), ctypes.byref(flags)):
+            return None
+        return hi.value if flags.value & QUOTA_LIMITS_HARDWS_MAX_ENABLE else None
+    finally:
+        _k32.CloseHandle(h)
+
+
+def release_working_set_cap(pid: int) -> bool:
+    """Remove a hard working-set maximum set by `cap_working_set`."""
+    if not IS_WINDOWS:
+        return False
+    h = _k32.OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION, False, pid)
+    if not h:
+        return False
+    try:
+        lo, hi, flags = ctypes.c_size_t(), ctypes.c_size_t(), wintypes.DWORD()
+        if not _k32.GetProcessWorkingSetSizeEx(h, ctypes.byref(lo), ctypes.byref(hi), ctypes.byref(flags)):
+            return False
+        return bool(_k32.SetProcessWorkingSetSizeEx(h, lo.value, hi.value,
+                                                    QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE))
     finally:
         _k32.CloseHandle(h)

@@ -153,3 +153,17 @@ The three biggest risks are not code quality but process and verification:
   These are shown as unavailable in the app. They need a reviewed design and a new
   dependency (UI Automation through `pywinauto`, or a browser driver), so they were not
   added without your decision.
+
+## Update: memory limits 1,200 / 1,600 / 1,900 MiB (2026-10-23)
+
+- **Limits:** Chill 1,200 MiB, Middle (shown as Medium before) 1,600 MiB, Full 1,900 MiB.
+  No mode may reach 2,000 MiB; the app refuses to start if one does. Items 3 and 5 above
+  are superseded: Qwen 3.5 9B now fits all three modes, and there is a Windows cap.
+- **New:** per-mode context, answer-length and batch caps; one model in memory at a time;
+  free-RAM and measurement checks before loading; a Windows hard working-set cap on
+  Ollama's runner; a stop point 4 % under each limit; checks four times a second while
+  Qwen works; the old *enforce* setting no longer switches enforcement off.
+- **Still not covered:** the Windows cap starts up to a quarter second after the runner,
+  covers RAM only (not commit or the page file) and not Ollama's server process. Two
+  runners are each capped and the extra one is unloaded, so for a moment their sum can
+  pass the limit. Ollama's server-wide settings are not changed.

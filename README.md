@@ -113,33 +113,76 @@ stay when the chat they came from is gone.
 
 ## Memory modes and PC access (Settings → Memory & PC)
 
-**Memory mode** caps the RAM the local model may use, so Windows stays responsive:
+**Memory mode** caps the RAM the local model may use, so Windows stays responsive. The
+numbers are MiB (1 MiB = 1,048,576 bytes):
 
-- **Chill**: 700 MiB, the default.
-- **Medium**: 1,500 MiB.
-- **Full**: 2,800 MiB.
+| Mode | Limit | Requests start below | Request stopped at | Context up to | Answers up to | Prompt batch |
+|---|---|---|---|---|---|---|
+| **Chill** (default) | 1,200 MiB | 1,080 MiB | 1,152 MiB | 4,096 tokens | 2,048 tokens | 256 |
+| **Middle** | 1,600 MiB | 1,440 MiB | 1,536 MiB | 8,192 tokens | 4,096 tokens | 256 |
+| **Full** | 1,900 MiB | 1,710 MiB | 1,824 MiB | 16,384 tokens | your setting | Ollama's default |
 
-The number is the *private working set*, the "Memory" column in Task Manager, of Ollama's
-server plus its model runner (`llama-server.exe`). GPU memory is shown separately and not
-counted. Measured on this PC, Qwen 3.5 9B needs about **1,075 MiB at a 4k context and
-1,515 MiB at 16k**, so:
+No mode can allow 2,000 MiB or more; the app refuses to start if the code is ever changed
+to do so. The "start below" point is 10 % under the limit (`memory.margin_percent`); the
+stop point is 4 % under it, to leave room for the reaction time. A mode only ever lowers
+your own settings.
 
-- In **Chill** it is blocked, with an explanation.
-- In **Medium** Enoy lowers the context (the chat says so).
-- In **Full** it runs as configured.
+**What is measured.** The limit applies to the *private working set*, the "Memory" column
+in Task Manager, of Ollama's server plus its model runner (`llama-server.exe`). Each
+process is counted once. Shown next to it but not counted: private commit, total working
+set (which includes shared pages of the model file), GPU memory (reported by Ollama) and
+Enoy's own memory.
 
-How it is enforced:
+**Measured on this PC** (Qwen 3.5 9B, Q4_K_M, RTX 3070, prompt filling most of the context):
 
-- Every local request is checked first. Requests that cannot fit are blocked or given a
-  smaller context; the limit is never raised.
-- While the model is loaded, its memory is checked every second.
-- Above the ceiling the request is stopped and the model is unloaded through Ollama's API.
-  If memory stays high, Ollama's runner process is ended as a last resort. Nothing else is
-  ever touched.
+| Context | Private working set | With prompt batch 256 |
+|---|---|---|
+| 2,048 | 1,029 MiB | |
+| 4,096 | 1,082 MiB | 1,055 MiB |
+| 8,192 | 1,292 MiB | 1,199 MiB |
+| 16,384 | 1,521 MiB | |
 
-This is a supervisor, **not a hard cap**. Ollama starts its runner itself, so Windows cannot
-cap it without crashing it, and a fast spike can exceed the limit for about a second.
-Blocked requests never move to Claude automatically.
+From 8k on, part of the model no longer fits on the GPU and moves to RAM. So Qwen runs in
+all three modes: Chill at up to 4k, Middle at 8k, Full at 16k. One earlier run at 16k
+reached 2,018 MiB; Full guards against that with the measures below. These are
+measurements, not guarantees: other programs using the GPU can push more of the model
+into RAM.
+
+In the Memory tab each mode card says whether the configured model fits and at which
+context, and whether that number was measured or estimated. *Measured model sizes* lists
+the readings, with **Forget measurements** to start over (for example after closing a game
+that was using the GPU).
+
+**How it is enforced:**
+
+1. **Before a request.** The context, answer length and batch size are capped for the mode.
+   Other models Ollama has loaded are unloaded first, so only one model holds memory. The
+   request's memory is estimated from earlier measurements (or the model file size) and a
+   smaller context is used if needed. If nothing fits, if Ollama's memory cannot be
+   measured, or if Windows has less than 512 MiB to spare, the request is refused with an
+   explanation: the model, its quantization, and what to change (another mode, a smaller
+   context, a smaller model or quantization). It is never sent to Claude instead.
+2. **Windows hard cap** (on by default; switch: *Windows RAM cap on Qwen*). Ollama's model
+   runner gets a Windows hard working-set maximum: the stop point minus the server's own
+   memory. Windows keeps the runner's RAM under it and moves the rest to the page file, so
+   Qwen keeps working but may slow down. Tested: a 16k context that uses 1,521 MiB
+   uncapped stayed at 1,103 MiB under an 1,100 MiB cap and answered normally. If the
+   runner sits at the cap, the next request uses a smaller context.
+3. **While Qwen works**, memory is checked four times a second. At the stop point the
+   request is stopped and the model unloaded. If memory stays high for 8 seconds, Ollama's
+   runner process is ended as a last resort. Nothing else is ever touched. This cannot be
+   switched off.
+
+**Hard or best-effort?** The Windows cap is enforced by Windows, but only on the runner's
+RAM: it starts up to a quarter second after the runner does, does not limit commit or page
+file use, and does not cover Ollama's server process (a few MiB, monitored). A Windows
+job-object limit was not used: it caps commit, and the runner commits about 8,300 MiB
+while holding about 1,000 MiB in RAM, so it would fail at load. Every action is logged in
+Activity.
+
+Ollama's server-wide settings (`OLLAMA_NUM_PARALLEL`, `OLLAMA_MAX_LOADED_MODELS`,
+`OLLAMA_KV_CACHE_TYPE`) are not set on this PC and Enoy does not change them. Enoy sends
+one request at a time and unloads extra models itself.
 
 **PC access** works from a chat:
 

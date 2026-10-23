@@ -123,7 +123,10 @@ class App:
                         "detail": "The memory supervisor is not running (development mode or not Windows)."}
             if q.get("refresh"):
                 orc.memory.tick()
-            return {"available": True, **orc.memory.status()}
+            local = orc.backends.get(LOCAL)
+            model = (local.settings.get("model") if local is not None else None) or None
+            ctx = int(local.settings.get("num_ctx") or 0) if local is not None else 0
+            return {"available": True, **orc.memory.status(model, ctx or None)}
 
         @r("POST", "/api/memory/mode")
         def memory_mode(q, body):
@@ -131,12 +134,23 @@ class App:
             if mode not in memory_guard.MODES:
                 raise ApiError(400, "Unknown memory mode.")
             old = orc.cfg["memory"]["mode"]
+            if mode == old:
+                return {"config": orc.cfg}
             cfg = save(config_mod.merge_update(orc.cfg, {"memory": {"mode": mode}}))
             orc._act(None, "memory.mode_changed", f"Memory mode changed from {memory_guard.LABEL[old]} to "
                      f"{memory_guard.LABEL[mode]} ({memory_guard.MODES[mode]:,} MiB).", "user", outcome=mode)
             if orc.memory is not None:
                 orc.memory.tick()  # Apply right away (unloads if the new limit is already exceeded).
             return {"config": cfg}
+
+        @r("POST", "/api/memory/forget")
+        def memory_forget(q, body):
+            if orc.memory is None:
+                raise ApiError(409, "The memory supervisor is not running.")
+            n = orc.memory.forget()
+            orc._act(None, "memory.measurements_cleared", f"Cleared {n} stored memory measurement(s); estimates start "
+                     "again from the model file size.", "user")
+            return {"cleared": n}
 
         @r("GET", "/api/hardware")
         def hardware_inventory(q, body):

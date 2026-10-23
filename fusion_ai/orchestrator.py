@@ -168,8 +168,8 @@ class Orchestrator:
     def _memory_notify(self, kind: str, text: str, reason: str = "", outcome: str = "", task_id: int | None = None) -> None:
         self._act(task_id, kind, text, LOCAL, "local", reason=reason, outcome=outcome)
         if task_id and kind == "memory.request_stopped":
-            self._stop_reason[task_id] = (text + " Try again in Medium or Full mode, or with a smaller model "
-                                          "(Settings → Memory & PC).")
+            self._stop_reason[task_id] = (text + " Try again in a higher memory mode, with a smaller context or "
+                                          "with a smaller model (Settings → Memory & PC).")
         elif task_id:
             self._event(task_id, "note", text, LOCAL)
 
@@ -676,7 +676,7 @@ class Orchestrator:
                 self.db.update_step(step_id, status="working")
         busy = {"task_id": task_id, "step_id": step_id, "purpose": purpose, "since": time.time(), "chunks": 0}
         try:
-            num_ctx = self._memory_plan(task_id, step_id)
+            limits = self._memory_plan(task_id, step_id)
         except BackendError:
             self._local_lock.release()
             raise
@@ -691,12 +691,11 @@ class Orchestrator:
         try:
             self._event(task_id, "status", f"{BACKEND_LABEL[LOCAL]} is working ({backend.settings['model']}).", LOCAL)
             req = ChatRequest(
-                messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, num_ctx=num_ctx,
-                keep_alive=self.memory.keep_alive(backend.settings.get("keep_alive")) if self.memory is not None else None,
+                messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, **limits,
                 on_thinking=lambda t: self.bus.publish({"type": "thinking", "task_id": task_id, "backend": LOCAL, "text": t}),
             )
             if self.memory is not None:
-                self.memory.begin(task_id, cancel, backend.settings["model"], num_ctx or backend.settings["num_ctx"])
+                self.memory.begin(task_id, cancel, backend.settings["model"], limits["num_ctx"] or backend.settings["num_ctx"])
             sent = "\n\n".join(f"[{m.role}]\n{m.content}" for m in messages)
             chars = len(sent)
             n_img = sum(len(m.images) for m in messages)
@@ -714,12 +713,13 @@ class Orchestrator:
             self._busy.pop(LOCAL, None)
             self._local_lock.release()
 
-    def _memory_plan(self, task_id: int | None, step_id: int | None = None) -> int | None:
-        """Context size allowed by the memory mode, or BackendError("memory") if the model cannot fit."""
+    def _memory_plan(self, task_id: int | None, step_id: int | None = None) -> dict:
+        """Request settings the memory mode allows (ChatRequest fields), or BackendError("memory") if the model cannot fit."""
         if self.memory is None:
-            return None
+            return {"num_ctx": None}
         local = self.backends[LOCAL]
-        plan = self.memory.plan(local.settings["model"], int(local.settings["num_ctx"]))
+        predict = local.settings.get("num_predict")
+        plan = self.memory.plan(local.settings["model"], int(local.settings["num_ctx"]), int(predict) if predict else None)
         if not plan["ok"]:
             self._act(task_id, "memory.load_blocked", "Local model not loaded: it would exceed the memory limit.", LOCAL,
                       "local", reason=plan["reason"], outcome="blocked", step_id=step_id)
@@ -728,7 +728,8 @@ class Orchestrator:
             self._event(task_id, "note", plan["note"], LOCAL)
             self._act(task_id, "memory.context_reduced" if plan.get("ctx") != local.settings["num_ctx"] else "memory.note",
                       plan["note"], LOCAL, "local", step_id=step_id)
-        return plan.get("ctx")
+        return {"num_ctx": plan.get("ctx"), "num_predict": plan.get("num_predict"), "num_batch": plan.get("num_batch"),
+                "keep_alive": self.memory.keep_alive(local.settings.get("keep_alive"))}
 
     def _team_skips_images(self, task_id: int, latest_only: bool = False) -> bool:
         """The team works from text only, so a message with pictures is answered directly."""
@@ -1922,12 +1923,17 @@ class Orchestrator:
         messages = [ChatMessage("system", EXPLAIN_SYSTEM), ChatMessage("user", log_text)]
         try:
             self.db.add_transmission(task_id, LOCAL, "explain", [], f"[system]\n{EXPLAIN_SYSTEM}\n\n[user]\n{log_text}")
-            result = self.backends[LOCAL].chat(ChatRequest(messages=messages, purpose="explain",
-                                                           num_ctx=self._memory_plan(None)))
+            limits = self._memory_plan(None)
+            if self.memory is not None:
+                self.memory.begin(None, None, self.backends[LOCAL].settings["model"],
+                                  limits["num_ctx"] or self.backends[LOCAL].settings["num_ctx"])
+            result = self.backends[LOCAL].chat(ChatRequest(messages=messages, purpose="explain", **limits))
         except BackendError as exc:
             self._act(task_id, "explain.failed", f"Qwen could not explain the workflow: {exc}", LOCAL, outcome="failed")
             raise TaskError(f"Qwen could not explain the workflow: {exc}") from exc
         finally:
+            if self.memory is not None:
+                self.memory.end()
             self._busy.pop(LOCAL, None)
             self._local_lock.release()
         seconds = time.time() - start

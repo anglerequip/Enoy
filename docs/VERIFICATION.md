@@ -477,10 +477,9 @@ The full suite passed 315 tests.
 
 ## 6. Needs you
 
-1. **Pick a memory mode** (Settings → Memory & PC). Chill (700 MiB) is the default you asked
-   for, and Qwen 3.5 9B does not fit it (it needs about 1,075 MiB at minimum), so local
-   answers are blocked until you choose Medium (smaller context) or Full. Enoy never raises
-   the limit by itself.
+1. **Memory modes** are now Chill 1,200, Middle 1,600 and Full 1,900 MiB, and Qwen 3.5 9B
+   runs in all three (see "Memory limits, second round" below). Nothing to choose unless you
+   want a larger context than Chill's 4,096 tokens.
 2. **Claude has not been tested with the new paths.** That covers images (stream-json input),
    Opus 5.5 at high effort, project instructions and knowledge, and team runs. Each needs one
    real request, which uses your plan, so none was sent. The approval card shows exactly what
@@ -493,3 +492,51 @@ The full suite passed 315 tests.
    where the PNG is) and run `launch\make_icon.py`.
 5. Luau checking is a bracket-balance check only. Installing `selene` or `stylua`
    (Rokit/Aftman) gives real Luau checks, which Enoy will suggest as checks.
+
+## Memory limits, second round (2026-10-23)
+
+Chill 1,200 MiB, Middle 1,600 MiB, Full 1,900 MiB; none may reach 2,000 MiB. Everything
+below ran on this PC with local Qwen 3.5 9B only; no Claude request was sent.
+
+**Measured directly through Ollama** (private working set of Ollama's server and runner,
+prompt filling most of the context):
+
+| Context | Prompt batch 512 | Prompt batch 256 | Private commit | On the GPU |
+|---|---|---|---|---|
+| 2,048 | 1,029 MiB | | 8,267 MiB | all |
+| 4,096 | 1,082 MiB | 1,055 MiB | 8,386 MiB | all |
+| 8,192 | 1,292 MiB | 1,199 MiB | 8,509 MiB | 5,354 of 6,106 MiB |
+| 16,384 | 1,521 MiB | | 8,787 MiB | 5,338 of 6,378 MiB |
+
+**Windows hard cap evaluated.** A hard working-set maximum (SetProcessWorkingSetSizeEx) on
+the runner: at 16k with an 1,100 MiB cap the answer completed in 20.2 s (23.7 s uncapped)
+and memory stayed at 1,103 MiB; at 4k with a 900 MiB cap, 10.9 s and 899 MiB. Windows
+accepted it without administrator rights. A job-object limit was not tried on the runner:
+it caps commit, which is about 8,300 MiB.
+
+**In the app (dev preview, Activity log checked):**
+
+- Chill: a chat ran at a 4,096-token context (capped from 16,384, logged), peaked at
+  1,004 MiB; the runner was capped at 1,135 MiB.
+- Middle: a prompt filling 8k peaked at 1,200 MiB; Ollama reported 5,298 of 6,030 MiB on
+  the GPU.
+- Switching to Chill with that model still loaded: Windows trimmed it from 1,200 to
+  1,095 MiB at once; nothing was unloaded.
+- Full: a prompt of about 14,000 tokens at 16k peaked at 1,520 MiB; cap 1,806 MiB.
+- The cap switch: off removed the cap from the running runner (Windows reported it as soft),
+  on restored it.
+- *Forget measurements* cleared three old readings (1,622 MiB at 8k and 1,747 MiB at 16k
+  from an earlier, heavier run) that had been holding Middle and Full to smaller contexts.
+
+**Found and fixed during the live check:**
+
+- Old peak readings were kept forever, and small contexts were extrapolated from them, so
+  Chill and Middle would have refused Qwen. Now each new load replaces the reading, and a
+  smaller context is never estimated above the smallest measured one.
+- A runner already over the limit (left loaded by the integration tests) was unloaded on
+  the reading taken just before its cap applied. Now Enoy re-measures after setting a cap.
+- Ollama's short GPU-check runner exits before it can be capped and was reported as a
+  refused cap. Now only runners holding a model are reported.
+
+**Not verified:** the last resort (ending the runner) against the real Ollama; behaviour
+when another program fills the GPU and pushes more of the model into RAM.
