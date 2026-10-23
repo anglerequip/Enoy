@@ -118,8 +118,17 @@ class ClaudeCodeBackend:
         return BackendStatus(self.name, True, detail, self.settings.get("model", "") or "Claude Code default",
                              version, self.verified, extra={"auth": auth, "last_verified": self.last_verified})
 
-    def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False) -> list[str]:
-        tools = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"] if web else ["--tools", ""]
+    def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False,
+                   mcp_config: str | None = None, enoy_tools: list[str] | None = None) -> list[str]:
+        builtin = "WebSearch,WebFetch" if web else ""
+        allowed = (["WebSearch", "WebFetch"] if web else []) + [f"mcp__enoy__{n}" for n in enoy_tools or []]
+        tools = ["--tools", builtin] + (["--allowedTools", ",".join(allowed)] if allowed else [])
+        if mcp_config:
+            # Only Enoy's server, never the user's own MCP servers. --safe-mode would also drop Enoy's
+            # server, so it is replaced by narrower switches: no user settings (hooks, plugins), no skills.
+            tools += ["--mcp-config", mcp_config, "--strict-mcp-config", "--setting-sources", "project",
+                      "--disable-slash-commands"]
+        web = web or bool(mcp_config)  # stream-json either way, to see the tool calls.
         if images:
             # Plain-text input cannot carry pictures. Claude Code's stream-json input takes
             # one JSON user message with image blocks; it requires stream-json output too.
@@ -129,7 +138,7 @@ class ClaudeCodeBackend:
             args = ["-p", "--output-format", "stream-json", "--verbose"] + tools
         else:
             args = ["-p", "--output-format", "json"] + tools
-        if self.settings.get("safe_mode", True):
+        if self.settings.get("safe_mode", True) and not mcp_config:
             # Skip the user's own Claude Code customizations (CLAUDE.md, memory,
             # plugins, skills, MCP servers). They are not needed here because
             # Enoy sends its own context, and they add tokens to every request.
@@ -163,7 +172,9 @@ class ClaudeCodeBackend:
                       for img in pictures]
             prompt = json.dumps({"type": "user", "message": {"role": "user",
                                                              "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
-        cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools)
+        mcp_config = _write_mcp_config(request.enoy_tools, request.enoy_env) if request.enoy_tools else None
+        cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools,
+                                                 mcp_config, request.enoy_tools)
         timeout = float(self.settings.get("timeout_s", 600))
         start = time.monotonic()
         try:
@@ -226,6 +237,19 @@ class ClaudeCodeBackend:
             usage=usage, session_id=data.get("session_id"), duration_s=time.monotonic() - start,
             tool_events=_tool_events(out),
         )
+
+
+def _write_mcp_config(names: list[str], env: dict) -> str:
+    """MCP config for one request: Enoy's own server, offering only `names`. Holds settings, never secrets."""
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    cfg = {"mcpServers": {"enoy": {
+        "command": sys.executable, "args": ["-m", "fusion_ai.tools.mcp_server"],
+        "env": {"PYTHONPATH": str(root), "PYTHONIOENCODING": "utf-8", "ENOY_MCP_TOOLS": ",".join(names),
+                **{k: v if isinstance(v, str) else json.dumps(v) for k, v in env.items()}}}}}
+    path = paths.claude_workdir() / "enoy-mcp.json"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    return str(path)
 
 
 def _tool_events(out: str) -> list[dict]:

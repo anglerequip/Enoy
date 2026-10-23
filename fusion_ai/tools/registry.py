@@ -199,6 +199,8 @@ class ToolRunner:
             return self._done(ToolResult(name, safe_args, False, error=f"There is no tool named '{name}'.",
                                          error_kind="invalid"), start)
         ok, why = self.allowed(tool)
+        if ok and self.offer is not None and name not in self.offer:
+            ok, why = False, f"{name} was not offered for this request."
         if not ok:
             return self._done(ToolResult(name, safe_args, False, error=why, error_kind="denied"), start)
         try:

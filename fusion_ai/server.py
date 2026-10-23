@@ -49,6 +49,7 @@ class App:
         self.token = secrets.token_urlsafe(24)
         self.folder_picker = folder_picker
         self.file_saver: Callable[[str], str | None] | None = None  # Native "Save as" dialog, when there is a window.
+        self.window = None  # The desktop window with Enoy's own header (app.DesktopFrame), when there is one.
         self.save_config = save_config
         self.last_seen = time.time()
         self.routes: list[tuple[str, re.Pattern, Callable]] = []
@@ -165,6 +166,24 @@ class App:
         @r("GET", "/api/pc")
         def pc_summary(q, body):
             return pc.summary(orc.cfg)
+
+        @r("POST", "/api/window/(minimize|toggle|close)")
+        def window_command(q, body, action):
+            if self.window is None:
+                raise ApiError(404, "Not running in Enoy's own window.")
+            self.window.command(action)
+            return {"ok": True}
+
+        @r("GET", "/api/window")
+        def window_state(q, body):
+            return {"custom": self.window is not None} | (self.window.state() if self.window else {})
+
+        @r("POST", "/api/window/theme")
+        def window_theme(q, body):
+            color = str(body.get("color", ""))
+            if self.window is not None and re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                self.window.theme(bool(body.get("dark")), color)
+            return {"ok": True}
 
         @r("GET", "/api/tools")
         def tools_info(q, body):

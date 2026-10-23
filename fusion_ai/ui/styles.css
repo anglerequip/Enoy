@@ -673,3 +673,24 @@ input[type=text]:focus, input[type=number]:focus, input[type=search]:focus, sele
 .crumb-sep { color: var(--faint); margin: 0 -2px; }
 .settings-link { display: inline-flex; align-items: center; gap: 6px; }
 #project-switch .space-chip button svg { color: var(--muted); flex: none; }
+
+/* Desktop window: Enoy's own header (winframe.js / winframe.py). The header rows are the
+   real Windows title bar through WebView2's app-region support; controls stay clickable. */
+body.custom-frame { --frame-h: 48px; --wc-w: 46px; }
+body.custom-frame #topbar { min-height: var(--frame-h); padding-top: 0; padding-bottom: 0; padding-right: calc(var(--wc-w) * 3 + 12px); }
+body.custom-frame #app:has(> #drawer:not(.hidden), > #activity:not(.hidden), > #artifact:not(.hidden)) #topbar { padding-right: 12px; }
+body.custom-frame .sb-head { min-height: calc(var(--frame-h) - 10px); }
+body.custom-frame #topbar, body.custom-frame .sb-head { app-region: drag; -webkit-user-select: none; user-select: none; }
+body.custom-frame :is(#topbar, .sb-head) :is(button, a, input, select, textarea, [data-action], [role="tab"], #chat-menu, .brand) { app-region: no-drag; }
+body.custom-frame :is(#drawer, #activity, #artifact)::before { content: ""; display: block; flex-shrink: 0; height: var(--frame-h); app-region: drag; }
+#winctl { position: fixed; top: 0; right: 0; z-index: 1000; display: flex; height: var(--frame-h); app-region: no-drag; }
+.wc-btn { width: var(--wc-w); height: 100%; border: 0; padding: 0; background: transparent; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; cursor: default; transition: background var(--t-fast), color var(--t-fast); }
+.wc-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: geometricPrecision; }
+.wc-btn:hover { background: var(--hover); color: var(--text); }
+.wc-btn:active { background: var(--active); }
+.wc-close:hover { background: #c42b1c; color: #fff; }
+.wc-close:active { background: #b22a1b; color: #fff; }
+body.frame-maximized .wc-close:hover { border-top-right-radius: 0; }
+.modal-bg, .modal-backdrop { app-region: no-drag; }
+@media (forced-colors: active) { .wc-btn:hover { outline: 1px solid CanvasText; } }

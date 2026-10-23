@@ -57,6 +57,8 @@ class ChatRequest:
     keep_alive: str | int | None = None  # Local model: how long it stays loaded after this request.
     tools: list[dict] | None = None    # Local model: function definitions it may call (native tool calling).
     web_tools: bool = False            # Claude: allow Claude Code's own WebSearch and WebFetch for this request.
+    enoy_tools: list[str] = field(default_factory=list)   # Claude: Enoy tools offered through Enoy's MCP server.
+    enoy_env: dict = field(default_factory=dict)          # Settings the MCP server enforces (no secrets).
 
 
 @dataclass

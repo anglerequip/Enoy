@@ -127,6 +127,16 @@ def open_with_pywebview(url: str, app: App) -> bool:
 
     window.events.shown += on_shown
 
+    def before_show(window) -> None:
+        # Runs on the window's UI thread, before it is shown: swap the Windows caption for Enoy's own header.
+        try:
+            app.window = DesktopFrame(window.native)
+        except Exception as exc:
+            log.info("Keeping the standard window frame: %s", exc)
+
+    if os.name == "nt" and os.environ.get("ENOY_NATIVE_FRAME") != "1":
+        window.events.before_show += before_show
+
     def picker() -> str | None:
         result = window.create_file_dialog(webview.FOLDER_DIALOG)
         return result[0] if result else None
@@ -145,6 +155,45 @@ def open_with_pywebview(url: str, app: App) -> bool:
         log.warning("pywebview failed (%s); trying Edge app mode.", exc)
         return False
     return True
+
+
+class DesktopFrame:
+    """The pywebview window with Enoy's integrated header (see winframe.py)."""
+
+    def __init__(self, form):
+        import clr  # noqa: F401  (pythonnet, loaded by pywebview)
+        import System.Windows.Forms as WinForms
+        from System import Action
+        from . import winframe
+        self.form = form
+        self._wf, self._winforms, self._action = winframe, WinForms, Action
+        self.hwnd = int(form.Handle.ToInt64())
+        self.strip = int(winframe.TOP_STRIP * winframe._scale(self.hwnd))
+        form.Padding = WinForms.Padding(0, self.strip, 0, 0)
+        winframe.install(self.hwnd, self._on_size)
+        form.browser.webview.CoreWebView2InitializationCompleted += self._on_webview_ready
+        winframe.set_colors(self.hwnd, True, "#1f1e1c")
+
+    def _on_webview_ready(self, sender, args):
+        if args.IsSuccess:
+            # Elements with CSS app-region: drag become the window's real title bar (drag, snap, system menu).
+            sender.CoreWebView2.Settings.IsNonClientRegionSupportEnabled = True
+
+    def _on_size(self, maximized: bool) -> None:
+        top = 0 if maximized else self.strip  # No resize strip when maximized.
+        if self.form.Padding.Top != top:
+            self.form.Padding = self._winforms.Padding(0, top, 0, 0)
+
+    def command(self, action: str) -> None:
+        self._wf.command(self.hwnd, action)
+
+    def state(self) -> dict:
+        return {"maximized": self._wf.is_maximized(self.hwnd)}
+
+    def theme(self, dark: bool, color: str) -> None:
+        from System.Drawing import ColorTranslator
+        self._wf.set_colors(self.hwnd, dark, color)
+        self.form.BeginInvoke(self._action(lambda: setattr(self.form, "BackColor", ColorTranslator.FromHtml(color))))
 
 
 def tk_folder_picker() -> str | None:

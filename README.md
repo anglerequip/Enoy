@@ -284,6 +284,40 @@ Things to know:
 - Tested with the real Qwen model and a scripted stand-in for Claude. **No real Claude
   request has been sent through this mode yet**, so treat the first real run as a test.
 
+## Tools: your PC, weather and the web
+
+Models can ask Enoy to run tools. Enoy checks the permission, runs the tool and gives
+the real result back, errors included. Each call is listed in **Activity**, and answers
+end with the sources Enoy actually fetched (or "Read from Windows by Enoy").
+
+| Tool | What it does | Needs |
+|---|---|---|
+| `get_hardware_inventory`, `get_cpu_info`, `get_gpu_info`, `get_memory_info`, `get_storage_info`, `get_motherboard_info`, `get_windows_info`, `get_system_summary` | Reads this PC from Windows (CIM/WMI, registry, nvidia-smi). Read-only, no administrator rights. | The "hardware" switch in Memory & PC |
+| `check_local_model_fit` | RAM/VRAM free and total, the configured Qwen model and its size, Enoy's memory mode | same |
+| `get_weather` | SMHI open data (Nordic countries, plus the nearest station's latest reading), MET Norway elsewhere. Place names via OpenStreetMap Nominatim. | Online tools on |
+| `web_search` | Brave Search (your key), your SearXNG, or Wikipedia (background only, not news) | Online tools on |
+| `fetch_page` | Reads a public web page as text. Local and private addresses (localhost, 192.168.x.x) are refused. | Online tools on |
+
+How each model uses them:
+
+- **Qwen** gets only the tools that fit the message (hardware questions get the
+  hardware tools, live questions the online ones) through Ollama's native tool
+  calling, and may call them up to *Tool rounds per answer* times (default 5).
+- **Claude** gets Claude Code's own **WebSearch** and **WebFetch** for questions about
+  current information, and nothing else on your PC. For questions about this PC, Enoy
+  reads the hardware first and puts the facts in Claude's request. Letting Claude call
+  Enoy's tools itself (`tools.claude_enoy_mcp`, off by default) runs Claude Code without
+  `--safe-mode`, because safe mode also blocks Enoy's tool server.
+- When Qwen's search can only reach Wikipedia, questions that need web research
+  (news, releases, documentation) go to Claude. Weather stays with Qwen.
+
+Settings → **Tools**: turn tools or single tools off, choose the search provider, save a
+Brave key (stored in Windows Credential Manager, never in Enoy's files), set a SearXNG
+address. Nothing a tool returns is treated as an instruction.
+
+Tested for real: all hardware questions and the Trollhättan weather with real Qwen;
+one real Claude request used WebFetch for live weather.
+
 ## TEAM ROLES (per chat)
 
 The **Team** button in the message box (Code mode) switches a chat between:
@@ -332,8 +366,18 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   tools and anything not on the allowlist ask first; admin/system tools are blocked.
   This is not an OS sandbox: an approved command runs with your normal permissions.
 - Claude Code is called with no tools, from an empty folder, so it cannot read or
-  change your files. Enoy never touches Claude's tokens or cookies and does not
-  use paid API keys.
+  change your files. For live questions it gets only WebSearch and WebFetch. Enoy
+  never touches Claude's tokens or cookies and does not use paid API keys.
+
+## The window
+
+In the desktop app the Windows title bar is replaced by Enoy's own header. The window
+is still a normal Windows window: drag it by the header, double-click the header to
+maximize, right-click it for the system menu, snap it to screen edges, resize it from
+any edge, and use Win+arrow keys, Alt+Space and Alt+F4. Minimize, maximize and close
+sit at the top right. Set `ENOY_NATIVE_FRAME=1` to get the standard title bar back.
+Hovering the maximize button does not show the Windows 11 snap layouts menu (Win+Z
+still does).
 
 ## Development
 

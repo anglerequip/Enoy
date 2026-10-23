@@ -537,6 +537,7 @@ class Orchestrator:
             available = False  # Only a model you pick yourself may use Claude.
         block = self._cloud_block(task_id)
         decision = decide(cls, self.cfg["routing"], available, state.get("override"), local_only=block)
+        decision = self._research_route(decision, task["objective"], available, state.get("override"), block)
         # The one authoritative routing decision for this task. Retries, resumes and
         # follow-ups reuse it instead of routing again.
         route = decision.as_dict() | {"task_id": task_id, "kind": cls.kind, "score": cls.score,
@@ -995,6 +996,59 @@ class Orchestrator:
         users = [m for m in self.db.messages(task_id) if m["role"] == "user"]
         text = users[-1]["content"] if users else self.db.get_task(task_id)["objective"]
         return tools_mod.wants_tools(text)
+
+    def _claude_enoy_tools(self, task_id: int, purpose: str) -> list[str]:
+        """Enoy tools Claude may call through Enoy's MCP server: hardware and weather (Claude has its own web tools)."""
+        s = self.cfg.get("tools", {})
+        if not s.get("enabled", True) or purpose not in ("lead", "ask"):
+            return []
+        users = [m for m in self.db.messages(task_id) if m["role"] == "user"]
+        text = users[-1]["content"] if users else self.db.get_task(task_id)["objective"]
+        wanted = tools_mod.select(text) & (tools_mod.PC_TOOLS | {"get_weather"})
+        runner = tools_mod.ToolRunner(self.cfg, tools_mod.registry(), offer=wanted)
+        return sorted(t.name for t in runner.available())
+
+    def _research_route(self, decision: Any, text: str, claude_ok: bool, override: str | None, block: str) -> Any:
+        """Questions that need web research go to Claude when Qwen's search can only reach Wikipedia.
+
+        Weather stays with Qwen (official weather data needs no search), and so does everything when the user
+        picked a model, the chat is local-only, zero-paid mode is on, or Claude may not search the web."""
+        s = self.cfg.get("tools", {})
+        if (decision.backend != LOCAL or override or block or not claude_ok or decision.source != "router"
+                or self.cfg["routing"].get("zero_paid_mode") or not s.get("enabled", True)
+                or not s.get("online", True) or not s.get("claude_web", True)):
+            return decision
+        if "wikipedia" not in tools_mod.search.configured(self.cfg)[:1]:
+            return decision  # Qwen has a real web search (Brave or SearXNG).
+        names = tools_mod.select(text)
+        if not names & {"web_search", "fetch_page"} or tools_mod.about_this_pc(text) or tools_mod.weather_only(text):
+            return decision
+        return dataclasses.replace(
+            decision, backend=CLAUDE, workflow="escalate", source="policy",
+            reason="This needs current information from the web. Claude can search it through Claude Code; Qwen's "
+                   "search only reaches Wikipedia until a Brave key or SearXNG is set in Settings → Tools.")
+
+    def _prefetch_for_claude(self, task_id: int, wanted: list[str]) -> str:
+        """Run the read-only PC tools Claude would need and return the results as prompt text."""
+        pc_wanted = [n for n in wanted if n in tools_mod.PC_TOOLS]
+        if not pc_wanted:
+            return ""
+        runner = self._tool_runner(task_id, "system")
+        name = "check_local_model_fit" if "check_local_model_fit" in pc_wanted and len(pc_wanted) == 1 \
+            else "get_hardware_inventory"
+        res = runner.run(name, {})
+        if not res.ok:
+            return f"Enoy tried to read this PC's hardware for you ({name}) and it failed: {res.error}"
+        return ("Facts about the user's PC, read from Windows by Enoy just now (read-only; answer from these, "
+                "do not ask the user to look them up):\n" + res.for_model(9000))
+
+    def _mcp_env(self) -> dict:
+        try:
+            runtime = self._tool_runtime()
+        except Exception as exc:
+            runtime = {"error": str(exc)}
+        return {"ENOY_MCP_CFG": {"tools": self.cfg.get("tools", {}), "pc": self.cfg.get("pc", {})},
+                "ENOY_MCP_RUNTIME": runtime}
 
     def _record_claude_tools(self, task_id: int, events: list[dict], step_id: int | None) -> None:
         for e in events[:20]:
@@ -1464,8 +1518,18 @@ class Orchestrator:
         image_ids = pending.get("images") or []
         pics = f" and {len(image_ids)} image(s)" if image_ids else ""
         web = self._claude_web(task_id, pending["purpose"])
+        enoy = self._claude_enoy_tools(task_id, pending["purpose"])
+        if enoy and not self.cfg["tools"].get("claude_enoy_mcp"):
+            # Claude Code cannot call Enoy's tools in safe mode: Enoy reads the PC facts first instead.
+            facts = self._prefetch_for_claude(task_id, enoy)
+            if facts and facts not in pending["prompt"]:
+                pending["prompt"] += "\n\n" + facts
+                pending["chars"] = len(pending["system"]) + len(pending["prompt"])
+            enoy = []
         if web and tools_mod.CLAUDE_WEB_NOTE not in pending["system"]:
             pending["system"] += "\n\n" + tools_mod.CLAUDE_WEB_NOTE
+        if enoy and tools_mod.CLAUDE_ENOY_NOTE not in pending["system"]:
+            pending["system"] += "\n\n" + tools_mod.CLAUDE_ENOY_NOTE
         trans_id = self.db.add_transmission(task_id, CLAUDE, pending["purpose"], pending["files"],
                                             f"[system]\n{pending['system']}\n\n[user]\n{pending['prompt']}"
                                             + (f"\n\n[{len(image_ids)} image(s) attached]" if image_ids else ""))
@@ -1474,16 +1538,19 @@ class Orchestrator:
         self._act(task_id, "backend.request", f"Sent {pending['chars']:,} characters and {len(pending['files'])} file(s) "
                   f"to Claude{': ' + names if names else ''}.", CLAUDE, step["stage"] if step else "claude", step_id=step_id)
         self._event(task_id, "status", "Claude is working (no live text; the answer appears when it is finished)."
-                    + (" It may search the web through Claude Code." if web else ""), CLAUDE)
-        if web:
-            self._act(task_id, "tool.offered", "Claude may use Claude Code's WebSearch and WebFetch for this answer.",
+                    + (" It may search the web through Claude Code." if web else "")
+                    + (" It may use Enoy's tools: " + ", ".join(enoy) + "." if enoy else ""), CLAUDE)
+        if web or enoy:
+            offered = (["Claude Code's WebSearch and WebFetch"] if web else []) + (["Enoy's " + ", ".join(enoy)] if enoy else [])
+            self._act(task_id, "tool.offered", "Claude may use " + " and ".join(offered) + " for this answer.",
                       CLAUDE, step["stage"] if step else "claude",
                       reason="The message asks for current or outside information.", step_id=step_id)
         req = ChatRequest(
             messages=[ChatMessage("system", pending["system"]),
                       ChatMessage("user", pending["prompt"], self._load_images(task_id, image_ids))],
             purpose=pending["purpose"], cancel=self._cancel.setdefault(task_id, threading.Event()),
-            resume_session=pending.get("session"), web_tools=web,
+            resume_session=pending.get("session"), web_tools=web, enoy_tools=enoy,
+            enoy_env=self._mcp_env() if enoy else {},
         )
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": pending["purpose"], "since": time.time()}
@@ -1513,7 +1580,7 @@ class Orchestrator:
             self.db.set_transmission_usage(trans_id, note)
             self._event(task_id, "usage", f"Reported by Claude Code: {note}", CLAUDE)
         self.db.kv_set("claude_last_verified", time.time())
-        if web:
+        if web or enoy:
             self._record_claude_tools(task_id, result.tool_events, step_id)
         if pending["purpose"] not in ("lead", "lead_review"):  # The lead's reply is split into message and plan first.
             self.db.add_message(task_id, "assistant", result.text, CLAUDE)

@@ -10,13 +10,14 @@ from __future__ import annotations
 import re
 
 from .registry import Tool, ToolError, ToolResult, ToolRunner, clear_cache, validate
+from . import search
 from .search import WEB_SEARCH
 from .system import SYSTEM_TOOLS
 from .weather import WEATHER
 from .web import FETCH_PAGE
 
 __all__ = ["Tool", "ToolError", "ToolResult", "ToolRunner", "clear_cache", "validate", "registry", "wants_tools",
-           "TOOL_SYSTEM", "CLAUDE_WEB_NOTE", "select", "about_this_pc"]
+           "TOOL_SYSTEM", "CLAUDE_WEB_NOTE", "CLAUDE_ENOY_NOTE", "select", "about_this_pc"]
 
 
 WEB_TOOLS = {WEATHER.name, WEB_SEARCH.name, FETCH_PAGE.name}
@@ -65,6 +66,16 @@ def select(text: str) -> set[str]:
     return names
 
 
+_WEATHER = re.compile(r"\b(weather|forecast|temperature|rain(ing)?|snow(ing)?|wind[sy]?|väder|vädret|prognos|regn|snö)\b", re.I)
+_RESEARCH = re.compile(r"\b(news|nyheter|latest|recent(ly)?|release|changelog|documentation|docs|search|look up|"
+                       r"who won|price|exchange rate|https?://)", re.I)
+
+
+def weather_only(text: str) -> bool:
+    """A weather question with nothing else that needs the web."""
+    return bool(_WEATHER.search(text or "")) and not _RESEARCH.search(text or "")
+
+
 def wants_tools(text: str) -> bool:
     return bool(select(text))
 
@@ -87,3 +98,7 @@ CLAUDE_WEB_NOTE = """For this request you have Claude Code's WebSearch and WebFe
 Use them when the answer depends on current or outside information such as weather, news, prices, versions or \
 documentation; do not say you lack internet access. Cite the pages you used as Markdown links, give times with \
 their time zone, and say plainly when a search or page failed or when something is background rather than current."""
+
+CLAUDE_ENOY_NOTE = """For this request you also have tools that Enoy runs on the user's PC (names start with \
+mcp__enoy__): read-only hardware information from Windows and weather from official services. Use them instead of \
+asking the user to look things up, base the answer on what they return, and say so if one fails."""

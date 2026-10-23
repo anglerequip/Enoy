@@ -127,6 +127,8 @@ DEFAULTS: dict[str, Any] = {
         "contact": "",                  # Optional contact (e-mail or site) added to the User-Agent; MET Norway asks for one.
         "page_chars": 8000,             # Page text given to a model per fetch.
         "claude_web": True,             # Claude may use Claude Code's own WebSearch and WebFetch for live questions.
+        "claude_enoy_mcp": False,       # Claude calls Enoy's tools itself (MCP). Needs Claude Code without --safe-mode;
+                                        # off: Enoy reads the PC facts first and puts them in Claude's request.
     },
     "privacy": {
         "cloud_policy": "auto",         # "auto": permitted context may go to Claude; "never": everything stays local.
@@ -240,6 +242,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "contact": (str, lambda v: None if len(v) <= 120 else "is too long"),
         "page_chars": (int, _range(1000, 20000)),
         "claude_web": (bool, None),
+        "claude_enoy_mcp": (bool, None),
     },
     "privacy": {
         "cloud_policy": (str, _choice(CLOUD_POLICIES)),
