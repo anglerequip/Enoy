@@ -166,6 +166,35 @@ class App:
         def pc_summary(q, body):
             return pc.summary(orc.cfg)
 
+        @r("GET", "/api/tools")
+        def tools_info(q, body):
+            from . import tools as tools_mod
+            from .tools import keystore, search
+            runner = tools_mod.ToolRunner(orc.cfg, tools_mod.registry())
+            rows = []
+            for t in tools_mod.registry().values():
+                ok, why = runner.allowed(t)
+                rows.append(t.describe() | {"allowed": ok, "why": why,
+                                            "group": "pc" if t.name in tools_mod.PC_TOOLS else "web"})
+            return {"tools": rows, "keys": keystore.status(), "search_order": search.configured(orc.cfg)}
+
+        @r("POST", "/api/tools/key")
+        def tools_key(q, body):
+            from .tools import keystore
+            name = body.get("name")
+            if name not in keystore.NAMES:
+                raise ApiError(400, "Unknown key.")
+            try:
+                if body.get("value"):
+                    keystore.put(name, str(body["value"]))
+                else:
+                    keystore.delete(name)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ApiError(400, str(exc))
+            orc._act(None, "settings.changed", f"{'Saved' if body.get('value') else 'Removed'} the {name.replace('_', ' ')} "
+                     "key in Windows Credential Manager.", "user", "settings")
+            return {"keys": keystore.status()}  # Never the key itself.
+
         @r("POST", "/api/pc/profile")
         def pc_profile(q, body):
             profile = body.get("profile")

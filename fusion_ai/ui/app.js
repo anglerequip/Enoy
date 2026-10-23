@@ -680,12 +680,12 @@ async function openSettings(tab) {
 }
 
 function renderSettings() {
-  const tabs = [["general", "General"], ["models", "Models"], ["pc", "Memory & PC"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
+  const tabs = [["general", "General"], ["models", "Models"], ["tools", "Tools"], ["pc", "Memory & PC"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
   openModal(`<div class="set-nav"><h2>Settings</h2>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
     <div class="set-body" id="set-body"><div class="muted">Loading…</div></div>`, true);
-  ({ general: settingsGeneral, models: settingsModels, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+  ({ general: settingsGeneral, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
 }
 
 function toggleRow(sec, key, label, desc) {
@@ -694,6 +694,41 @@ function toggleRow(sec, key, label, desc) {
 }
 function inputRow(sec, key, label, desc, type = "text") {
   return `<label class="field">${esc(label)}<input type="${type}" step="any" data-cfg="${sec}.${key}" value="${esc(S.config[sec][key])}">${desc ? `<span class="small">${esc(desc)}</span>` : ""}</label>`;
+}
+
+async function settingsTools() {
+  const c = S.config.tools;
+  let info = { tools: [], keys: {}, search_order: [] };
+  try { info = await api("GET", "/api/tools"); } catch (e) { /* shown as empty */ }
+  const row = t => `<div class="set-row"><div class="lbl"><span><code>${esc(t.name)}</code></span>
+      <span class="d">${esc(t.description)}${t.allowed ? "" : ` <b>Not available now:</b> ${esc(t.why)}`}</span></div>
+      <input type="checkbox" data-cfg="tools.enabled_tools.${esc(t.name)}" ${c.enabled_tools[t.name] !== false ? "checked" : ""}
+        aria-label="Allow ${esc(t.name)}"></div>`;
+  const group = g => info.tools.filter(t => t.group === g).map(row).join("");
+  $("set-body").innerHTML = `
+    <div class="set-section"><h3>Tools</h3>
+      <div class="small muted">Models ask Enoy to run these; Enoy checks the permission, runs the tool and gives the real result back,
+        including errors. Every call is listed in Activity. Tools only read: nothing here changes your PC or sends anything on your behalf.</div>
+      ${toggleRow("tools", "enabled", "Let models use tools", "Off: models answer only from what is in the chat.")}
+      ${toggleRow("tools", "online", "Online tools", "Weather, web search and reading web pages. Off: nothing leaves your PC through tools.")}
+      ${toggleRow("tools", "claude_web", "Claude may search the web", "For questions about current information, Claude gets Claude Code's own WebSearch and WebFetch (nothing else). Uses your Claude plan.")}
+      <div class="grid2">${inputRow("tools", "max_rounds", "Tool rounds per answer", "After this, the model must answer with what it has.", "number")}</div></div>
+    <div class="set-section"><h3>This PC (read-only)</h3>
+      <div class="small muted">Answered by Windows, no administrator rights. Allowed by the "hardware" switch in Memory &amp; PC.</div>
+      ${group("pc")}</div>
+    <div class="set-section"><h3>Online</h3>${group("web")}
+      <label class="field">Web search provider<select data-cfg="tools.search_provider">${["auto", "brave", "searxng", "wikipedia"].map(p =>
+        `<option ${c.search_provider === p ? "selected" : ""} value="${p}">${p === "auto" ? "Automatic (first one that is set up)" : p === "brave" ? "Brave Search (your API key)" : p === "searxng" ? "SearXNG (your instance)" : "Wikipedia only (background, not news)"}</option>`).join("")}</select>
+        <span class="small">In use now: ${esc(info.search_order.join(" → ") || "none")}. Without Brave or SearXNG, Qwen's web search only finds Wikipedia articles.</span></label>
+      <label class="field">Brave Search API key
+        <div class="row"><input type="password" id="brave-key" autocomplete="off" placeholder="${info.keys.brave_search ? "Saved in Windows Credential Manager" : "Not set"}">
+        <button class="btn" data-action="tools-key" data-name="brave_search">Save</button>
+        ${info.keys.brave_search ? `<button class="btn ghost" data-action="tools-key" data-name="brave_search" data-clear="1">Remove</button>` : ""}</div>
+        <span class="small">Stored in Windows Credential Manager, never in Enoy's files, logs or prompts. Check Brave's plan terms and limits yourself.</span></label>
+      <div class="grid2">${inputRow("tools", "searxng_url", "SearXNG address", "Optional. JSON output must be enabled on the instance.")}
+        ${inputRow("tools", "contact", "Contact for weather services", "Optional e-mail or website added to requests; MET Norway asks for one.")}</div>
+      <div class="small muted">Weather: SMHI open data (Nordic countries) and MET Norway (elsewhere), both CC BY 4.0; place names via OpenStreetMap Nominatim.</div></div>`;
+  bindCfgInputs();
 }
 
 function settingsGeneral() {
@@ -883,13 +918,14 @@ async function settingsActivity() {
 
 function bindCfgInputs() {
   document.querySelectorAll("#set-body [data-cfg]").forEach(el => {
-    const [sec, key] = el.dataset.cfg.split(".");
+    const [sec, key, sub] = el.dataset.cfg.split(".");
     const handler = () => {
       let v;
       if (el.type === "checkbox") v = el.checked;
       else if (el.dataset.list) v = el.value.split("\n").map(s => s.trim()).filter(Boolean);
       else if (typeof S.config[sec][key] === "number") v = Number(el.value);
       else v = el.value;
+      if (sub) v = { ...S.config[sec][key], [sub]: v };  // One entry of a map setting, e.g. tools.enabled_tools.web_search.
       saveCfg({ [sec]: { [key]: v } });
     };
     el.addEventListener(el.tagName === "TEXTAREA" || el.type === "text" || el.type === "number" ? "change" : "input", handler);
@@ -1198,6 +1234,14 @@ const actions = {
   }),
   "open-settings": (el, e) => { if (e) e.preventDefault(); closeMenu(); guarded(() => openSettings(el && el.dataset.tab)); },
   "settings-tab": el => { S.settingsTab = el.dataset.tab; renderSettings(); },
+  "tools-key": async el => {
+    const input = $("brave-key");
+    const value = el.dataset.clear ? "" : (input ? input.value.trim() : "");
+    if (!el.dataset.clear && !value) { toast("Paste the key first.", true); return; }
+    try { await api("POST", "/api/tools/key", { name: el.dataset.name, value }); toast(value ? "Key saved in Windows Credential Manager." : "Key removed."); }
+    catch (e) { toast(e.message, true); }
+    settingsTools();
+  },
   "close-modal": () => closeModal(),
   "refresh-status": () => guarded(async () => { await loadStatus(true); settingsStatus(); }),
   "test-backend": async el => {
