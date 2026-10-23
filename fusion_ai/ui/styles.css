@@ -407,7 +407,7 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; }
 /* ---------------------------------------------------------------- Projects & Artifacts */
 .sb-nav span { color: var(--muted) !important; display: inline-flex; }
 .sb-nav.active, .new-chat.active { background: var(--hover); }
-#main.page-view #model-picker, #main.page-view #team-toggle, #main.page-view #chat-menu, #main.page-view #files-btn { visibility: hidden; }
+#main.page-view #chat-menu, #main.page-view #files-btn { visibility: hidden; }
 #main.page-view #composer-wrap { display: none; }
 .page { padding: 28px 4px 64px; display: flex; flex-direction: column; gap: 14px; }
 .page h1 { font-size: 26px; font-weight: 500; margin: 0; letter-spacing: -.01em; }
@@ -616,3 +616,28 @@ button:focus:not(:focus-visible) { outline: none; }
 .cap-table th { font-size: 12px; color: var(--muted); font-weight: 600; }
 #pc-apps { width: 100%; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: var(--r); padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; }
 .avatar.enoy { background: none; padding: 2px; }
+
+/* Claude-style layout: chat title in the top bar, model and folder in the composer */
+.title-btn { border: 0; background: none; color: var(--text); display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 10px; border-radius: var(--r); cursor: pointer; font-size: 14px; font-weight: 500; max-width: min(52vw, 560px); }
+.title-btn:hover { background: var(--hover); }
+.title-btn .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title-btn .chev { color: var(--muted); flex: none; }
+.composer .picker-btn { height: 32px; font-size: 13.5px; font-weight: 500; padding: 0 6px 0 8px; gap: 6px; color: var(--muted); }
+.composer .picker-btn:hover { color: var(--text); }
+.composer .picker-btn .mini-mark { width: 15px; height: 15px; }
+.composer .picker-btn .avatar { transform: scale(.85); }
+.comp-chip { border: 1px solid var(--border); background: none; color: var(--muted); height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; border-radius: 16px; cursor: pointer; font-size: 13px; max-width: 240px; transition: background var(--t-fast), color var(--t-fast); }
+.comp-chip:hover { background: var(--hover); color: var(--text); }
+.comp-chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comp-chip svg { flex: none; }
+.composer .team-pill { height: 32px; border-radius: 16px; padding: 0 11px; font-size: 12.5px; font-weight: 500; letter-spacing: 0; display: inline-flex; align-items: center; gap: 6px; }
+#team-toggle:empty, #model-picker:empty { display: none; }
+#project-switch button .chev { color: var(--muted); margin-left: auto; flex: none; }
+#project-switch button svg:first-child { color: var(--muted); flex: none; }
+.chat-row { position: relative; display: flex; align-items: center; border-radius: var(--r); }
+.chat-row .chat-item { padding-right: 30px; }
+.chat-more { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; opacity: 0; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; transition: opacity var(--t-fast), background var(--t-fast); }
+.chat-row:hover .chat-more, .chat-row.active .chat-more, .chat-more:focus-visible { opacity: 1; }
+.chat-more:hover { background: var(--active); color: var(--text); }
+.danger-text { color: var(--bad); }
+@media (hover: none) { .chat-more { opacity: 1; } }

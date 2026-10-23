@@ -151,8 +151,7 @@ function renderSidebar() {
   $("project-switch").innerHTML = m === "chat" ? (p && p.kind === "space" ? `<div class="space-chip">
       <button data-action="project-page" title="Open the project page"><span>▣</span><span class="pname">${esc(p.name)}</span></button>
       <button class="icon-btn" data-action="switch-default" title="Leave the project (plain chats)" aria-label="Leave project">✕</button></div>` : "") : `<button data-action="project-menu" title="${esc(p ? p.path : "Open a project folder")}">
-    <span>📁</span><span class="pname">${p ? esc(p.name) : "Open a folder…"}</span>
-    <span class="muted small">⌄</span></button>`;
+    ${FOLDER_ICON}<span class="pname">${p ? esc(p.name) : "Open a folder…"}</span>${CHEV}</button>`;
   const groups = { Today: [], Yesterday: [], "Previous 7 days": [], Older: [] };
   const now = new Date();
   const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
@@ -165,8 +164,9 @@ function renderSidebar() {
     `<div class="group-label">${label}</div>` + list.map(c => {
       const busy = ["running", "queued"].includes(c.status);
       const attn = ["awaiting_approval", "awaiting_claude", "interrupted", "paused"].includes(c.status);
-      return `<button class="chat-item ${c.id === S.chatId ? "active" : ""}" data-action="open-chat" data-id="${c.id}" title="${esc(c.title)}">
-        <span class="t">${esc(c.title)}</span>${busy ? `<span class="spin-dot"></span>` : attn ? `<span class="attn" title="Needs you"></span>` : ""}</button>`;
+      return `<div class="chat-row ${c.id === S.chatId ? "active" : ""}"><button class="chat-item ${c.id === S.chatId ? "active" : ""}" data-action="open-chat" data-id="${c.id}" title="${esc(c.title)}">
+        <span class="t">${esc(c.title)}</span>${busy ? `<span class="spin-dot"></span>` : attn ? `<span class="attn" title="Needs you"></span>` : ""}</button>
+        <button class="chat-more" data-action="chat-item-menu" data-id="${c.id}" title="Rename, move or delete" aria-label="Options for ${esc(c.title)}">⋯</button></div>`;
     }).join("")).join("");
   $("chat-list").innerHTML = html || `<div class="group-label">${p ? "No chats yet" : "No folder open"}</div>`;
 }
@@ -184,24 +184,34 @@ function renderStatusLine() {
 
 // ---------------------------------------------------------------- top bar
 
+const CHEV = `<svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`;
+const FOLDER_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/></svg>`;
+
+// The model menu sits in the composer, next to Send, as in Claude.
 function renderModelPicker() {
+  const el = $("model-picker");
+  if (!el) return;
   const m = MODELS[S.model] || MODELS.auto;
-  $("model-picker").innerHTML = `<button class="picker-btn" data-action="model-menu">
-    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${m.title}<svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>`;
+  el.innerHTML = `<button class="picker-btn" data-action="model-menu" title="Who answers: ${esc(m.desc)}">
+    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${m.title}${CHEV}</button>`;
 }
 
 function teamOn() { return S.chat ? !!S.chat.task.state.team : !!S.team; }
 function renderTeamToggle() {
+  const el = $("team-toggle");
+  if (!el) return;
   const general = !S.project || mode() === "chat";
   const on = teamOn();
-  $("team-toggle").innerHTML = general ? "" : `<button class="team-pill ${on ? "on" : ""}" data-action="team-toggle" aria-pressed="${on}"
-    title="${on ? "TEAM ROLES is on for this chat: code changes are planned, built, tested and reviewed by a team of roles. Questions are still answered directly. Click to turn off." : "TEAM ROLES is off: one model answers directly. Click to let a team of roles plan, build, test and review code changes in this chat."}">
-    <span class="dot ${on ? "ok" : ""}"></span>TEAM ROLES ${on ? "ON" : "OFF"}</button>`;
+  el.innerHTML = general ? "" : `<button class="team-pill ${on ? "on" : ""}" data-action="team-toggle" aria-pressed="${on}"
+    title="${on ? "Team roles are on for this chat: code changes are planned, built, tested and reviewed by a team of roles. Questions are still answered directly. Click to turn off." : "Team roles are off: one model answers directly. Click to let a team of roles plan, build, test and review code changes in this chat."}">
+    <span class="dot ${on ? "ok" : ""}"></span>Team ${on ? "on" : "off"}</button>`;
 }
 
+// Top bar: the open chat's title opens its menu (rename, move, delete…), as in Claude.
 function renderChatMenu() {
   renderTeamToggle();
-  $("chat-menu").innerHTML = S.chat ? `<button class="icon-btn" data-action="chat-menu" title="More">⋯</button>` : "";
+  $("chat-menu").innerHTML = S.chat ? `<button class="title-btn" data-action="chat-menu" title="Chat options">
+    <span class="t">${esc(S.chat.task.title)}</span>${CHEV}</button>` : "";
   $("files-btn").classList.toggle("hidden", mode() === "chat" || !S.project);
 }
 
@@ -230,7 +240,7 @@ function renderThread(forceBottom = false) {
       : ["Give me an overview of this project", "Find and fix a bug in the main file", "Add tests for the most important function"];
     $("thread").innerHTML = `<div class="hello">
       <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">${greet}</h1>
-      <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code (top left) to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
+      <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code in the sidebar to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
       ${!qwenOk() && S.status ? `<p style="margin-top:10px;color:var(--bad)">Qwen is offline. Start Ollama, then try again. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
       <div class="suggest">${tips.map(t => `<button data-action="suggest" data-text="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>`;
     return;
@@ -501,7 +511,10 @@ function renderComposer() {
       <input type="file" id="img-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden>
       <div class="bar">
         <button class="round-btn plus" data-action="plus-menu" title="Add images or files, run tests…" aria-label="Add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        ${mode() === "code" && !S.chat ? `<button class="comp-chip" data-action="project-menu" title="${esc(S.project ? S.project.path : "Choose the folder Enoy works in")}">${FOLDER_ICON}<span class="t">${S.project ? esc(S.project.name) : "Choose folder"}</span>${CHEV}</button>` : ""}
+        <div id="team-toggle"></div>
         <div class="grow"></div>
+        <div id="model-picker"></div>
         ${busy ? `<button class="round-btn stop" data-action="stop" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg></button>`
                : `<button class="round-btn send" id="send-btn" data-action="send" title="Send (Enter)" aria-label="Send" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>`}
       </div>
@@ -519,6 +532,8 @@ function renderComposer() {
   $("img-input").addEventListener("change", e => { addImages([...e.target.files]); e.target.value = ""; });
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
   resize();
+  renderModelPicker();
+  renderTeamToggle();
 }
 
 function localOnlyReason() {
@@ -993,10 +1008,54 @@ const actions = {
     openMenu(el, [
       { title: "Activity log", desc: "What happened behind the scenes", action: "activity" },
       { title: "Copy a summary", desc: "To continue this chat in another tool", action: "brief" },
-      { title: "Move to project…", desc: "Keeps the whole history", action: "move-chat" },
+      { title: "Rename", action: "rename-chat", data: { id: t.id } },
+      ...(mode() === "chat" ? [{ title: "Move to project…", desc: "Keeps the whole history", action: "move-chat" }] : []),
       { title: "Continue in Claude Code", desc: "Opens Claude Code in the project with this chat's summary", action: "handoff", disabled: !!(S.project && S.project.is_default) },
       ...(["failed", "cancelled", "interrupted"].includes(t.status) ? [{ title: "Try again", action: "resume" }] : []),
-    ], "right");
+      "-",
+      { title: `<span class="danger-text">Delete</span>`, action: "delete-chat", data: { id: t.id } },
+    ], "left");
+  },
+  "chat-item-menu": el => openMenu(el, [
+    { title: "Rename", action: "rename-chat", data: { id: el.dataset.id } },
+    ...(mode() === "chat" ? [{ title: "Move to project…", desc: "Keeps the whole history", action: "move-chat-id", data: { id: el.dataset.id } }] : []),
+    "-",
+    { title: `<span class="danger-text">Delete</span>`, action: "delete-chat", data: { id: el.dataset.id } },
+  ], "right"),
+  "move-chat-id": el => guarded(async () => { await loadChat(Number(el.dataset.id)); renderAll(); actions["move-chat"](); }),
+  "rename-chat": el => {
+    closeMenu();
+    const id = Number(el.dataset.id);
+    const c = S.chats.find(x => x.id === id) || (S.chat && S.chat.task.id === id ? S.chat.task : null);
+    openModal(`<h2>Rename chat</h2><label class="field">Name<input type="text" id="rename-input" maxlength="200" value="${esc(c ? c.title : "")}"></label>
+      <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" id="rename-ok">Save</button></div>`);
+    const input = $("rename-input");
+    const go = () => {
+      if (!input.value.trim()) { toast("Give the chat a name.", true); input.focus(); return; }
+      guarded(async () => {
+        await api("POST", `/api/tasks/${id}/rename`, { title: input.value });
+        closeModal();
+        if (S.chatId === id) await loadChat(id);
+        await loadChats();
+        renderAll();
+      });
+    };
+    $("rename-ok").onclick = go;
+    input.addEventListener("keydown", ev => { if (ev.key === "Enter") go(); });
+    input.focus(); input.select();
+  },
+  "delete-chat": el => {
+    closeMenu();
+    const id = Number(el.dataset.id);
+    const c = S.chats.find(x => x.id === id) || (S.chat && S.chat.task.id === id ? S.chat.task : null);
+    confirmBox("Delete chat?", `<p><strong>${esc(c ? c.title : "This chat")}</strong> and its messages will be deleted. This cannot be undone.</p>
+      <p class="muted small">Files on disk, applied changes and their backups, and saved artifacts stay.</p>`, "Delete", true).then(ok => ok && guarded(async () => {
+      await api("POST", `/api/tasks/${id}/delete`, { confirm: true });
+      if (S.chatId === id) { S.chat = null; S.chatId = null; S.draft = ""; }
+      await loadChats();
+      renderAll();
+      toast("Chat deleted.");
+    }));
   },
   "plus-menu": el => {
     if (!S.project) { openMenu(el, [{ title: "📁 Open a project folder…", action: "pick-folder" }]); return; }
@@ -1129,7 +1188,7 @@ document.addEventListener("click", e => {
     if (!e.target.closest("#menu")) closeMenu();
     return;
   }
-  if (!target.closest("#menu") && !["model-menu", "project-menu", "chat-menu", "plus-menu"].includes(target.dataset.action)) closeMenu();
+  if (!target.closest("#menu") && !["model-menu", "project-menu", "chat-menu", "plus-menu", "chat-item-menu"].includes(target.dataset.action)) closeMenu();
   const fn = actions[target.dataset.action];
   if (fn) {
     if (target.tagName === "A") e.preventDefault();
@@ -1250,6 +1309,7 @@ function connectEvents() {
       return;
     }
     if (ev.type === "event" && ev.task_id !== S.chatId) { return; }
+    if (ev.type === "task_deleted" && ev.task_id === S.chatId) { S.chat = null; S.chatId = null; renderAll(); }
     scheduleRefresh();
   };
 }

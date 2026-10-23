@@ -393,6 +393,17 @@ class App:
         def move_task(q, body, tid):
             return {"task": orc.move_task(int(tid), int(body.get("project_id", 0)))}
 
+        @r("POST", r"/api/tasks/(\d+)/rename")
+        def rename_task(q, body, tid):
+            return {"task": orc.rename_task(int(tid), body.get("title", ""))}
+
+        @r("POST", r"/api/tasks/(\d+)/delete")
+        def delete_task(q, body, tid):
+            if body.get("confirm") is not True:
+                raise ApiError(400, "Deleting a chat needs confirmation.")
+            orc.delete_task(int(tid))
+            return {"deleted": int(tid)}
+
         @r("POST", "/api/projects/open")
         def open_project(q, body):
             path = (body.get("path") or "").strip().strip('"')

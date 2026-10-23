@@ -32,8 +32,12 @@ new line). Each answer shows who wrote it: **Qwen** (on your PC) or **Claude**.
   never sent from a local-only chat. Pictures are stored once in
   `%LOCALAPPDATA%\FusionAI\images`, converted to PNG/JPEG and shrunk to 1568 px if
   larger. TEAM ROLES works from text only, so messages with images are answered directly.
-- **Model menu** (top left): *Auto* (Qwen first, Claude when needed), *Qwen* or
-  *Claude*. Your pick always wins.
+- **Model menu** (in the message box, next to Send): *Auto* (Qwen first, Claude when
+  needed), *Qwen* or *Claude*. Your pick always wins.
+- **Code mode** shows the folder in the message box too. If no folder is open yet, type
+  your message and press Send: Enoy asks for the folder, then sends it there.
+- **Stop** (the square button while an answer is being written) keeps the text written so
+  far, marked as stopped.
 - **Inside the chat**: proposed code changes appear as a card with *Apply changes* /
   *Discard* and a diff you can expand; after applying you get *Run tests* and
   *Undo*. If Claude is needed, a card asks first and shows what would be sent.
@@ -41,8 +45,11 @@ new line). Each answer shows who wrote it: **Qwen** (on your PC) or **Claude**.
 - **＋ button**: add a project file to the chat, run tests or a command, or summarize
   the project.
 - **Files** (top right): browse and search the project, preview a file, *Add to chat*.
-- **⋯ menu** (top right, in a chat): activity log, copy a summary, continue in
-  Claude Code.
+- **Chat title** (top left, in a chat) opens the chat menu: rename, move to a project,
+  activity log, copy a summary, continue in Claude Code, delete. Rename and delete are
+  also in the **⋯** button that appears when you point at a chat in the sidebar.
+  Deleting a chat removes its messages and log; files on disk, applied changes and
+  their backups, saved artifacts and the record of what was sent to Claude stay.
 - **Settings** (bottom left): theme, who answers, models, safety rules, status and
   help (hardware, GPU share, logs), and everything that was sent to Claude.
 - **Activity** (top right, or Ctrl+Shift+A): a side panel next to the chat that shows
@@ -185,7 +192,7 @@ GlobalMemoryStatusEx, nvidia-smi, disk usage) and are read-only.
 
 ## TEAM ROLES (per chat)
 
-The **TEAM ROLES** button next to the model menu switches a chat between:
+The **Team** button in the message box (Code mode) switches a chat between:
 
 - **OFF:** one model answers directly. This is the default, and it's the lightest
   option for questions and small edits.

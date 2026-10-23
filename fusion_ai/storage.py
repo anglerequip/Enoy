@@ -356,6 +356,22 @@ class Storage:
     def move_task(self, task_id: int, project_id: int) -> None:
         self._exec("UPDATE tasks SET project_id = ? WHERE id = ?", (project_id, task_id))
 
+    def delete_task(self, task_id: int) -> bool:
+        """Delete a chat and everything that only exists for it.
+
+        Kept: artifacts (unlinked, they outlive chats), learned project notes
+        (unlinked) and the record of what was sent to Claude (a privacy audit).
+        """
+        with self._tx():
+            self._exec("UPDATE artifacts SET task_id = NULL, message_id = NULL WHERE task_id = ?", (task_id,))
+            self._exec("UPDATE team_memory SET task_id = NULL WHERE task_id = ?", (task_id,))
+            self._exec("DELETE FROM file_changes WHERE changeset_id IN (SELECT id FROM changesets WHERE task_id = ?)",
+                       (task_id,))
+            for table in ("changesets", "messages", "events", "steps", "activity", "team_messages",
+                          "team_tasks", "command_runs"):
+                self._exec(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+            return self._exec("DELETE FROM tasks WHERE id = ?", (task_id,)).rowcount > 0
+
     # Project knowledge files ---------------------------------------------------
 
     def add_project_file(self, project_id: int, name: str, content: str, size: int, sha: str) -> tuple[dict, bool]:

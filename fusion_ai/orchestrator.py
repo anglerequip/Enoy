@@ -100,6 +100,7 @@ class Orchestrator:
         self._workspaces: dict[int, Workspace] = {}
         self.memory: MemorySupervisor | None = None  # Started by the app; tests run without it.
         self._stop_reason: dict[int, str] = {}
+        self._partial: dict[int, str] = {}  # Text streamed so far, kept if the user stops the answer.
         self._cancel: dict[int, threading.Event] = {}
         self._run_cancel: dict[int, threading.Event] = {}
         self._local_lock = threading.Lock()
@@ -680,9 +681,11 @@ class Orchestrator:
             self._local_lock.release()
             raise
         self._busy[LOCAL] = busy
+        self._partial[task_id] = ""
 
         def on_token(t: str) -> None:
             busy["chunks"] += 1
+            self._partial[task_id] += t
             self.bus.publish({"type": "token", "task_id": task_id, "backend": LOCAL, "text": t})
 
         try:
@@ -701,7 +704,9 @@ class Orchestrator:
             self._event(task_id, "send", f"Sent {chars:,} characters{pics} to the local model (stays on this PC).", LOCAL)
             self._act(task_id, "backend.request", f"Sent {chars:,} characters{pics} to Qwen (stays on this PC).", LOCAL,
                       "local", step_id=step_id)
-            return backend.chat(req)
+            result = backend.chat(req)
+            self._partial.pop(task_id, None)
+            return result
         finally:
             if self.memory is not None:
                 self.memory.end()
@@ -806,6 +811,10 @@ class Orchestrator:
                 result = self._chat_local(task_id, messages, kind, step)
             except BackendError as exc:
                 if exc.kind == "cancelled":
+                    partial = self._partial.pop(task_id, "").strip()
+                    if partial and task_id not in self._stop_reason:  # Stopped by the user: keep what was written.
+                        self.db.add_message(task_id, "assistant", partial + "\n\n*Stopped before the answer was finished.*",
+                                            LOCAL)
                     raise _Cancelled() from exc
                 self._step_end(step, "failed", error=str(exc))
                 step_reason = f"Retry after a local model error ({exc.kind})."
@@ -1694,6 +1703,28 @@ class Orchestrator:
         self.db.move_task(task_id, project_id)
         self._task_changed(task_id)
         return self.db.get_task(task_id)
+
+    CHAT_TITLE_MAX = 200
+
+    def rename_task(self, task_id: int, title: str) -> dict:
+        self._require(task_id)
+        title = " ".join(str(title or "").split())[:self.CHAT_TITLE_MAX]
+        if not title:
+            raise TaskError("Give the chat a name.")
+        self.db.update_task(task_id, title=title)
+        self._task_changed(task_id)
+        return self.db.get_task(task_id)
+
+    def delete_task(self, task_id: int) -> None:
+        """Delete a chat. Files on disk, backups and artifacts are not touched."""
+        task = self._require(task_id)
+        if task["status"] in ("running", "queued"):
+            raise TaskError("This chat is still working. Stop it first, then delete it.")
+        self._cancel.pop(task_id, None)
+        self._stop_reason.pop(task_id, None)
+        self._partial.pop(task_id, None)
+        self.db.delete_task(task_id)
+        self.bus.publish({"type": "task_deleted", "task_id": task_id})
 
     def _require_project(self, project_id: int) -> dict:
         project = self.db.get_project(int(project_id))
