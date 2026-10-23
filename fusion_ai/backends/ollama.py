@@ -122,8 +122,7 @@ class OllamaBackend:
         s = self.settings
         body: dict = {
             "model": s["model"],
-            "messages": [{"role": m.role, "content": m.content} | ({"images": [i.b64() for i in m.images]} if m.images else {})
-                         for m in request.messages],
+            "messages": [_wire(m) for m in request.messages],
             "stream": True,
             "think": bool(s["think"]),
             "keep_alive": s["keep_alive"] if request.keep_alive is None else request.keep_alive,
@@ -137,6 +136,8 @@ class OllamaBackend:
             body["options"]["num_batch"] = int(request.num_batch)
         if request.json_schema is not None:
             body["format"] = request.json_schema
+        if request.tools:
+            body["tools"] = request.tools
         total_timeout = float(s["request_timeout_s"])
         start = time.monotonic()
         conn = self._conn(total_timeout)
@@ -165,6 +166,7 @@ class OllamaBackend:
         threading.Thread(target=reader, daemon=True).start()
         text_parts: list[str] = []
         think_parts: list[str] = []
+        tool_calls: list[dict] = []
         final: dict = {}
         got_response = False
         try:
@@ -213,6 +215,15 @@ class OllamaBackend:
                     think_parts.append(msg["thinking"])
                     if request.on_thinking:
                         request.on_thinking(msg["thinking"])
+                for call in msg.get("tool_calls") or []:
+                    fn = call.get("function") or {}
+                    args = fn.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except ValueError:
+                            args = {"_unparsed": args[:500]}
+                    tool_calls.append({"name": fn.get("name", ""), "arguments": args if isinstance(args, dict) else {}})
                 if msg.get("content"):
                     text_parts.append(msg["content"])
                     if request.on_token:
@@ -231,7 +242,7 @@ class OllamaBackend:
         if not final:
             raise BackendError("malformed", "Ollama's response ended before it reported completion.")
         text = "".join(text_parts)
-        if not text.strip():
+        if not text.strip() and not tool_calls:
             raise BackendError("malformed", "The local model returned an empty answer.")
         self.verified = True
         usage = {}
@@ -242,7 +253,7 @@ class OllamaBackend:
             usage["truncated"] = True
         return ChatResult(
             text=text, backend=self.name, model=s["model"], thinking="".join(think_parts),
-            usage=usage, duration_s=time.monotonic() - start,
+            usage=usage, duration_s=time.monotonic() - start, tool_calls=tool_calls,
         )
 
     @staticmethod
@@ -258,3 +269,15 @@ def _explain_error(message: str) -> str:
         return (f"Ollama ran out of memory ({message}). Lower the context size in Settings, "
                 "close other GPU-heavy programs, or pick a smaller model.")
     return f"Ollama error: {message}"
+
+
+def _wire(m) -> dict:
+    """One message in Ollama's chat format, including tool calls and tool results."""
+    out: dict = {"role": m.role, "content": m.content}
+    if m.images:
+        out["images"] = [i.b64() for i in m.images]
+    if m.tool_calls:
+        out["tool_calls"] = [{"function": {"name": c["name"], "arguments": c["arguments"]}} for c in m.tool_calls]
+    if m.role == "tool" and m.tool_name:
+        out["tool_name"] = m.tool_name
+    return out

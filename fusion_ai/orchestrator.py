@@ -9,6 +9,7 @@ into validated proposals.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import queue
@@ -33,6 +34,7 @@ from .memory_guard import RUNTIME, MemorySupervisor
 from . import patches
 from . import privacy
 from . import team as team_mod
+from . import tools as tools_mod
 from .backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ChatResult
 from .project import PathError, Workspace, sha256_text
 from .redact import redact
@@ -838,7 +840,8 @@ class Orchestrator:
             handoffs=s.get("handoffs", 0),
         )
 
-    def _chat_local(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None = None) -> Any:
+    def _chat_local(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None = None,
+                    tools: list[dict] | None = None) -> Any:
         backend = self.backends[LOCAL]
         cancel = self._cancel.setdefault(task_id, threading.Event())
         if not self._local_lock.acquire(blocking=False):
@@ -870,7 +873,7 @@ class Orchestrator:
         try:
             self._event(task_id, "status", f"{BACKEND_LABEL[LOCAL]} is working ({backend.settings['model']}).", LOCAL)
             req = ChatRequest(
-                messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, **limits,
+                messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, tools=tools, **limits,
                 on_thinking=lambda t: self.bus.publish({"type": "thinking", "task_id": task_id, "backend": LOCAL, "text": t}),
             )
             if self.memory is not None:
@@ -891,6 +894,140 @@ class Orchestrator:
                 self.memory.end()
             self._busy.pop(LOCAL, None)
             self._local_lock.release()
+
+    # ------------------------------------------------------------ tools
+
+    def _tools_wanted(self, text: str) -> bool:
+        s = self.cfg.get("tools", {})
+        return bool(s.get("enabled", True) and tools_mod.wants_tools(text))
+
+    def _tool_runtime(self) -> dict:
+        """Facts about the local model for check_local_model_fit (all read from Ollama and Enoy, not guessed)."""
+        rt = hardware.inventory(self).get("runtime", {})
+        local = self.backends.get(LOCAL)
+        model = local.settings.get("model") if local else None
+        try:
+            for m in local.list_models() if local else []:
+                if m.get("name") == model or m.get("model") == model:
+                    rt["configured_model_size_on_disk_mib"] = round((m.get("size") or 0) / 2**20)
+                    details = m.get("details") or {}
+                    rt["parameter_size"] = details.get("parameter_size")
+                    rt["quantization"] = details.get("quantization_level")
+        except Exception as exc:
+            rt["model_list_error"] = str(exc)
+        num_ctx, num_predict = self._local_window()
+        rt["context_window_tokens"] = num_ctx
+        rt["memory_mode_limit_note"] = ("Enoy caps the model runner's RAM to the memory mode's limit; a larger "
+                                        "context needs more memory.")
+        return rt
+
+    def _tool_runner(self, task_id: int, agent: str, offer: set[str] | None = None) -> tools_mod.ToolRunner:
+        cancel = self._cancel.setdefault(task_id, threading.Event())
+
+        def on_event(kind: str, info: dict) -> None:
+            if kind == "tool.started":
+                args = ", ".join(f"{k}={v}" for k, v in info["args"].items())
+                self._act(task_id, "tool.started",
+                          redact(f"{BACKEND_LABEL.get(agent, agent)} → {info['tool']}({args})"[:300]),
+                          agent, "tools", reason="The answer needs information from outside this chat.")
+                return
+            r: tools_mod.ToolResult = info["result"]
+            outcome = "ok" if r.ok else ("cancelled" if r.error_kind == "cancelled" else "failed")
+            what = ""
+            if r.ok and r.tool == "web_search":
+                what = f" via {r.data.get('provider')}: {len(r.data.get('results', []))} result(s)"
+            elif r.ok and r.tool == "fetch_page":
+                what = f": {r.data.get('url', '')}"
+            elif r.ok and r.tool == "get_weather":
+                what = f": {r.data.get('location', {}).get('name', '')}, {r.data.get('provider', '').split(',')[0]}"
+            note = ("repeat of an earlier call; reused" if r.duplicate else "from cache" if r.cached
+                    else f"{r.duration_s:.1f} s")
+            text = f"{r.tool} succeeded{what} ({note})" if r.ok else f"{r.tool} {outcome}: {r.error}"
+            self._act(task_id, "tool.finished", redact(text[:400]), agent, "tools", outcome=outcome)
+            state = self.db.get_task(task_id)["state"]
+            calls = (state.get("tool_calls") or [])[-19:] + [{
+                "tool": r.tool, "agent": agent, "ok": r.ok, "error": r.error[:200], "cached": r.cached,
+                "sources": [s.get("url") for s in r.sources][:5], "at": time.time()}]
+            self.db.update_task_state(task_id, tool_calls=calls,
+                                      live_info=bool(state.get("live_info") or (r.ok and r.sources)))
+
+        return tools_mod.ToolRunner(self.cfg, tools_mod.registry(), cancel, on_event, runtime=self._tool_runtime,
+                                    offer=offer)
+
+    def _chat_local_tools(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None,
+                          runner: tools_mod.ToolRunner, budget: int) -> Any:
+        """Qwen with native tool calling: call, run the tools it asks for, return the real results, repeat.
+
+        Bounded by tools.max_rounds; after that Qwen must answer with what it has."""
+        msgs = list(messages)
+        specs = [t.spec() for t in runner.available()]
+        rounds = int(self.cfg.get("tools", {}).get("max_rounds", 5))
+        per_result = max(2500, min(8000, budget // 3))
+        for n in range(rounds + 1):
+            self._check_cancel(task_id)
+            last = n == rounds
+            if last:
+                msgs.append(ChatMessage("user", "Tool limit reached. Answer now with the information you have, "
+                                                "and say what you could not find out."))
+            result = self._chat_local(task_id, msgs, purpose, step_id, tools=None if last else specs)
+            if not result.tool_calls or last:
+                if not result.text.strip():
+                    raise BackendError("malformed", "Qwen called tools but gave no answer.")
+                return result
+            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
+            calls = result.tool_calls[:4]  # At most four calls per round.
+            msgs.append(ChatMessage("assistant", result.text, tool_calls=calls))
+            for call in calls:
+                res = runner.run(call["name"], call["arguments"])
+                msgs.append(ChatMessage("tool", res.for_model(per_result), tool_name=call["name"]))
+                if res.error_kind == "cancelled":
+                    raise _Cancelled()
+        raise BackendError("failed", "The tool loop ended without an answer.")
+
+    def _claude_web(self, task_id: int, purpose: str) -> bool:
+        """Give Claude Claude Code's own WebSearch/WebFetch when the latest message needs live information."""
+        s = self.cfg.get("tools", {})
+        if not (s.get("enabled", True) and s.get("online", True) and s.get("claude_web", True)
+                and s.get("permissions", {}).get("web")):
+            return False
+        if purpose not in ("lead", "ask"):
+            return False
+        users = [m for m in self.db.messages(task_id) if m["role"] == "user"]
+        text = users[-1]["content"] if users else self.db.get_task(task_id)["objective"]
+        return tools_mod.wants_tools(text)
+
+    def _record_claude_tools(self, task_id: int, events: list[dict], step_id: int | None) -> None:
+        for e in events[:20]:
+            what = f'"{e["query"]}"' if e.get("query") else e.get("url", "")
+            self._act(task_id, "tool.finished", redact(f"Claude used {e['tool']}: {what}"[:400]), CLAUDE, "tools",
+                      outcome="ok", step_id=step_id)
+        state = self.db.get_task(task_id)["state"]
+        calls = (state.get("tool_calls") or [])[-19:] + [
+            {"tool": e["tool"], "agent": CLAUDE, "ok": True, "error": "", "cached": False,
+             "sources": [e["url"]] if e.get("url") else [], "query": e.get("query", ""), "at": time.time()}
+            for e in events[:20]]
+        self.db.update_task_state(task_id, tool_calls=calls[-20:], live_info=bool(state.get("live_info") or events))
+        if not events:
+            self._act(task_id, "tool.finished", "Claude had web tools available but did not use them.", CLAUDE, "tools",
+                      outcome="unused", step_id=step_id)
+
+    @staticmethod
+    def _with_sources(text: str, runner: tools_mod.ToolRunner) -> str:
+        """Add the sources Enoy actually retrieved, so provenance never depends on the model citing them."""
+        used = runner.sources()
+        failed = [r for r in runner.calls if not r.ok and r.error_kind != "invalid"]
+        lines = []
+        if used:
+            lines.append("**Sources retrieved by Enoy:** " + " · ".join(
+                f"[{s.get('title') or s['url']}]({s['url']})" for s in used[:8]))
+        if failed:
+            lines.append("**Tools that failed:** " + "; ".join(f"{r.tool}: {r.error}" for r in failed[:4]))
+        local = sorted({r.tool for r in runner.calls if r.ok and r.tool in tools_mod.PC_TOOLS})
+        if local:
+            lines.append(f"*Read from Windows by Enoy (read-only) at {time.strftime('%H:%M')}: {', '.join(local)}.*")
+        if not runner.calls:
+            lines.append("*No tools were used: this answer comes from the model's own knowledge, not live data.*")
+        return text.rstrip() + ("\n\n---\n" + "\n\n".join(lines) if lines else "")
 
     def _memory_plan(self, task_id: int | None, step_id: int | None = None) -> dict:
         """Request settings the memory mode allows (ChatRequest fields), or BackendError("memory") if the model cannot fit."""
@@ -971,6 +1108,13 @@ class Orchestrator:
         pictures = self._load_images(task_id, image_ids)
         budget = ctx.prompt_budget(*self._local_window())
         read_rounds, read_note = 0, ""
+        runner = None
+        if kind != "edit" and self._tools_wanted(followup or task["objective"]):
+            runner = self._tool_runner(task_id, LOCAL, tools_mod.select(followup or task["objective"]))
+            if not runner.available():
+                runner = None
+            else:  # Tool definitions travel with every request and use part of Qwen's window.
+                budget -= len(json.dumps([t.spec() for t in runner.available()]))
         while True:
             self._check_cancel(task_id)
             attempts_here += 1
@@ -981,6 +1125,8 @@ class Orchestrator:
                               files=[f.path for f in pack.files])
             reads_left = MAX_READ_ROUNDS - read_rounds if ws.index else None
             system = ctx.local_system_prompt(ws, pack, kind, list_chars=min(3000, budget // 8), reads_left=reads_left)
+            if runner:
+                system += "\n\n" + tools_mod.TOOL_SYSTEM.format(names=", ".join(t.name for t in runner.available()))
             extra = []
             if plan:
                 extra.append(f"Follow this implementation plan:\n{plan}")
@@ -998,7 +1144,10 @@ class Orchestrator:
             user = ctx.task_message(task["objective"], shown, "\n\n".join(extra))
             messages = [ChatMessage("system", system)] + convo + [ChatMessage("user", user, pictures)]
             try:
-                result = self._chat_local(task_id, messages, kind, step)
+                if runner:
+                    result = self._chat_local_tools(task_id, messages, kind, step, runner, budget)
+                else:
+                    result = self._chat_local(task_id, messages, kind, step)
             except BackendError as exc:
                 if exc.kind == "cancelled":
                     partial = self._partial.pop(task_id, "").strip()
@@ -1058,6 +1207,8 @@ class Orchestrator:
                     self._fail(task_id, "Qwen kept asking for more files instead of answering. Name the files in your "
                                         "message, or ask Claude.")
                     return
+            if runner:
+                result.text = self._with_sources(result.text, runner)
             self.db.add_message(task_id, "assistant", result.text, LOCAL)
             self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
             meta = self._usage_note(result)
@@ -1312,6 +1463,9 @@ class Orchestrator:
             self.db.update_step(step_id, status="working")
         image_ids = pending.get("images") or []
         pics = f" and {len(image_ids)} image(s)" if image_ids else ""
+        web = self._claude_web(task_id, pending["purpose"])
+        if web and tools_mod.CLAUDE_WEB_NOTE not in pending["system"]:
+            pending["system"] += "\n\n" + tools_mod.CLAUDE_WEB_NOTE
         trans_id = self.db.add_transmission(task_id, CLAUDE, pending["purpose"], pending["files"],
                                             f"[system]\n{pending['system']}\n\n[user]\n{pending['prompt']}"
                                             + (f"\n\n[{len(image_ids)} image(s) attached]" if image_ids else ""))
@@ -1319,12 +1473,17 @@ class Orchestrator:
         names = ", ".join(f["path"] for f in pending["files"])
         self._act(task_id, "backend.request", f"Sent {pending['chars']:,} characters and {len(pending['files'])} file(s) "
                   f"to Claude{': ' + names if names else ''}.", CLAUDE, step["stage"] if step else "claude", step_id=step_id)
-        self._event(task_id, "status", "Claude is working (no live text; the answer appears when it is finished).", CLAUDE)
+        self._event(task_id, "status", "Claude is working (no live text; the answer appears when it is finished)."
+                    + (" It may search the web through Claude Code." if web else ""), CLAUDE)
+        if web:
+            self._act(task_id, "tool.offered", "Claude may use Claude Code's WebSearch and WebFetch for this answer.",
+                      CLAUDE, step["stage"] if step else "claude",
+                      reason="The message asks for current or outside information.", step_id=step_id)
         req = ChatRequest(
             messages=[ChatMessage("system", pending["system"]),
                       ChatMessage("user", pending["prompt"], self._load_images(task_id, image_ids))],
             purpose=pending["purpose"], cancel=self._cancel.setdefault(task_id, threading.Event()),
-            resume_session=pending.get("session"),
+            resume_session=pending.get("session"), web_tools=web,
         )
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": pending["purpose"], "since": time.time()}
@@ -1354,6 +1513,8 @@ class Orchestrator:
             self.db.set_transmission_usage(trans_id, note)
             self._event(task_id, "usage", f"Reported by Claude Code: {note}", CLAUDE)
         self.db.kv_set("claude_last_verified", time.time())
+        if web:
+            self._record_claude_tools(task_id, result.tool_events, step_id)
         if pending["purpose"] not in ("lead", "lead_review"):  # The lead's reply is split into message and plan first.
             self.db.add_message(task_id, "assistant", result.text, CLAUDE)
             self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
@@ -1851,6 +2012,8 @@ class Orchestrator:
     def _pc_request(self, task_id: int, text: str) -> bool:
         """Handle a direct PC request typed by the user. Returns True if handled here."""
         intent = pc.detect(text)
+        if not intent and tools_mod.about_this_pc(text):
+            intent = ("hardware", "")  # Any question about this PC's parts goes to Qwen with the hardware tools.
         if not intent:
             return False
         action, arg = intent
@@ -1858,10 +2021,16 @@ class Orchestrator:
         try:
             if action == "hardware":
                 pc.check(self.cfg, "hardware.read")
+                override = self.db.get_task(task_id)["state"].get("override") or LOCAL
+                if self.cfg.get("tools", {}).get("enabled", True):
+                    # Qwen gets the hardware tools and asks Windows for what it needs.
+                    self.db.update_task_state(task_id, override=override)
+                    self._act(task_id, "pc.hardware_tools", "Question about this PC: Qwen gets Enoy's read-only "
+                              "hardware tools.", "system", "analysis", reason=basis, outcome="routed")
+                    return False
                 inv = hardware.inventory(self)
                 facts = hardware.as_text(inv)
-                self.db.update_task_state(task_id, hardware_facts=facts,
-                                          override=self.db.get_task(task_id)["state"].get("override") or LOCAL)
+                self.db.update_task_state(task_id, hardware_facts=facts, override=override)
                 self._act(task_id, "pc.hardware_read", "Read the hardware inventory from Windows (read-only).", "system",
                           "analysis", reason=basis, outcome="read")
                 return False  # Qwen answers, with the measured facts in its context.

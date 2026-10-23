@@ -9,7 +9,10 @@ charges.
 Each call runs with all Claude Code tools disabled (`--tools ""`) from an empty
 working directory: Claude only sees what Enoy puts in the prompt, and it
 cannot edit files or run commands. Changes it proposes go through the same
-validation and approval as Qwen's.
+validation and approval as Qwen's. The one exception is a request marked
+`web_tools`: then only Claude Code's own WebSearch and WebFetch are enabled
+(nothing that touches this PC), and the searches and pages it used are read
+from the stream-json output so Enoy can show them.
 """
 
 from __future__ import annotations
@@ -115,13 +118,17 @@ class ClaudeCodeBackend:
         return BackendStatus(self.name, True, detail, self.settings.get("model", "") or "Claude Code default",
                              version, self.verified, extra={"auth": auth, "last_verified": self.last_verified})
 
-    def build_args(self, system_prompt: str, resume: str | None, images: bool = False) -> list[str]:
+    def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False) -> list[str]:
+        tools = ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"] if web else ["--tools", ""]
         if images:
             # Plain-text input cannot carry pictures. Claude Code's stream-json input takes
             # one JSON user message with image blocks; it requires stream-json output too.
-            args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--tools", ""]
+            args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"] + tools
+        elif web:
+            # stream-json shows each tool call, so Enoy can list the searches and pages used.
+            args = ["-p", "--output-format", "stream-json", "--verbose"] + tools
         else:
-            args = ["-p", "--output-format", "json", "--tools", ""]
+            args = ["-p", "--output-format", "json"] + tools
         if self.settings.get("safe_mode", True):
             # Skip the user's own Claude Code customizations (CLAUDE.md, memory,
             # plugins, skills, MCP servers). They are not needed here because
@@ -156,7 +163,7 @@ class ClaudeCodeBackend:
                       for img in pictures]
             prompt = json.dumps({"type": "user", "message": {"role": "user",
                                                              "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
-        cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures))
+        cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools)
         timeout = float(self.settings.get("timeout_s", 600))
         start = time.monotonic()
         try:
@@ -217,7 +224,28 @@ class ClaudeCodeBackend:
         return ChatResult(
             text=text, backend=self.name, model=self.settings.get("model") or "Claude Code default",
             usage=usage, session_id=data.get("session_id"), duration_s=time.monotonic() - start,
+            tool_events=_tool_events(out),
         )
+
+
+def _tool_events(out: str) -> list[dict]:
+    """The tools Claude Code used, from stream-json output: [{tool, query|url}]."""
+    events = []
+    for line in out.splitlines():
+        if '"tool_use"' not in line:
+            continue
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(item, dict) or item.get("type") != "assistant":
+            continue
+        for block in (item.get("message") or {}).get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                inp = block.get("input") or {}
+                events.append({"tool": block.get("name", ""), "query": str(inp.get("query", ""))[:300],
+                               "url": str(inp.get("url", ""))[:500]})
+    return events
 
 
 def _parse_json_output(out: str) -> dict | None:

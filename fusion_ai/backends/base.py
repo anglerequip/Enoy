@@ -38,6 +38,8 @@ class ChatMessage:
     role: str      # system | user | assistant
     content: str
     images: list[ImageData] = field(default_factory=list)   # Only on user messages.
+    tool_calls: list[dict] = field(default_factory=list)    # Assistant turn that asked for tools: [{name, arguments}].
+    tool_name: str = ""                                     # role "tool": which tool this result belongs to.
 
 
 @dataclass
@@ -53,6 +55,8 @@ class ChatRequest:
     num_predict: int | None = None     # Local model answer length cap (memory mode may lower it).
     num_batch: int | None = None       # Local model prompt batch size (smaller uses less memory).
     keep_alive: str | int | None = None  # Local model: how long it stays loaded after this request.
+    tools: list[dict] | None = None    # Local model: function definitions it may call (native tool calling).
+    web_tools: bool = False            # Claude: allow Claude Code's own WebSearch and WebFetch for this request.
 
 
 @dataclass
@@ -64,6 +68,8 @@ class ChatResult:
     usage: dict = field(default_factory=dict)   # Only values the backend reported.
     session_id: str | None = None
     duration_s: float = 0.0
+    tool_calls: list[dict] = field(default_factory=list)   # Local model asked for these tools: [{name, arguments}].
+    tool_events: list[dict] = field(default_factory=list)  # Claude: tools Claude Code used ({tool, query|url}).
 
 
 @dataclass

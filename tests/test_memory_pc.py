@@ -540,6 +540,7 @@ def test_hardware_question_uses_measured_facts_and_stays_local(cfg, tmp_path, mo
         "cpu": {"name": "Test CPU 9000", "logical_processors": 16}, "memory": {"total_gb": 15.9, "free_gb": 6.0},
         "gpus": [{"name": "Test GPU", "vram_total_mb": 8192, "vram_used_mb": 1000, "driver": "1"}], "disks": [],
         "windows": {"name": "Windows 11"}})
+    cfg["tools"]["enabled"] = False  # Without tools, the measured facts go into the prompt (tools: test_tools.py).
     orc = make_orc(cfg, tmp_path, qwen=["You have a Test GPU with 8 GB."])
     pid = orc.open_project(str(paths.general_chat_dir()))["id"]
     t = orc.start_task(pid, "What GPU do I have?")

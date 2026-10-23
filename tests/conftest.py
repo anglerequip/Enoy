@@ -57,6 +57,10 @@ class FakeBackend:
             reply = reply(request)
         if isinstance(reply, BackendError):
             raise reply
+        if isinstance(reply, ChatResult):  # A scripted tool call or a full result.
+            if reply.text and request.on_token:
+                request.on_token(reply.text)
+            return reply
         if request.on_token:
             request.on_token(reply)
         return ChatResult(text=reply, backend=self.name, model="fake", session_id="sess-1" if self.name == CLAUDE else None)

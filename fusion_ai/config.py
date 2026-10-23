@@ -8,6 +8,7 @@ replaced by defaults and reported as warnings instead of crashing the app.
 from __future__ import annotations
 
 import copy
+import re
 import json
 import shutil
 import time
@@ -113,6 +114,20 @@ DEFAULTS: dict[str, Any] = {
         "hardware_read": True,          # Read-only hardware inventory (CPU, RAM, GPU, disks, Windows).
         "approved_apps": [],            # [{"name": "Notepad", "path": "notepad.exe"}]; only these can be opened.
     },
+    "tools": {
+        "enabled": True,                # Models may ask Enoy to run tools (weather, web search, read a page).
+        "online": True,                 # Tools that use the internet. Off: everything stays offline.
+        "permissions": {"web": True},   # Granted permission groups. Tools with outside effects always ask first.
+        "enabled_tools": {},            # {"web_search": False} turns one tool off.
+        "timeouts": {},                 # {"fetch_page": 25} seconds, per tool.
+        "max_rounds": 5,                # Tool rounds per answer before the model must answer.
+        "search_provider": "auto",      # auto | brave | searxng | wikipedia
+        "searxng_url": "",              # Your SearXNG instance, e.g. http://localhost:8888 (JSON format enabled).
+        "wikipedia_lang": "en",
+        "contact": "",                  # Optional contact (e-mail or site) added to the User-Agent; MET Norway asks for one.
+        "page_chars": 8000,             # Page text given to a model per fetch.
+        "claude_web": True,             # Claude may use Claude Code's own WebSearch and WebFetch for live questions.
+    },
     "privacy": {
         "cloud_policy": "auto",         # "auto": permitted context may go to Claude; "never": everything stays local.
         "cloud_excluded_globs": [],     # Files Qwen may read but Claude never receives.
@@ -211,6 +226,20 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "approved_apps": (list, lambda v: None if all(isinstance(x, dict) and isinstance(x.get("name"), str)
                                                       and isinstance(x.get("path"), str) for x in v)
                           else "must be a list of {name, path}"),
+    },
+    "tools": {
+        "enabled": (bool, None),
+        "online": (bool, None),
+        "permissions": (dict, lambda v: None if all(isinstance(k, str) for k in v) else "must be an object"),
+        "enabled_tools": (dict, lambda v: None if all(isinstance(k, str) for k in v) else "must be an object"),
+        "timeouts": (dict, lambda v: None if all(isinstance(k, str) for k in v) else "must be an object"),
+        "max_rounds": (int, _range(1, 10)),
+        "search_provider": (str, _choice(("auto", "brave", "searxng", "wikipedia"))),
+        "searxng_url": (str, lambda v: None if not v else _url(v)),
+        "wikipedia_lang": (str, lambda v: None if re.fullmatch(r"[a-z]{2,3}", v) else "must be a language code like en"),
+        "contact": (str, lambda v: None if len(v) <= 120 else "is too long"),
+        "page_chars": (int, _range(1000, 20000)),
+        "claude_web": (bool, None),
     },
     "privacy": {
         "cloud_policy": (str, _choice(CLOUD_POLICIES)),
