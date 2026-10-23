@@ -916,6 +916,115 @@ class Orchestrator:
 
     # ------------------------------------------------------------ tools
 
+    def _agent_loop(self, task_id: int, pack: ctx.ContextPack, followup: str = "", reason: str = "") -> None:
+        """Qwen as an agent: it looks, edits, runs and checks with tools until it can answer.
+
+        Edits are written at once with backups (tools.agent_apply) and become one applied change set with Undo,
+        or are staged and proposed at the end. Commands outside the allowlist are handed back for approval."""
+        task = self.db.get_task(task_id)
+        ws = self.workspace(task["project_id"])
+        general = ctx.is_general(ws)
+        text = followup or task["objective"]
+        image_ids = self._image_ids(task_id)
+        if image_ids and not self._local_sees_images():
+            why = f"Qwen's model ({self.backends[LOCAL].settings['model']}) cannot read images."
+            if self._maybe_escalate(task_id, pack, why, force_reason=True):
+                return
+            self._fail(task_id, why + " Pick a model with vision in Settings, or ask Claude.")
+            return
+        s = self.cfg.get("tools", {})
+        files = None
+        if not general:
+            backup_dir = (self.backups_dir or Path(ws.root) / ".fusion" / "backups") / f"task-{task_id}"
+
+            def run(command: str) -> dict:
+                started = self.run_command(task["project_id"], command, task_id=task_id, wait=True)
+                r = self.db.get_command_run(started["run_id"]) or {}
+                return {"status": r.get("status"), "exit_code": r.get("exit_code"),
+                        "output": ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()}
+            files = tools_mod.AgentFiles(ws, bool(s.get("agent_apply", True)), backup_dir, run)
+        num_ctx, _ = self._local_window()
+        offer = None
+        if num_ctx < 8192:  # A small window cannot hold every tool definition plus real work.
+            offer = (tools_mod.CORE_AGENT_TOOLS if files else set()) | tools_mod.select(text)
+        runner = self._tool_runner(task_id, LOCAL, offer, services={"files": files} if files else None)
+        names = [t.name for t in runner.available()]
+        if not names:
+            runner = None
+        budget = ctx.prompt_budget(*self._local_window())
+        if general:
+            where = "There is no project folder in this chat (general chat)."
+        else:
+            listing = ctx.file_list(ws, min(2500, budget // 8)) if hasattr(ctx, "file_list") else ""
+            rules = "\n".join(f"{p}:\n{t[:1500]}" for p, t in ws.instructions()[:2])
+            where = (f"Project folder: {ws.name}. Paths are relative to it.\n" + (f"Files:\n{listing}\n" if listing else "")
+                     + (f"Project instructions:\n{rules}\n" if rules else "")
+                     + ("Edits are written to disk at once (with backups; the user can undo the whole turn)."
+                        if files and files.apply else "Edits are staged and shown to the user as one proposal at the end."))
+        system = tools_mod.AGENT_SYSTEM.format(names=", ".join(names) or "none", context=where) if runner else \
+            ctx.local_system_prompt(ws, pack, "ask")
+        convo = self._conversation(task_id, limit=8)
+        messages = [ChatMessage("system", system)] + convo + [ChatMessage("user", text, self._load_images(task_id, image_ids))]
+        step = self._step(task_id, "Qwen works on it (agent)", LOCAL, "local", reason or "Agent mode: Qwen uses tools.",
+                          files=[f.path for f in pack.files])
+        self._set(task_id, local_attempts=task["local_attempts"] + 1, workflow="agent")
+        try:
+            if runner:
+                result = self._chat_local_tools(task_id, messages, "agent", step, runner, budget,
+                                                rounds=int(s.get("agent_max_steps", 14)))
+            else:
+                result = self._chat_local(task_id, messages, "ask", step)
+        except BackendError as exc:
+            self._agent_finish_files(task_id, files, partial=True)
+            if exc.kind == "cancelled":
+                raise _Cancelled() from exc
+            self._step_end(step, "failed", error=str(exc))
+            self._event(task_id, "error", f"Local model failed: {exc}", LOCAL)
+            if exc.kind == "memory":
+                self._fail(task_id, str(exc))
+                return
+            if self._maybe_escalate(task_id, pack, f"Qwen (agent) failed: {exc}", force_reason=True):
+                return
+            self._fail(task_id, f"Qwen could not finish: {exc}")
+            return
+        except _Cancelled:
+            self._agent_finish_files(task_id, files, partial=True)
+            raise
+        answer = self._with_sources(result.text, runner) if runner and runner.calls else result.text
+        self.db.add_message(task_id, "assistant", answer, LOCAL)
+        self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
+        meta = self._usage_note(result)
+        if meta:
+            self._event(task_id, "usage", meta, LOCAL)
+        if files and files.suggested:
+            self.db.update_task_state(task_id, suggested_commands=files.suggested[:5])
+        changed = self._agent_finish_files(task_id, files)
+        used = len(runner.calls) if runner else 0
+        self._step_end(step, "completed", f"Done after {used} tool call(s)" + (f"; changed {changed}." if changed else "."))
+        if files and not files.apply and changed:
+            self._await_approval(task_id, ask=True)
+            return
+        self._complete(task_id, _first_line(result.text))
+
+    def _agent_finish_files(self, task_id: int, files: Any, partial: bool = False) -> str:
+        """Record the agent's file changes as one change set (applied with Undo, or pending for review)."""
+        if files is None:
+            return ""
+        changes = files.changeset_files()
+        if not changes:
+            return ""
+        names = ", ".join(f["path"] for f in changes)
+        note = "Agent changes" + (" (stopped before it finished)" if partial else "")
+        cs_id = self.db.create_changeset(task_id, LOCAL, changes, {"ok": True, "errors": [], "warnings": []}, note)
+        if files.apply:
+            self.db.set_changeset_status(cs_id, "applied")
+            self.db.update_task_state(task_id, decisions=[f"Qwen (agent) changed {names}"])
+            self._event(task_id, "applied", f"Qwen changed: {names}. Backups kept; Undo restores them.", LOCAL)
+        else:
+            self._event(task_id, "proposal", f"Qwen proposes changes to {names}.", LOCAL)
+        self.bus.publish({"type": "changeset", "task_id": task_id, "changeset_id": cs_id})
+        return names
+
     def _tools_wanted(self, text: str) -> bool:
         s = self.cfg.get("tools", {})
         return bool(s.get("enabled", True) and tools_mod.wants_tools(text))
@@ -940,7 +1049,8 @@ class Orchestrator:
                                         "context needs more memory.")
         return rt
 
-    def _tool_runner(self, task_id: int, agent: str, offer: set[str] | None = None) -> tools_mod.ToolRunner:
+    def _tool_runner(self, task_id: int, agent: str, offer: set[str] | None = None,
+                     services: dict | None = None) -> tools_mod.ToolRunner:
         cancel = self._cancel.setdefault(task_id, threading.Event())
 
         def on_event(kind: str, info: dict) -> None:
@@ -971,23 +1081,25 @@ class Orchestrator:
                                       live_info=bool(state.get("live_info") or (r.ok and r.sources)))
 
         return tools_mod.ToolRunner(self.cfg, tools_mod.registry(), cancel, on_event, runtime=self._tool_runtime,
-                                    offer=offer)
+                                    offer=offer, services=services)
 
     def _chat_local_tools(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None,
-                          runner: tools_mod.ToolRunner, budget: int) -> Any:
+                          runner: tools_mod.ToolRunner, budget: int, rounds: int | None = None) -> Any:
         """Qwen with native tool calling: call, run the tools it asks for, return the real results, repeat.
 
         Bounded by tools.max_rounds; after that Qwen must answer with what it has."""
         msgs = list(messages)
         specs = [t.spec() for t in runner.available()]
-        rounds = int(self.cfg.get("tools", {}).get("max_rounds", 5))
+        rounds = rounds or int(self.cfg.get("tools", {}).get("max_rounds", 5))
         per_result = max(2500, min(8000, budget // 3))
+        spec_chars = len(json.dumps(specs))
         for n in range(rounds + 1):
             self._check_cancel(task_id)
             last = n == rounds
             if last:
                 msgs.append(ChatMessage("user", "Tool limit reached. Answer now with the information you have, "
                                                 "and say what you could not find out."))
+            _fit_window(msgs, budget - spec_chars)
             result = self._chat_local(task_id, msgs, purpose, step_id, tools=None if last else specs)
             if not result.tool_calls or last:
                 if not result.text.strip():
@@ -1087,7 +1199,9 @@ class Orchestrator:
     def _with_sources(text: str, runner: tools_mod.ToolRunner) -> str:
         """Add the sources Enoy actually retrieved, so provenance never depends on the model citing them."""
         used = runner.sources()
-        failed = [r for r in runner.calls if not r.ok and r.error_kind != "invalid"]
+        # Failed data sources matter to the reader; an agent's misses while exploring files do not.
+        failed = [r for r in runner.calls if not r.ok and r.error_kind != "invalid"
+                  and r.tool not in tools_mod.WORKSPACE_TOOLS]
         lines = []
         if used:
             lines.append("**Sources retrieved by Enoy:** " + " · ".join(
@@ -1097,7 +1211,7 @@ class Orchestrator:
         local = sorted({r.tool for r in runner.calls if r.ok and r.tool in tools_mod.PC_TOOLS})
         if local:
             lines.append(f"*Read from Windows by Enoy (read-only) at {time.strftime('%H:%M')}: {', '.join(local)}.*")
-        if not runner.calls:
+        if not runner.calls and not runner.services:
             lines.append("*No tools were used: this answer comes from the model's own knowledge, not live data.*")
         return text.rstrip() + ("\n\n---\n" + "\n\n".join(lines) if lines else "")
 
@@ -1163,6 +1277,9 @@ class Orchestrator:
                     plan: str = "", reason: str = "") -> None:
         task = self.db.get_task(task_id)
         ws = self.workspace(task["project_id"])
+        if self.cfg.get("tools", {}).get("agent", True) and self.cfg.get("tools", {}).get("enabled", True) \
+                and not plan and not feedback:
+            return self._agent_loop(task_id, pack, followup, reason)
         kind = task["kind"]
         max_attempts = self.cfg["routing"]["max_local_attempts"]
         attempts_here = 0
@@ -2565,6 +2682,24 @@ def missing_tool(output: str) -> str:
         if m:
             return m.group(1)
     return ""
+
+
+def _fit_window(msgs: list[ChatMessage], budget: int) -> None:
+    """Keep a tool conversation inside the model's window: shorten the oldest tool results first.
+
+    Ollama would otherwise cut the start of the prompt, instructions included, without saying so."""
+    def total() -> int:
+        return sum(len(m.content) for m in msgs)
+    for m in msgs[1:-2]:
+        if total() <= budget:
+            return
+        if m.role == "tool" and len(m.content) > 300:
+            m.content = m.content[:240] + " ... [older tool result shortened to fit the context window]"
+    for m in msgs[1:-2]:
+        if total() <= budget:
+            return
+        if m.role in ("user", "assistant") and len(m.content) > 600:
+            m.content = m.content[:500] + " ... [shortened]"
 
 
 def _clean_text(text, limit: int, multiline: bool = False) -> str:

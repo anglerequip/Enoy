@@ -726,6 +726,9 @@ async function settingsTools() {
       <div class="small muted">Models ask Enoy to run these; Enoy checks the permission, runs the tool and gives the real result back,
         including errors. Every call is listed in Activity. Tools only read: nothing here changes your PC or sends anything on your behalf.</div>
       ${toggleRow("tools", "enabled", "Let models use tools", "Off: models answer only from what is in the chat.")}
+      ${toggleRow("tools", "agent", "Qwen works as an agent", "Qwen looks around the project, reads and edits files, runs the tests and checks its own work with tools, like Claude does, instead of answering in one shot.")}
+      ${toggleRow("tools", "agent_apply", "Agent edits are applied right away", "Each edit is written at once with a backup; Undo restores the whole turn. Off: Qwen's edits wait for you as one proposal. Deleting files and commands outside the allowed list always ask.")}
+      <div class="grid2">${inputRow("tools", "agent_max_steps", "Agent steps per message", "Tool rounds Qwen may use before it must answer.", "number")}</div>
       ${toggleRow("tools", "online", "Online tools", "Weather, web search and reading web pages. Off: nothing leaves your PC through tools.")}
       ${toggleRow("tools", "claude_web", "Claude may search the web", "For questions about current information, Claude gets Claude Code's own WebSearch and WebFetch (nothing else). Uses your Claude plan.")}
       ${toggleRow("tools", "claude_enoy_mcp", "Claude calls Enoy's PC and weather tools itself", "Off (default): Enoy reads the PC facts first and puts them in Claude's request. On: Claude Code runs without its safe mode so Enoy's tool server can load; your own Claude Code settings, skills and other MCP servers stay off. Tested: Claude called Enoy's GPU tool and answered from it.")}

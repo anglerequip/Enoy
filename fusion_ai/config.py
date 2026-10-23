@@ -128,6 +128,9 @@ DEFAULTS: dict[str, Any] = {
         "contact": "",                  # Optional contact (e-mail or site) added to the User-Agent; MET Norway asks for one.
         "page_chars": 8000,             # Page text given to a model per fetch.
         "claude_web": True,             # Claude may use Claude Code's own WebSearch and WebFetch for live questions.
+        "agent": True,                  # Qwen works as an agent: reads, searches, edits and runs tools in a loop.
+        "agent_apply": True,            # Agent edits are written at once (backups, one Undo per turn). Off: one proposal at the end.
+        "agent_max_steps": 14,          # Tool rounds per agent turn.
         "claude_enoy_mcp": False,       # Claude calls Enoy's tools itself (MCP). Needs Claude Code without --safe-mode;
                                         # off: Enoy reads the PC facts first and puts them in Claude's request.
     },
@@ -245,6 +248,9 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "contact": (str, lambda v: None if len(v) <= 120 else "is too long"),
         "page_chars": (int, _range(1000, 20000)),
         "claude_web": (bool, None),
+        "agent": (bool, None),
+        "agent_apply": (bool, None),
+        "agent_max_steps": (int, _range(2, 40)),
         "claude_enoy_mcp": (bool, None),
     },
     "privacy": {

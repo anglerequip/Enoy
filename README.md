@@ -284,6 +284,26 @@ Things to know:
 - Tested with the real Qwen model and a scripted stand-in for Claude. **No real Claude
   request has been sent through this mode yet**, so treat the first real run as a test.
 
+## Qwen as an agent (on by default)
+
+Talk to Qwen the way you would talk to Claude Code. In a project folder Qwen works in
+a loop with tools until the job is done: `list_files`, `read_file`, `search_code`,
+`edit_file`, `write_file`, `run_command` (tests and other allowlisted commands), plus
+the PC, weather and web tools below. It reads before it edits, runs the tests after,
+and fixes what fails.
+
+- Edits are written at once with a backup; each message's edits are one change set
+  that **Undo** restores. Turn *Agent edits are applied right away* off to get one
+  proposal to apply or discard instead.
+- Guardrails that stay on: only files inside the project folder; secrets files (.env,
+  keys) are never read or written; edits that would break the syntax are refused;
+  commands outside the allowlist are handed to you to approve, blocked ones never run.
+- Settings → Tools: agent on/off, apply right away, steps per message (default 14).
+- In **Auto** mode Claude still leads real coding work; pick **Qwen** in the model
+  menu to work with Qwen directly. Small talk always goes straight to Qwen.
+- Qwen 3.5 9B is a small model: tested live, it added functions with tests, ran pytest
+  and reported the real result, but expect more slips than with Claude.
+
 ## Tools: your PC, weather and the web
 
 Models can ask Enoy to run tools. Enoy checks the permission, runs the tool and gives

@@ -40,6 +40,7 @@ def test_qwen_proposes_a_valid_change_through_the_orchestrator(qwen, project, tm
     """The real model must produce an edit that passes Enoy's validation."""
     cfg, _ = config_mod.validate({})
     cfg["routing"]["workflow"] = "local_only"
+    cfg["tools"]["agent"] = False  # The classic flow: one proposal, then your approval (agent mode: next test).
 
     class NoClaude:
         name = CLAUDE
@@ -72,3 +73,40 @@ def test_qwen_proposes_a_valid_change_through_the_orchestrator(qwen, project, tm
     spec.loader.exec_module(module)
     assert module.multiply(6, 7) == 42
     assert module.subtract(5, 3) == 2  # Existing behaviour intact.
+
+
+def test_qwen_agent_changes_and_checks_the_project(qwen, project, tmp_path):
+    """Agent mode with the real model: it edits the files itself and runs the real tests."""
+    from fusion_ai.backends.base import BackendStatus
+    cfg, _ = config_mod.validate({})
+    cfg["routing"]["workflow"] = "local_only"
+    cfg["tools"]["agent"] = True
+
+    class NoClaude:
+        name = CLAUDE
+        verified = False
+        settings = cfg["claude"]
+
+        def status(self):
+            return BackendStatus(CLAUDE, False, "disabled for this test")
+
+        def chat(self, request):
+            raise AssertionError("Claude must not be called in integration tests")
+
+    orc = Orchestrator(Storage(":memory:"), cfg, {LOCAL: qwen, CLAUDE: NoClaude()}, EventBus(),
+                       backups_dir=tmp_path / "bk", synchronous=True)
+    pid = orc.open_project(str(project))["id"]
+    start = time.monotonic()
+    task = orc.start_task(pid, "Add a multiply(a, b) function to calculator.py that returns a * b, "
+                               "add a test for it, and run the tests.", backend=LOCAL)
+    task = orc.db.get_task(task["id"])
+    calls = [a["text"].split("→ ")[-1][:60] for a in reversed(orc.db.activity(task["id"])) if a["kind"] == "tool.started"]
+    calls = [c.encode("ascii", "replace").decode() for c in calls]  # The Windows console may not print every character.
+    print(f"\nAgent finished as {task['status']} in {time.monotonic() - start:.1f} s; tools: {calls}")
+    assert task["status"] == "completed", task["summary"]
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("calc", project / "calculator.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.multiply(6, 7) == 42 and module.subtract(5, 3) == 2
+    assert orc.db.list_changesets(task["id"], "applied"), "the agent's edits are one undoable change set"

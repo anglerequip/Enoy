@@ -42,6 +42,7 @@ class Tool:
     timeout_s: float = 20.0
     cache_ttl_s: float = 0.0          # 0 = never cached.
     attribution: bool = False         # Results carry sources that must be cited.
+    needs_workspace: bool = False     # Only offered when a project folder is open (agent mode).
 
     def spec(self) -> dict:
         """Function definition in the format Ollama (and OpenAI-style APIs) use."""
@@ -61,6 +62,7 @@ class ToolContext:
     cfg: dict
     cancel: threading.Event
     runtime: dict | None = None   # Facts from the running app (local model, memory mode) for tools that need them.
+    services: dict | None = None  # Live objects for workspace tools, e.g. {"files": AgentFiles}.
 
 
 @dataclass
@@ -141,6 +143,9 @@ def validate(schema: dict, args: Any) -> dict:
     return clean
 
 
+# Permission groups that are on unless Settings turn them off (older config files do not list them).
+DEFAULT_PERMISSIONS = {"web": True, "files.read": True, "files.write": True, "commands": True}
+
 _CACHE: dict[str, tuple[float, ToolResult]] = {}
 _CACHE_LOCK = threading.Lock()
 
@@ -155,11 +160,13 @@ class ToolRunner:
 
     def __init__(self, cfg: dict, tools: dict[str, Tool], cancel: threading.Event | None = None,
                  on_event: Callable[[str, dict], None] | None = None,
-                 runtime: Callable[[], dict] | None = None, offer: set[str] | None = None):
+                 runtime: Callable[[], dict] | None = None, offer: set[str] | None = None,
+                 services: dict | None = None):
         self.cfg = cfg
         self.tools = tools
         self.runtime = runtime
         self.offer = offer   # Tools offered to the model for this answer (None: every allowed tool).
+        self.services = services or {}
         self.cancel = cancel or threading.Event()
         self.on_event = on_event or (lambda kind, info: None)
         self.calls: list[ToolResult] = []
@@ -176,12 +183,14 @@ class ToolRunner:
             return False, "Online tools are turned off in Settings."
         if not s.get("enabled_tools", {}).get(tool.name, True):
             return False, f"The {tool.name} tool is turned off in Settings."
+        if tool.needs_workspace and "files" not in self.services:
+            return False, "No project folder is open."
         if tool.permission.startswith("pc:"):
             from .. import pccontrol  # PC capabilities follow the Memory & PC profile.
             cap = tool.permission[3:]
             if cap not in pccontrol.allowed(self.cfg):
                 return False, f"The PC profile in Settings → Memory & PC does not allow '{cap}'."
-        elif not s.get("permissions", {}).get(tool.permission, False):
+        elif not s.get("permissions", {}).get(tool.permission, DEFAULT_PERMISSIONS.get(tool.permission, False)):
             return False, f"Permission '{tool.permission}' is not granted in Settings."
         if tool.side_effects:
             return False, "Tools with outside effects need your approval for each use."
@@ -233,7 +242,7 @@ class ToolRunner:
 
     def _execute(self, tool: Tool, args: dict) -> ToolResult:
         box: dict = {}
-        ctx = ToolContext(self.cfg, self.cancel)
+        ctx = ToolContext(self.cfg, self.cancel, services=self.services)
         if self.runtime is not None and tool.permission.startswith("pc:"):
             try:
                 ctx.runtime = self.runtime()
