@@ -593,6 +593,28 @@ button:focus:not(:focus-visible) { outline: none; }
 .modal-box { border-radius: var(--r-lg); background: var(--panel); }
 .card { border-radius: var(--r-md); background: var(--panel); }
 
+/* Smooth text: native caret in the accent colour, gentle focus, streamed text
+   that eases in. Only opacity and transform animate (composited, no layout),
+   and the reduced-motion rule below switches every animation off. */
+:root { --ease-out: cubic-bezier(.2, .8, .2, 1); }
+textarea, input[type=text], input[type=number], input[type=search], [contenteditable] { caret-color: var(--accent); }
+input[type=text], input[type=number], input[type=search], select, textarea.field, .psec textarea { transition: border-color var(--t-fast), box-shadow var(--t-fast); }
+input[type=text]:focus, input[type=number]:focus, input[type=search]:focus, select:focus, textarea.field:focus, .psec textarea:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.composer textarea { overflow-y: auto; }
+@supports (field-sizing: content) { .composer textarea { field-sizing: content; } }
+.round-btn.send { transition: background var(--t-fast), opacity var(--t-fast), transform var(--t-fast) var(--ease-out); }
+.round-btn.send:active:not(:disabled) { transform: scale(.92); }
+.ti.enter { animation: ti-in .24s var(--ease-out) both; }
+@keyframes ti-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.md-in { animation: md-in .26s var(--ease-out) both; }
+@keyframes md-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+#live-body.streaming > p:last-child::after,
+#live-body.streaming > :is(ul, ol):last-child > li:last-child::after {
+  content: ""; display: inline-block; width: .5em; height: .5em; margin-left: .3em; border-radius: 50%;
+  background: currentColor; vertical-align: .05em; animation: caret-pulse 1.1s ease-in-out infinite;
+}
+@keyframes caret-pulse { 0%, 100% { opacity: .85; } 50% { opacity: .25; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }

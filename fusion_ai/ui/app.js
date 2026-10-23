@@ -13,7 +13,7 @@ const MODELS = {
 };
 const S = {
   status: null, projects: [], project: null, facts: null, chats: [], chatId: null, chat: null,
-  model: lsGet("model") || "auto", attached: [], stream: {}, thinking: {}, drawer: false,
+  model: lsGet("model") || "auto", attached: [], stream: {}, shown: {}, thinking: {}, drawer: false,
   tree: null, search: "", searchResults: null, preview: null, config: null, cfgMeta: null,
   settingsTab: "general", images: [], streamDone: {},
 };
@@ -277,9 +277,12 @@ function renderThread(forceBottom = false) {
   const keyed = items.map((it, n) => ({
     key: it.k === "msg" ? `m${it.m.id}` : it.k === "cs" ? `c${it.c.id}` : it.k === "run" ? `r${it.r.id}` : `n${it.t}-${n}`,
     html: html[n],
+    enter: !(it.k === "msg" && it.m.role === "assistant"),
   }));
   keyed.push({ key: `s${t.id}`, html: statusHtml(t) });
-  patchThread($("thread"), keyed);
+  const thread = $("thread");
+  patchThread(thread, keyed, thread._chat === t.id);
+  thread._chat = t.id;
   if (S.stream[t.id] || S.thinking[t.id]) renderLive(true);
   if (stick) toBottom();
 }
@@ -287,7 +290,7 @@ function renderThread(forceBottom = false) {
 // Update the thread in place. An item whose HTML did not change keeps its DOM
 // node, so finished answers are not rebuilt (no flicker, text selection and
 // images survive) while new items are inserted where they belong.
-function patchThread(container, items) {
+function patchThread(container, items, animate = false) {
   const old = new Map();
   for (const el of [...container.children]) {
     if (el.dataset && el.dataset.k) old.set(el.dataset.k, el); else el.remove();
@@ -303,6 +306,7 @@ function patchThread(container, items) {
       fresh.innerHTML = it.html;
       fresh._html = it.html;
       if (el) { el.replaceWith(fresh); old.delete(it.key); }
+      else if (animate && it.enter) fresh.classList.add("enter");
       el = fresh;
     }
     const want = prev ? prev.nextSibling : container.firstChild;
@@ -406,7 +410,7 @@ function statusHtml(t) {
     const who = run.lead ? `${avatar("claude")}Claude<span class="where">· leading · team ${esc((run.status || "working").replace(/_/g, " "))}</span>`
       : `${avatar("team")}Team<span class="where">· ${esc(run.status || "working")}</span>`;
     return `<div class="msg-ai live"><div class="ai-head">${who}</div>
-      <div class="ai-body" id="live-body"></div>
+      <div class="ai-body streaming" id="live-body"></div>
       <div id="live-wait"><span class="typing"><span></span><span></span><span></span></span></div>
       <div class="small muted">Open <a href="#" data-action="toggle-activity">Activity</a> to see each role, its model and why.</div></div>`;
   }
@@ -431,7 +435,7 @@ function statusHtml(t) {
     return `<div class="msg-ai live">
       <div class="ai-head">${avatar(b)}${NAME[b]}<span class="where">${b === "qwen" ? "· on your PC" : ""}</span></div>
       <details class="thinking hidden" id="live-thinking-wrap"><summary>Thinking</summary><div id="live-thinking"></div></details>
-      <div class="ai-body" id="live-body"></div>
+      <div class="ai-body streaming" id="live-body"></div>
       <div id="live-wait"><span class="typing"><span></span><span></span><span></span></span>
         <div class="small muted" id="live-hint">${b === "claude" ? "Claude is working on it" : "Thinking"}<span id="live-elapsed"></span></div></div></div>`;
   }
@@ -467,10 +471,23 @@ function statusHtml(t) {
 }
 
 // Live tokens: re-render only the streaming bubble, at most once per frame.
-// Tokens arrive as separate events; they are applied at most once per frame
-// (no fixed timer, so text appears as fast as it arrives). Only the Markdown
+// Tokens often arrive in bursts (a whole sentence at once), so the text shown
+// catches up with the text received a fraction of the gap per frame: small gaps
+// close within a few frames, a large chunk eases in over about half a second,
+// and a very large backlog (opening a chat mid-answer) is shown at once. With
+// reduced motion everything received is shown immediately. Only the Markdown
 // block still being written is redrawn.
 let liveFrame = null;
+const REDUCE_MOTION = matchMedia("(prefers-reduced-motion: reduce)");
+function nextShown(id, full) {
+  let n = S.shown[id] || 0;
+  if (n > full.length) n = 0;
+  const gap = full.length - n;
+  if (REDUCE_MOTION.matches || gap > 1500) n = full.length;
+  else if (gap > 0) n += Math.min(gap, Math.ceil(gap * 0.16) + 1);
+  S.shown[id] = n;
+  return n;
+}
 function renderLive(now = false) {
   const paint = () => {
     liveFrame = null;
@@ -478,8 +495,10 @@ function renderLive(now = false) {
     if (!body || !S.chat || S.view !== "chat") return;
     const stick = nearBottom();
     const id = S.chat.task.id;
-    const text = S.stream[id] || "";
+    const full = S.stream[id] || "";
+    const text = full.slice(0, nextShown(id, full));
     MD.renderInto(body, text, true);
+    if (text.length < full.length) liveFrame = requestAnimationFrame(paint);
     const wait = $("live-wait");
     if (wait) wait.classList.toggle("hidden", !!text);
     const think = S.thinking[id] || "";
@@ -503,6 +522,7 @@ setInterval(() => {
 
 // ---------------------------------------------------------------- composer
 
+const AUTO_SIZE = CSS.supports("field-sizing", "content");
 function renderComposer() {
   const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
   const general = S.project && S.project.is_default;
@@ -528,7 +548,10 @@ function renderComposer() {
   const ta = $("prompt");
   const draft = S.draft || "";
   ta.value = draft;
-  const resize = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 260) + "px"; const b = $("send-btn"); if (b) b.disabled = !ta.value.trim() && !S.images.length; };
+  const resize = () => {
+    if (!AUTO_SIZE) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 260) + "px"; }
+    const b = $("send-btn"); if (b) b.disabled = !ta.value.trim() && !S.images.length;
+  };
   ta.addEventListener("input", () => { S.draft = ta.value; resize(); });
   ta.addEventListener("paste", e => {
     const files = [...(e.clipboardData ? e.clipboardData.files : [])].filter(f => f.type.startsWith("image/"));
@@ -1291,7 +1314,7 @@ function scheduleRefresh() {
       await loadChats();
     } catch (e) { return; }
     for (const id of Object.keys(S.streamDone)) {
-      delete S.stream[id]; delete S.thinking[id]; delete S.streamDone[id];
+      delete S.stream[id]; delete S.thinking[id]; delete S.streamDone[id]; delete S.shown[id];
     }
     renderSidebar();
     renderChatMenu();
@@ -1313,6 +1336,7 @@ function connectEvents() {
         delete S.streamDone[ev.task_id]; delete S.stream[ev.task_id]; delete S.thinking[ev.task_id];
       }
       const store = ev.type === "token" ? S.stream : S.thinking;
+      if (ev.type === "token" && !S.stream[ev.task_id]) S.shown[ev.task_id] = 0;
       store[ev.task_id] = (store[ev.task_id] || "") + ev.text;
       if (ev.task_id === S.chatId) renderLive();
       return;

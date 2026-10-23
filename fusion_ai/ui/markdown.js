@@ -293,6 +293,15 @@ const MD = (() => {
       tpl.innerHTML = renderBlock(b, active);
       const node = tpl.content.firstElementChild || document.createElement("p");
       const old = el.children[i];
+      // A block that appears while streaming fades in. The block being written
+      // is rebuilt as text arrives; the new node continues the same fade
+      // (negative delay) instead of restarting it.
+      const born = old ? old._born : streaming && keys.length ? performance.now() : 0;
+      if (born && performance.now() - born < 260) {
+        node._born = born;
+        node.classList.add("md-in");
+        node.style.animationDelay = `-${Math.round(performance.now() - born)}ms`;
+      }
       if (old) el.replaceChild(node, old); else el.appendChild(node);
     });
     while (el.childElementCount > blocks.length) el.lastElementChild.remove();

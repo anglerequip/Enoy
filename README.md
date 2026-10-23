@@ -233,6 +233,57 @@ GlobalMemoryStatusEx, nvidia-smi, disk usage) and are read-only.
 - Other workflows: *local_only*, *local_then_review* (Claude reviews Qwen's diff),
   *claude_plans* (Claude plans, Qwen implements), *compare* (both propose).
 
+## Claude leads (on by default)
+
+When Claude is available, it reads each new message first and decides what happens.
+Its reply starts with one of three modes:
+
+- **answer:** Claude answers directly (questions, explanations, short replies).
+- **clarify:** the request is genuinely ambiguous, so Claude asks one short question.
+- **delegate:** Claude writes a plan of small, bounded tasks. Each task names the
+  files, why it exists, what output is expected, constraints, and which model should
+  do it (usually Qwen).
+
+A delegated plan runs on the team:
+
+1. **Qwen** writes the code locally, task by task.
+2. **QA** runs the project's real tests. A task only counts as done when the checks
+   pass; a failure is recorded as a failure.
+3. The **reviewer** checks the diff.
+4. **Claude** does a final review of the results and replies `done` or asks for one
+   fix round (at most *Fix rounds Claude may order*, default 1). After that the run ends and the
+   result is reported as it is.
+
+Settings → *Claude leads*:
+
+| Setting | Default | What it does |
+|---|---|---|
+| Claude leads new messages | on | Off: the router sends each message to Qwen or Claude as before. |
+| Claude checks the team's results | on | One more Claude request per delegated task. Off: Enoy's own summary is the answer. |
+| Fix rounds Claude may order | 1 | How many fix rounds Claude may ask for after its check. |
+
+Things to know:
+
+- **Ask before sending still applies.** Every Claude request (the first read and the
+  final review) waits for *Send to Claude* when that safety setting is on.
+- Picking a model by hand, a chat kept on your PC, or *zero paid mode* skips the
+  lead. Qwen then works as described under routing above.
+- If Claude is unavailable, Enoy follows *If Claude is needed but unavailable* in Settings:
+  **local** lets Qwen continue alone and says so; **stop** stops and tells you why.
+  Enoy never shows a Qwen answer as Claude's.
+- **Your uncommitted work is protected.** If the project is a git repository, Enoy
+  notes which files you had changed before the run. A proposed change to one of those
+  files waits for your review instead of being applied automatically.
+- **Activity** shows the lead's state, each task's spec and verification result, and
+  buttons to *Pause delegation*, *Retry* or *Cancel* a task, or move it to the other
+  model.
+- Plans, checkpoints and test results go into the chat's shared memory. Items that
+  were not verified are marked as suggestions, so the next model does not treat them
+  as facts.
+- Enoy has no GitHub sync; it only reads `git status`, never commits or pushes.
+- Tested with the real Qwen model and a scripted stand-in for Claude. **No real Claude
+  request has been sent through this mode yet**, so treat the first real run as a test.
+
 ## TEAM ROLES (per chat)
 
 The **Team** button in the message box (Code mode) switches a chat between:
