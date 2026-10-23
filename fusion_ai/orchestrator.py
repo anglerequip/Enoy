@@ -23,17 +23,18 @@ from typing import Any, Callable
 
 from . import commands as cmdpolicy
 from . import context as ctx
+from .config import DEFAULTS
 from . import images as imgs
 from . import hardware
 from . import knowledge as kb
 from . import paths
 from . import pccontrol as pc
-from .memory_guard import MemorySupervisor
+from .memory_guard import RUNTIME, MemorySupervisor
 from . import patches
 from . import privacy
 from . import team as team_mod
 from .backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ChatResult
-from .project import Workspace, sha256_text
+from .project import PathError, Workspace, sha256_text
 from .redact import redact
 from .routing import AttemptSignals, classify, decide, should_escalate, sounds_uncertain
 from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
@@ -41,6 +42,7 @@ from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
 log = logging.getLogger("fusion.orchestrator")
 
 BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude"}
+MAX_READ_ROUNDS = 3  # How many times Qwen may ask for more project files in one answer.
 CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review Qwen's change",
                      "edit": "Write the change", "ask": "Answer"}
 CANCEL_NOTE = {
@@ -503,6 +505,9 @@ class Orchestrator:
         )
         names = ", ".join(f.path for f in pack.files) or "none"
         self._event(task_id, "context", f"Selected {len(pack.files)} relevant file(s): {names}")
+        if not ctx.is_general(ws) and not ws.index:
+            self._event(task_id, "note", f"This project's folder ({ws.root}) is empty, so there is no code to read or "
+                        "change. To work on existing code, use Open folder… and pick the folder that holds it.")
         return pack
 
     def _analyze(self, task_id: int, objective: str, title: str) -> tuple[ctx.ContextPack, int]:
@@ -790,6 +795,8 @@ class Orchestrator:
             self._fail(task_id, why + " Pick a model with vision in Settings, or ask Claude.")
             return
         pictures = self._load_images(task_id, image_ids)
+        budget = ctx.prompt_budget(*self._local_window())
+        read_rounds, read_note = 0, ""
         while True:
             self._check_cancel(task_id)
             attempts_here += 1
@@ -798,17 +805,24 @@ class Orchestrator:
             step = self._step(task_id, title if attempts_here == 1 else f"{title} (attempt {attempts_here} of {max_attempts})",
                               LOCAL, "local", step_reason, attempt=attempts_here,
                               files=[f.path for f in pack.files])
-            system = ctx.local_system_prompt(ws, pack, kind)
+            reads_left = MAX_READ_ROUNDS - read_rounds if ws.index else None
+            system = ctx.local_system_prompt(ws, pack, kind, list_chars=min(3000, budget // 8), reads_left=reads_left)
             extra = []
             if plan:
                 extra.append(f"Follow this implementation plan:\n{plan}")
             if followup:
                 extra.append(f"Follow-up from the user:\n{followup}")
+            if read_note:
+                extra.append(read_note)
             if feedback:
                 extra.append(feedback)
-            user = ctx.task_message(task["objective"], pack, "\n\n".join(extra))
-            messages = ([ChatMessage("system", system)] + (self._conversation(task_id) if followup else [])
-                        + [ChatMessage("user", user, pictures)])
+            convo = self._conversation(task_id) if followup else []
+            # Only as much file content as fits Qwen's context window; the rest would be cut off by Ollama unseen.
+            fixed = (len(system) + sum(len(m.content) for m in convo)
+                     + len(ctx.task_message(task["objective"], dataclasses.replace(pack, files=[]), "\n\n".join(extra))))
+            shown = ctx.fit_files(pack, budget - fixed - 100)  # 100: headings around the files.
+            user = ctx.task_message(task["objective"], shown, "\n\n".join(extra))
+            messages = [ChatMessage("system", system)] + convo + [ChatMessage("user", user, pictures)]
             try:
                 result = self._chat_local(task_id, messages, kind, step)
             except BackendError as exc:
@@ -840,6 +854,36 @@ class Orchestrator:
                 self._fail(task_id, f"The local model failed {attempts_here} time(s): {exc}")
                 return
 
+            asked = ctx.read_requests(result.text)
+            if asked and reads_left:
+                read_rounds += 1
+                attempts_here -= 1  # Looking up files is not a failed attempt.
+                self._set(task_id, local_attempts=self.db.get_task(task_id)["local_attempts"] - 1)
+                added, refused = ctx.add_files(ws, pack, asked, self.cfg["context"]["max_file_chars"])
+                self.db.update_task_state(task_id, relevant_files=[{"path": f.path, "sha": f.sha[:12]} for f in pack.files],
+                                          file_versions={f.path: f.sha for f in pack.files})
+                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
+                got = ", ".join(added) or "none"
+                self._step_end(step, "completed", f"Read files: {got}.")
+                self._event(task_id, "context", f"Qwen asked to see {len(asked)} file(s). Added: {got}"
+                            + (". Not given: " + "; ".join(refused) if refused else "."), LOCAL)
+                self._act(task_id, "context.files_read", f"Qwen read {len(added)} more file(s): {got}.", LOCAL, "local",
+                          reason="Qwen asked for files it needed.", outcome="read", step_id=step)
+                read_note = ("Enoy added the files you asked for." if added else "")
+                if refused:
+                    read_note += " Files Enoy could not give you: " + "; ".join(refused) + "."
+                step_reason = "Continue with the files Qwen asked for."
+                continue
+            if asked:
+                result.text = ctx.strip_reads(result.text)
+                if not result.text:
+                    self._step_end(step, "failed", error="Asked for more files after the limit.")
+                    if attempts_here < max_attempts:
+                        feedback = ctx.NO_MORE_READS + " Give your answer now."
+                        continue
+                    self._fail(task_id, "Qwen kept asking for more files instead of answering. Name the files in your "
+                                        "message, or ask Claude.")
+                    return
             self.db.add_message(task_id, "assistant", result.text, LOCAL)
             self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
             meta = self._usage_note(result)
@@ -858,8 +902,13 @@ class Orchestrator:
                 return
 
             parsed = patches.parse(result.text)
+            if not ws.index and not parsed.changes and not parsed.errors:
+                # Empty folder and no new files: Qwen explained that there is nothing to change. That is the answer.
+                self._step_end(step, "completed", "Answered: the project folder is empty.")
+                self._complete(task_id, _first_line(result.text))
+                return
             validation = patches.validate(ws, parsed.changes, task["state"].get("file_versions"))
-            problems = parsed.errors + validation.errors
+            problems = parsed.errors + validation.errors + self._unseen_rewrites(ws, parsed.changes, shown)
             if parsed.commands:
                 self.db.update_task_state(task_id, suggested_commands=parsed.commands)
             if not validation.files and not problems:
@@ -873,14 +922,49 @@ class Orchestrator:
             self._event(task_id, "validation", "The local proposal could not be used:\n- " + "\n- ".join(problems[:8]), LOCAL)
             if attempts_here < max_attempts:
                 step_reason = "Retry: the previous proposal failed Enoy's checks."
+                seen = {f.path for f in shown.files}
+                unseen = sorted({c.path for c in parsed.changes if c.action == "edit" and c.path not in seen})
                 feedback = ("Your previous answer could not be applied because:\n- " + "\n- ".join(problems[:8])
                             + "\nSend corrected blocks for ALL intended changes, following the block format exactly.")
+                if unseen and MAX_READ_ROUNDS - read_rounds > 0:
+                    feedback += ("\nYou edited " + ", ".join(unseen) + " without seeing it, so the SEARCH lines were "
+                                 "guessed. First ask for the part you need, for example <<<READ " + unseen[0]
+                                 + " | text to find>>>, then copy the SEARCH lines exactly.")
                 self._event(task_id, "retry", f"Asking the local model to correct it (attempt {attempts_here + 1} of {max_attempts}).", LOCAL)
                 continue
             if self._maybe_escalate(task_id, pack, "Local proposals failed validation:\n- " + "\n- ".join(problems[:8])):
                 return
             self._fail(task_id, "The local model could not produce a valid change: " + "; ".join(problems[:3]))
             return
+
+    @staticmethod
+    def _unseen_rewrites(ws: Workspace, changes: list, shown: ctx.ContextPack) -> list[str]:
+        """A whole-file rewrite of an existing file the model saw only in part would delete the rest."""
+        full = {f.path for f in shown.files if not f.truncated}
+        problems = []
+        for c in changes:
+            if c.action != "write":
+                continue
+            try:
+                rel = ws.rel(ws.resolve(c.path))
+            except (PathError, ValueError):
+                continue  # validate() reports paths outside the project.
+            if rel not in full and ws.current_hash(rel) is not None:
+                problems.append(f"'{rel}' exists and you did not see all of it, so a FILE block would delete the parts "
+                                "you did not see. Change it with an EDIT block instead.")
+        return problems
+
+    def _local_window(self) -> tuple[int, int | None]:
+        """Context window and answer length Qwen gets in the current memory mode."""
+        s = self.backends[LOCAL].settings
+        num_ctx = int(s.get("num_ctx") or DEFAULTS["ollama"]["num_ctx"])
+        predict = int(s["num_predict"]) if s.get("num_predict") else None
+        if self.memory is not None:
+            limits = RUNTIME[self.memory.mode]
+            num_ctx = min(num_ctx, limits["max_ctx"])
+            if predict and limits["max_predict"]:
+                predict = min(predict, limits["max_predict"])
+        return num_ctx, predict
 
     def _after_local_proposal(self, task_id: int, pack: ctx.ContextPack) -> None:
         task = self.db.get_task(task_id)

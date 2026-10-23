@@ -141,9 +141,21 @@ def parse(output: str) -> ParseResult:
                     search: list[str] = []
                     replace: list[str] = []
                     i += 1
-                    while i < len(lines) and lines[i].strip() != "===":
+                    while i < len(lines) and lines[i].strip() not in ("===", ">>>REPLACE"):
                         search.append(lines[i])
                         i += 1
+                    if i < len(lines) and lines[i].strip() == ">>>REPLACE":
+                        # Qwen often writes the pair as SEARCH lines, >>>REPLACE, new lines, then >>>END or the next
+                        # <<<SEARCH. That layout is unambiguous, so it is accepted too.
+                        i += 1
+                        while i < len(lines) and lines[i].strip() not in (">>>END", "<<<SEARCH"):
+                            replace.append(lines[i])
+                            i += 1
+                        if i >= len(lines):
+                            errors.append(f"EDIT block for '{path}' has an unterminated SEARCH/REPLACE pair.")
+                            break
+                        edits.append(Edit("\n".join(search), "\n".join(replace)))
+                        continue
                     i += 1
                     while i < len(lines) and lines[i].strip() != ">>>REPLACE":
                         replace.append(lines[i])

@@ -7,7 +7,9 @@ received unchanged in the same Claude session are not sent again.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
+from pathlib import PurePosixPath
 
 from . import knowledge
 from .patches import FORMAT_INSTRUCTIONS
@@ -21,17 +23,54 @@ trust values sent by clients through RemoteEvents/RemoteFunctions; validate
 them on the server. Keep ModuleScripts returning a single table."""
 
 BASE_SYSTEM = """\
-You are the local coding assistant inside Enoy, working on the
-user's project "{project}". Be accurate and concise. Base answers on the files
-shown; if something you need is not shown, say which file you need instead of
-guessing. If you are unsure, say so plainly."""
+You are Qwen, the coding assistant inside Enoy, running on the user's PC and
+working in their project "{project}".
+
+How to work:
+- Act on the request. When the user asks for a change, make it. Do not answer
+  with questions or with a description of what you would do.
+- Work out what you can from the files shown and the file list. If a detail is
+  missing, pick the most likely option, say in one line what you assumed, and
+  carry on.
+- Ask the user a question only when the request has two very different meanings
+  and a wrong guess would waste their time. Then ask one short question.
+- Never ask the user to paste files from this project or to tell you its
+  language or framework. Look at the file list instead.
+- Be accurate and concise. If you are unsure of a fact, say so in a few words
+  rather than inventing it."""
+
+READ_INSTRUCTIONS = """\
+To see a project file that is not shown, reply with only lines like these and
+nothing else:
+<<<READ path/to/file.ext>>>
+<<<READ path/to/file.ext | text to find>>>
+The second form sends only the parts of the file around that text: use it for
+long files and for files shown cut off. Enoy sends you what you asked for and you
+continue. Ask for at most {n} files, only paths from the file list, and never
+for a file that is already shown in full. Never guess what a file contains:
+an EDIT block only works when its SEARCH lines are copied from a file you saw."""
+
+NO_MORE_READS = "You cannot ask for more files now. Work with the files shown."
+
+EMPTY_FOLDER = """\
+The project folder ({path}) is empty: it has no files. If the user refers to
+existing code ("this app", "the header", "my script"), tell them in one or two
+sentences that this folder is empty and that they can open the folder that holds
+the code with "Open folder…" in Enoy. Then stop. If they ask for something new,
+create it."""
 
 EDIT_SYSTEM = """\
-Your job in this step is to propose concrete file changes for the task. Keep
-changes minimal and consistent with the existing style. Briefly explain the
-change first, then give the blocks.
+Your job in this step is to make the change. Keep it minimal and consistent with
+the existing style. Say in one to three sentences what you changed, then give
+the blocks. Only give a FILE block for a file you have seen in full; for a file
+marked (truncated), use an EDIT block.
 
 """ + FORMAT_INSTRUCTIONS
+
+MAX_READ_FILES = 4
+EXCERPT_LINES = 12  # Lines shown before and after each match in a "path | text" read.
+READ_REQUEST = re.compile(r"^[ \t]*<<<READ\s+(.+?)\s*>*[ \t]*$", re.M)  # Qwen sometimes drops a closing ">".
+CHARS_PER_TOKEN = 3  # Code runs at a little over 3 characters per token; counting low keeps the prompt inside the window.
 
 CLAUDE_SYSTEM = """\
 You are the specialist reviewer and problem-solver in Enoy.
@@ -116,11 +155,138 @@ def gather(ws: Workspace, objective: str, ctx_settings: dict, extra_paths: list[
     return pack
 
 
+def prompt_budget(num_ctx: int, num_predict: int | None) -> int:
+    """Characters of prompt that fit the local model's context window, leaving room for its answer."""
+    reserve = max(512, num_ctx // 3 if num_predict is None else min(num_predict, num_ctx // 3))
+    return max(0, num_ctx - reserve) * CHARS_PER_TOKEN
+
+
+def fit_files(pack: ContextPack, chars: int) -> ContextPack:
+    """Copy of the pack with only as much file content as `chars` allows. Files that do not fit are cut
+    (the first one that overflows, if enough room is left) or left out and listed as skipped."""
+    kept, skipped = [], list(pack.skipped)
+    for f in pack.files:
+        size = len(f.path) + 20 + len(f.content)
+        if size <= chars:
+            kept.append(f)
+            chars -= size
+        elif chars >= 1500:
+            cut = f.content[: chars - len(f.path) - 60] + "\n... [rest of file not shown] ..."
+            kept.append(replace(f, content=cut, truncated=True))
+            chars = 0
+        else:
+            skipped.append(f"{f.path}: does not fit the local model's context window")
+            chars -= len(skipped[-1]) + 2
+    return replace(pack, files=kept, skipped=skipped)
+
+
+def file_list(ws: Workspace, max_chars: int) -> str:
+    """The project's files grouped by folder, cut to `max_chars`, so the model knows what exists."""
+    groups: dict[str, list[str]] = {}
+    for rel in sorted(ws.index):
+        p = PurePosixPath(rel)
+        groups.setdefault("" if str(p.parent) == "." else str(p.parent) + "/", []).append(p.name)
+    total = sum(len(v) for v in groups.values())
+    lines, used, shown = [], 0, 0
+    for folder, names in groups.items():
+        line = folder or "(top level)"
+        line += ": "
+        taken = []
+        for name in names:
+            if used + len(line) + len(", ".join(taken + [name])) > max_chars:
+                break
+            taken.append(name)
+        if not taken:
+            break
+        lines.append(line + ", ".join(taken))
+        used += len(lines[-1]) + 1
+        shown += len(taken)
+        if len(taken) < len(names):
+            break
+    if shown < total:
+        lines.append(f"... and {total - shown} more files")
+    return "\n".join(lines)
+
+
+def read_requests(text: str) -> list[str]:
+    """What the model asked to see with <<<READ path>>> or <<<READ path | text>>> lines, in order, without repeats."""
+    return list(dict.fromkeys(p.strip().strip("\"'`") for p in READ_REQUEST.findall(text)))
+
+
+def strip_reads(text: str) -> str:
+    return READ_REQUEST.sub("", text).strip()
+
+
+def excerpt(text: str, needle: str, max_chars: int) -> str | None:
+    """The parts of `text` around each line containing `needle` (any case), or None if it does not occur."""
+    lines = text.split("\n")
+    low = needle.lower()
+    spans: list[list[int]] = []
+    for i, line in enumerate(lines):
+        if low not in line.lower():
+            continue
+        a, b = max(0, i - EXCERPT_LINES), min(len(lines), i + EXCERPT_LINES + 1)
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = b
+        else:
+            spans.append([a, b])
+    if not spans:
+        return None
+    out = f'[Only the parts around "{needle}" are shown.]'
+    for a, b in spans:
+        part = f"\n... [lines {a + 1}-{b}] ...\n" + "\n".join(lines[a:b])
+        if len(out) + len(part) > max_chars:
+            return out + "\n... [more matches not shown] ..."
+        out += part
+    return out
+
+
+def add_files(ws: Workspace, pack: ContextPack, requests: list[str], per_file: int) -> tuple[list[str], list[str]]:
+    """Read what the model asked for into the front of the pack: whole files, or the parts around a text
+    ("path | text"). An excerpt replaces what was shown of that file before. Returns (added, refusals)."""
+    added, refused, new = [], [], []
+    for req in requests[:MAX_READ_FILES]:
+        rel, _, needle = (x.strip() for x in req.partition("|"))
+        try:
+            text, sha = ws.read_text(rel)
+            norm = ws.rel(ws.resolve(rel))
+        except FileNotFoundError:
+            refused.append(f"{rel}: no such file")
+            continue
+        except (PathError, OSError) as exc:
+            refused.append(f"{rel}: {exc}")
+            continue
+        if needle:
+            part = excerpt(text, needle, per_file)
+            if part is None:
+                refused.append(f'{norm}: "{needle}" does not occur in it')
+                continue
+            pack.files[:] = [f for f in pack.files if f.path != norm]
+            new = [f for f in new if f.path != norm]
+            new.append(FileContext(norm, redact(part), sha, True))
+            added.append(f'{norm} (around "{needle}")')
+            continue
+        if any(f.path == norm for f in pack.files + new):
+            continue
+        truncated = len(text) > per_file
+        if truncated:
+            text = text[:per_file] + "\n... [rest of file not shown] ..."
+        new.append(FileContext(norm, redact(text), sha, truncated))
+        added.append(norm)
+    pack.files[:0] = new
+    return added, refused
+
+
 GENERAL_SYSTEM = """\
-You are a helpful AI assistant in Enoy, running on the user's own
-PC. No project folder is open, so you cannot see or change files. Be accurate,
-clear and concise. Use Markdown, with code in fenced blocks. If you are unsure,
-say so plainly."""
+You are Qwen, a helpful AI assistant in Enoy, running on the user's own PC.
+Answer directly and get to the point. If a detail is missing, pick the most
+likely meaning, say in one line what you assumed, and answer.
+No project folder is open in this chat, so you cannot see or change files. If
+the user asks you to change their code or an app, say that in one sentence,
+mention that they can open the folder with "Open folder…" in Enoy, and still
+help as far as you can, for example with code they can paste in.
+Be accurate and concise. Use Markdown, with code in fenced blocks. If you are
+unsure of a fact, say so plainly."""
 
 
 def is_general(ws: Workspace) -> bool:
@@ -160,10 +326,21 @@ def project_header(ws: Workspace, pack: ContextPack) -> str:
     return "\n".join(lines)
 
 
-def local_system_prompt(ws: Workspace, pack: ContextPack, kind: str) -> str:
+def local_system_prompt(ws: Workspace, pack: ContextPack, kind: str, list_chars: int = 0,
+                        reads_left: int | None = None) -> str:
+    """list_chars: room for the project's file list (0 = none). reads_left: how many more times the model
+    may ask for files (None = not offered)."""
     if is_general(ws):
         return "\n\n".join(x for x in (GENERAL_SYSTEM, instructions_block(pack)) if x)
     parts = [BASE_SYSTEM.format(project=ws.name), project_header(ws, pack)]
+    if not ws.index:
+        parts.append(EMPTY_FOLDER.format(path=ws.root))
+    elif list_chars:
+        parts.append("Files in the project:\n" + file_list(ws, list_chars))
+        if reads_left:
+            parts.append(READ_INSTRUCTIONS.format(n=MAX_READ_FILES))
+        elif reads_left == 0:
+            parts.append(NO_MORE_READS)
     if pack.facts.get("roblox"):
         parts.append(LUAU_NOTES)
     if kind == "edit":

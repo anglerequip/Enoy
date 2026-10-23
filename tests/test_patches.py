@@ -159,3 +159,14 @@ def test_crlf_files_keep_crlf(project, tmp_path):
     data = (project / "win.py").read_bytes()
     assert data == b"a = 1\r\nb = 3\r\n"
     assert sha256_bytes(data) == files[0]["new_hash"]
+
+
+def test_edit_pair_without_separator_is_accepted():
+    """Qwen's common layout: SEARCH lines, >>>REPLACE, new lines, >>>END (no === line)."""
+    out = ("Adding multiply.\n<<<EDIT calc.py\n<<<SEARCH\ndef a():\n    pass\n>>>REPLACE\ndef a():\n    pass\n\n\n"
+           "def b():\n    pass\n<<<SEARCH\nx = 1\n>>>REPLACE\nx = 2\n>>>END\n")
+    r = patches.parse(out)
+    assert not r.errors
+    (change,) = r.changes
+    assert [(e.search, e.replace) for e in change.edits] == [
+        ("def a():\n    pass", "def a():\n    pass\n\n\ndef b():\n    pass"), ("x = 1", "x = 2")]

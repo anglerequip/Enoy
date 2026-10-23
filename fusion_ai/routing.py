@@ -21,7 +21,9 @@ LABEL = {LOCAL: "Qwen", CLAUDE: "Claude"}
 EDIT_VERBS = re.compile(
     r"\b(add|implement|create|build|make|fix|refactor|rename|change|update|modify|rewrite|"
     r"remove|delete|convert|port|migrate|write|generate|replace|move|extract|optimi[sz]e|"
-    r"lägg till|skapa|fixa|ändra|bygg|skriv)\b",
+    r"rebuild|redo|rework|redesign|restyle|style|tweak|adjust|improve|hide|cent(er|re)|align|resize|"
+    r"enable|disable|clean up|"
+    r"lägg till|skapa|fixa|ändra|bygg|bygg om|skriv|gör|ta bort|byt)\b",
     re.I,
 )
 QUESTION_START = re.compile(
