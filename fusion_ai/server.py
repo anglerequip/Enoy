@@ -195,7 +195,8 @@ class App:
                 ok, why = runner.allowed(t)
                 rows.append(t.describe() | {"allowed": ok, "why": why,
                                             "group": "pc" if t.name in tools_mod.PC_TOOLS else "web"})
-            return {"tools": rows, "keys": keystore.status(), "search_order": search.configured(orc.cfg)}
+            return {"tools": rows, "keys": keystore.status(), "search_order": search.configured(orc.cfg),
+                    "brave_usage": search.brave_usage()}
 
         @r("POST", "/api/tools/key")
         def tools_key(q, body):

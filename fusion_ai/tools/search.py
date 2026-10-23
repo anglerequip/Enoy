@@ -2,7 +2,9 @@
 
 Providers, tried in this order when the setting is "auto":
 - brave:     Brave Search API. Needs your own API key (Settings → Tools; stored in
-             Windows Credential Manager). Check Brave's current plan terms yourself.
+             Windows Credential Manager). Brave bills per search (prepaid credits, a
+             monthly free credit); Enoy stops using it after tools.brave_monthly_limit
+             searches in a calendar month and falls back to the next provider.
 - searxng:   a SearXNG instance you run or trust, by URL (JSON output enabled).
 - wikipedia: Wikipedia's own search API. No key, but it only finds encyclopedia
              articles: good for background, not for news or today's events.
@@ -12,7 +14,9 @@ Results say which provider produced them, so an answer can be honest about it.
 from __future__ import annotations
 
 import html
+import json
 import re
+import threading
 import time
 import urllib.parse
 
@@ -28,11 +32,42 @@ def _clean(s: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", s or "")).strip()
 
 
+_usage_lock = threading.Lock()
+
+
+def _usage_file():
+    from .. import paths
+    return paths.app_home() / "brave-usage.json"
+
+
+def brave_usage() -> dict:
+    """Searches sent to Brave this calendar month (counted by Enoy, not reported by Brave)."""
+    month = time.strftime("%Y-%m")
+    try:
+        data = json.loads(_usage_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    return {"month": month, "count": int(data.get("count", 0)) if data.get("month") == month else 0}
+
+
+def _count_brave(limit: int) -> None:
+    with _usage_lock:
+        usage = brave_usage()
+        if usage["count"] >= limit:
+            raise ToolError("unavailable", f"Brave Search reached Enoy's monthly limit ({limit} searches); "
+                                           "change it in Settings → Tools.")
+        usage["count"] += 1
+        try:
+            _usage_file().write_text(json.dumps(usage), encoding="utf-8")
+        except OSError:
+            pass
+
+
 def _brave(q: str, n: int, ctx: ToolContext) -> list[dict]:
     key = keystore.get("brave_search")
     if not key:
         raise ToolError("unavailable", "No Brave Search key is saved.")
-    import json
+    _count_brave(int(ctx.cfg.get("tools", {}).get("brave_monthly_limit", 900)))
     body, info = http_get(BRAVE.format(q=urllib.parse.quote(q), n=n), ctx.cfg, ctx.cancel, timeout=12,
                           accept="application/json", headers={"X-Subscription-Token": key})
     data = json.loads(body.decode("utf-8", errors="replace"))

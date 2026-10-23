@@ -398,3 +398,17 @@ def test_research_goes_to_claude_when_qwen_only_has_wikipedia(cfg, tmp_path, mon
     orc.backends[LOCAL].replies = ["Qwen researched it."]
     t = orc.start_task(pid, "What are the latest news about Python?")
     assert orc.db.get_task(t["id"])["state"]["route"]["backend"] == LOCAL
+
+
+def test_brave_stops_at_the_monthly_limit_and_falls_back(cfg, monkeypatch, tmp_path):
+    from fusion_ai.tools import search
+    monkeypatch.setattr(search, "_usage_file", lambda: tmp_path / "brave-usage.json")
+    monkeypatch.setattr(search.keystore, "get", lambda name: "key")
+    sent = []
+    monkeypatch.setattr(search, "http_get", lambda url, c, cancel=None, timeout=12, accept="", headers=None: (
+        sent.append(url) or (json.dumps({"web": {"results": [{"title": "T", "url": "https://x.example", "description": "d"}]}}).encode(), {})))
+    monkeypatch.setattr(search, "get_json", lambda url, c, cancel=None, timeout=12: {"query": {"search": []}})
+    cfg["tools"]["brave_monthly_limit"] = 2
+    providers = [ToolRunner(cfg, tools_mod.registry()).run("web_search", {"query": f"q{i}"}).data["provider"] for i in range(3)]
+    assert providers == ["brave", "brave", "wikipedia"] and len(sent) == 2
+    assert search.brave_usage()["count"] == 2

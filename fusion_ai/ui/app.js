@@ -712,7 +712,7 @@ async function settingsTools() {
       ${toggleRow("tools", "enabled", "Let models use tools", "Off: models answer only from what is in the chat.")}
       ${toggleRow("tools", "online", "Online tools", "Weather, web search and reading web pages. Off: nothing leaves your PC through tools.")}
       ${toggleRow("tools", "claude_web", "Claude may search the web", "For questions about current information, Claude gets Claude Code's own WebSearch and WebFetch (nothing else). Uses your Claude plan.")}
-      ${toggleRow("tools", "claude_enoy_mcp", "Claude calls Enoy's PC and weather tools itself", "Off (default): Enoy reads the PC facts first and puts them in Claude's request. On: Claude Code runs without its safe mode so Enoy's tool server can load; your own Claude Code settings and skills stay off, but your CLAUDE.md may be read. Not yet tested with a real request.")}
+      ${toggleRow("tools", "claude_enoy_mcp", "Claude calls Enoy's PC and weather tools itself", "Off (default): Enoy reads the PC facts first and puts them in Claude's request. On: Claude Code runs without its safe mode so Enoy's tool server can load; your own Claude Code settings, skills and other MCP servers stay off. Tested: Claude called Enoy's GPU tool and answered from it.")}
       <div class="grid2">${inputRow("tools", "max_rounds", "Tool rounds per answer", "After this, the model must answer with what it has.", "number")}</div></div>
     <div class="set-section"><h3>This PC (read-only)</h3>
       <div class="small muted">Answered by Windows, no administrator rights. Allowed by the "hardware" switch in Memory &amp; PC.</div>
@@ -725,7 +725,9 @@ async function settingsTools() {
         <div class="row"><input type="password" id="brave-key" autocomplete="off" placeholder="${info.keys.brave_search ? "Saved in Windows Credential Manager" : "Not set"}">
         <button class="btn" data-action="tools-key" data-name="brave_search">Save</button>
         ${info.keys.brave_search ? `<button class="btn ghost" data-action="tools-key" data-name="brave_search" data-clear="1">Remove</button>` : ""}</div>
-        <span class="small">Stored in Windows Credential Manager, never in Enoy's files, logs or prompts. Check Brave's plan terms and limits yourself.</span></label>
+        <span class="small">Stored in Windows Credential Manager, never in Enoy's files, logs or prompts. Brave charges per search (prepaid credits with a monthly free credit); check the current terms on brave.com/search/api.
+          Searches this month: ${info.brave_usage ? info.brave_usage.count : 0} of ${c.brave_monthly_limit}.</span></label>
+      <div class="grid2">${inputRow("tools", "brave_monthly_limit", "Brave searches per month", "Enoy stops using Brave after this many and falls back to the next provider. 0 = never use Brave.", "number")}</div>
       <div class="grid2">${inputRow("tools", "searxng_url", "SearXNG address", "Optional. JSON output must be enabled on the instance.")}
         ${inputRow("tools", "contact", "Contact for weather services", "Optional e-mail or website added to requests; MET Norway asks for one.")}</div>
       <div class="small muted">Weather: SMHI open data (Nordic countries) and MET Norway (elsewhere), both CC BY 4.0; place names via OpenStreetMap Nominatim.</div></div>`;

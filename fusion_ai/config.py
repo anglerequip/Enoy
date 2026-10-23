@@ -122,6 +122,7 @@ DEFAULTS: dict[str, Any] = {
         "timeouts": {},                 # {"fetch_page": 25} seconds, per tool.
         "max_rounds": 5,                # Tool rounds per answer before the model must answer.
         "search_provider": "auto",      # auto | brave | searxng | wikipedia
+        "brave_monthly_limit": 900,     # Brave searches per calendar month; Brave's monthly free credit covers ~1,000.
         "searxng_url": "",              # Your SearXNG instance, e.g. http://localhost:8888 (JSON format enabled).
         "wikipedia_lang": "en",
         "contact": "",                  # Optional contact (e-mail or site) added to the User-Agent; MET Norway asks for one.
@@ -237,6 +238,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "timeouts": (dict, lambda v: None if all(isinstance(k, str) for k in v) else "must be an object"),
         "max_rounds": (int, _range(1, 10)),
         "search_provider": (str, _choice(("auto", "brave", "searxng", "wikipedia"))),
+        "brave_monthly_limit": (int, _range(0, 100000)),
         "searxng_url": (str, lambda v: None if not v else _url(v)),
         "wikipedia_lang": (str, lambda v: None if re.fullmatch(r"[a-z]{2,3}", v) else "must be a language code like en"),
         "contact": (str, lambda v: None if len(v) <= 120 else "is too long"),
