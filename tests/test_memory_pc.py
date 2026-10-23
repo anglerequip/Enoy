@@ -415,8 +415,8 @@ def test_orchestrator_blocks_without_escalating_to_claude(cfg, tmp_path, monkeyp
     t2 = orc.db.get_task(orc.start_task(pid, "Explain recursion")["id"])
     req = local.requests[0]
     assert t2["status"] == "completed" and req.num_ctx == 8192 and req.num_predict == 4096
-    assert any("Context reduced" in e["text"] for e in orc.db.events(t2["id"]))
-    assert any(a["kind"] == "memory.context_reduced" for a in orc.db.activity(t2["id"]))
+    assert not any("Context reduced" in e["text"] for e in orc.db.events(t2["id"]))  # Activity only, not the chat.
+    assert any(a["kind"] == "memory.context_reduced" and "Context reduced" in a["text"] for a in orc.db.activity(t2["id"]))
 
 
 def test_stopped_by_memory_is_not_reported_as_user_cancel(cfg, tmp_path, monkeypatch):

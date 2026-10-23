@@ -190,3 +190,17 @@ def test_cut_off_edit_is_still_an_error():
     assert r.errors and not r.changes
     r = patches.parse("<<<EDIT a.py\n<<<SEARCH\nTitle\n=====\n===\nNew\n>>>REPLACE\n>>>END\n")
     assert r.changes[0].edits[0].search == "Title\n====="  # A long ===== line is content, not a separator.
+
+
+def test_several_edit_blocks_for_one_file_apply_in_order(project):
+    ws = Workspace(project)
+    out = ("<<<EDIT calculator.py\n<<<SEARCH\ndef add(a, b):\n===\nimport math\n\n\ndef add(a, b):\n>>>END\n"
+           "<<<EDIT ./calculator.py\n<<<SEARCH\ndef subtract(a, b):\n===\ndef subtract2(a, b):\n>>>END\n")
+    parsed = patches.parse(out)
+    assert len(parsed.changes) == 2
+    result = patches.validate(ws, parsed.changes)
+    assert result.errors == [] and len(result.files) == 1
+    new = result.files[0].new_content
+    assert "import math\n\n\ndef add(a, b):" in new and "def subtract2(a, b):" in new
+    write_twice = [patches.ProposedChange("write", "x.py", "a = 1\n"), patches.ProposedChange("write", "x.py", "a = 2\n")]
+    assert any("more than once" in e for e in patches.validate(ws, write_twice).errors)

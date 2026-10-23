@@ -554,7 +554,7 @@ class Orchestrator:
             self._act(task_id, "privacy.checked", f"Local only: {block}. Nothing from this task is sent to Claude.",
                       "system", "analysis", outcome="local-only")
         general = ctx.is_general(self.workspace(task["project_id"]))
-        lead, lead_why = self._lead_check(task_id, state)
+        lead, lead_why = self._lead_check(task_id, state, text=task["objective"], cls=cls)
         if lead:
             self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); Claude leads and decides.")
             self._lead(task_id, pack, cls)
@@ -601,7 +601,7 @@ class Orchestrator:
             return
         task = self.db.get_task(task_id)
         general = ctx.is_general(self.workspace(task["project_id"]))
-        lead, lead_why = self._lead_check(task_id, task["state"], backend)
+        lead, lead_why = self._lead_check(task_id, task["state"], backend, text=text)
         if lead:
             for tt in self.db.team_tasks(task_id):
                 if tt["status"] in team_mod.open_statuses():
@@ -672,10 +672,16 @@ class Orchestrator:
 
     # Claude as the lead -------------------------------------------------------------------
 
-    def _lead_check(self, task_id: int, state: dict, backend: str | None = None) -> tuple[bool, str]:
+    def _lead_check(self, task_id: int, state: dict, backend: str | None = None,
+                    text: str = "", cls: Any = None) -> tuple[bool, str]:
         """(True, "") when Claude leads this message; (False, why) when it should but cannot; (False, "") when
-        the lead is off or you picked a model yourself."""
+        the lead is off, you picked a model yourself, or the message is casual enough for Qwen alone."""
         if not self.cfg["lead"]["enabled"] or backend or state.get("override"):
+            return False, ""
+        if text and self._casual(text, cls):
+            self._act(task_id, "lead.skipped", "Casual message: Qwen answers directly, Claude is not asked.",
+                      "system", "analysis", reason="Short chat or a simple question; no code changes, research or "
+                      "hard reasoning.", outcome="local")
             return False, ""
         if self._cloud_block(task_id):
             return False, ""  # A local-only chat or project: your privacy choice, not a failure.
@@ -683,6 +689,18 @@ class Orchestrator:
             return False, "zero-paid mode is on, so Claude is never used automatically"
         ok, why = self.claude_available()
         return (True, "") if ok else (False, f"Claude is not available ({why})")
+
+    def _casual(self, text: str, cls: Any = None) -> bool:
+        """Small talk or a simple question that Qwen handles well on its own."""
+        cls = cls or classify(text, 0)
+        if cls.kind != "ask" or cls.score > 1 or len(text) > 500 or "```" in text:
+            return False
+        if cls.category not in ("question", "explain", "prose", "general"):
+            return False
+        names = tools_mod.select(text)
+        if names & {"web_search", "fetch_page"} and not tools_mod.weather_only(text):
+            return False  # Research: Claude can search the web.
+        return True
 
     def _lead_unavailable(self, task_id: int, why: str) -> bool:
         """Claude should lead but cannot. Say so, then follow Settings: continue with Qwen, or stop (True)."""
@@ -1095,7 +1113,6 @@ class Orchestrator:
                       "local", reason=plan["reason"], outcome="blocked", step_id=step_id)
             raise BackendError("memory", plan["reason"])
         if plan.get("note") and task_id:
-            self._event(task_id, "note", plan["note"], LOCAL)
             self._act(task_id, "memory.context_reduced" if plan.get("ctx") != local.settings["num_ctx"] else "memory.note",
                       plan["note"], LOCAL, "local", step_id=step_id)
         return {"num_ctx": plan.get("ctx"), "num_predict": plan.get("num_predict"), "num_batch": plan.get("num_batch"),

@@ -390,6 +390,26 @@ def luau_bracket_check(src: str) -> str | None:
     return None
 
 
+def merge_same_file_edits(changes: list[ProposedChange]) -> list[ProposedChange]:
+    """Several EDIT blocks for one file become one change whose edits apply in order.
+
+    Models often send one block per spot (an import at the top, a function further
+    down). Anything else that touches a file twice is left for validate() to reject."""
+    merged: list[ProposedChange] = []
+    by_path: dict[str, ProposedChange] = {}
+    for change in changes:
+        key = change.path.replace("\\", "/").removeprefix("./").lower()
+        first = by_path.get(key)
+        if first is not None and first.action == "edit" and change.action == "edit":
+            first.edits = first.edits + change.edits
+            continue
+        if change.action == "edit" and key not in by_path:
+            change = ProposedChange(change.action, change.path, change.content, list(change.edits))
+            by_path[key] = change
+        merged.append(change)
+    return merged
+
+
 def validate(ws: Workspace, changes: list[ProposedChange], seen_hashes: dict[str, str] | None = None) -> ValidationResult:
     """Check proposed changes against the current files on disk.
 
@@ -397,6 +417,7 @@ def validate(ws: Workspace, changes: list[ProposedChange], seen_hashes: dict[str
     mismatch means the file changed after the model read it.
     """
     seen_hashes = seen_hashes or {}
+    changes = merge_same_file_edits(changes)
     files: list[ValidatedFile] = []
     errors: list[str] = []
     warnings: list[str] = []

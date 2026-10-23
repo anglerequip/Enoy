@@ -51,17 +51,27 @@ def kinds(orc, task_id):
 
 # Entry point ------------------------------------------------------------------------
 
-def test_claude_answers_a_simple_question_itself(orc_factory, project):
-    orc = lead_orc(orc_factory, claude=["MODE: answer\ndivide() raises ZeroDivisionError when b is 0."])
-    task = orc.start_task(open_project(orc, project), "What does divide do with zero?")
+def test_claude_answers_a_harder_question_itself(orc_factory, project):
+    orc = lead_orc(orc_factory, claude=["MODE: answer\ndivide() has no shared state, so it is thread-safe."])
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     t = orc.db.get_task(task["id"])
     assert t["status"] == "completed" and t["workflow"] == "claude_leads" and t["owner"] == CLAUDE
-    assert answers(orc, task["id"]) == [(CLAUDE, "divide() raises ZeroDivisionError when b is 0.")]
+    assert answers(orc, task["id"]) == [(CLAUDE, "divide() has no shared state, so it is thread-safe.")]
     assert orc.backends[LOCAL].requests == [] and orc.db.team_tasks(task["id"]) == []
     assert len(orc.backends[CLAUDE].requests) == 1
     prompt = orc.backends[CLAUDE].requests[0].messages[-1].content
     assert "MODE: answer" in prompt and "MODE: delegate" in prompt
     assert "lead.answer" in kinds(orc, task["id"])
+
+
+def test_casual_messages_skip_the_lead(orc_factory, project):
+    orc = lead_orc(orc_factory, qwen=["Doing well!", "divide() raises ZeroDivisionError when b is 0."])
+    pid = open_project(orc, project)
+    for text in ("hey, how are you?", "What does divide do with zero?"):
+        task = orc.start_task(pid, text)
+        assert orc.db.get_task(task["id"])["workflow"] != "claude_leads"
+        assert "lead.skipped" in kinds(orc, task["id"])
+    assert orc.backends[CLAUDE].requests == [] and len(orc.backends[LOCAL].requests) == 2
 
 
 def test_claude_can_ask_a_clarifying_question(orc_factory, project):
@@ -80,7 +90,7 @@ def test_reply_without_mode_line_is_an_answer():
 def test_general_chat_never_delegates(orc_factory):
     orc = lead_orc(orc_factory, claude=[delegate(plan_task())])
     space = orc.create_space("Ideas")
-    task = orc.start_task(space["id"], "Plan a birthday party")
+    task = orc.start_task(space["id"], "Compare the architecture options for a party planner app")
     assert ctx.LEAD_NO_DELEGATE in orc.backends[CLAUDE].requests[0].messages[-1].content
     assert orc.db.team_tasks(task["id"]) == [] and orc.db.get_task(task["id"])["status"] == "completed"
     assert "no project code to change" in answers(orc, task["id"])[0][1]
@@ -179,7 +189,7 @@ def test_unusable_plan_changes_nothing(orc_factory, project):
 
 def test_unavailable_claude_is_said_and_qwen_answers_labeled(orc_factory, project):
     orc = lead_orc(orc_factory, qwen=["divide raises on zero."], claude_available=False)
-    task = orc.start_task(open_project(orc, project), "Explain what divide does")
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     assert answers(orc, task["id"]) == [(LOCAL, "divide raises on zero.")]
     notes = [e["text"] for e in orc.db.events(task["id"]) if e["type"] == "note"]
     assert any("Claude cannot lead this message" in n and "labeled Qwen" in n for n in notes)
@@ -188,7 +198,7 @@ def test_unavailable_claude_is_said_and_qwen_answers_labeled(orc_factory, projec
 
 def test_unavailable_claude_stops_when_settings_say_so(orc_factory, project):
     orc = lead_orc(orc_factory, claude_available=False, routing__claude_fallback="stop")
-    task = orc.start_task(open_project(orc, project), "Explain what divide does")
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     t = orc.db.get_task(task["id"])
     assert t["status"] == "failed" and "Claude cannot lead" in t["summary"]
     assert orc.backends[LOCAL].requests == [] and orc.backends[CLAUDE].requests == []
@@ -196,25 +206,25 @@ def test_unavailable_claude_stops_when_settings_say_so(orc_factory, project):
 
 def test_claude_failing_mid_request_falls_back_to_qwen(orc_factory, project):
     orc = lead_orc(orc_factory, qwen=["Local answer."], claude=[BackendError("limit", "usage limit reached")])
-    task = orc.start_task(open_project(orc, project), "Explain what divide does")
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     assert answers(orc, task["id"])[-1] == (LOCAL, "Local answer.")
 
 
 def test_zero_paid_mode_keeps_claude_out(orc_factory, project):
     orc = lead_orc(orc_factory, qwen=["Local answer."], routing__zero_paid_mode=True)
-    orc.start_task(open_project(orc, project), "Explain what divide does")
+    orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     assert orc.backends[CLAUDE].requests == []
 
 
 def test_picking_a_model_skips_the_lead(orc_factory, project):
     orc = lead_orc(orc_factory, qwen=["Local answer."])
-    task = orc.start_task(open_project(orc, project), "Explain what divide does", backend=LOCAL)
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.", backend=LOCAL)
     assert orc.backends[CLAUDE].requests == [] and orc.db.get_task(task["id"])["workflow"] != "claude_leads"
 
 
 def test_ask_first_setting_holds_the_lead_request(orc_factory, project):
     orc = lead_orc(orc_factory, claude=["MODE: answer\nOk."], claude__confirm_before_send=True)
-    task = orc.start_task(open_project(orc, project), "Explain what divide does")
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
     assert orc.db.get_task(task["id"])["status"] == "awaiting_claude" and orc.backends[CLAUDE].requests == []
     orc.approve_claude(task["id"])
     assert answers(orc, task["id"]) == [(CLAUDE, "Ok.")]
@@ -222,10 +232,10 @@ def test_ask_first_setting_holds_the_lead_request(orc_factory, project):
 
 def test_follow_up_goes_to_the_lead_again(orc_factory, project):
     orc = lead_orc(orc_factory, claude=["MODE: answer\nFirst.", "MODE: answer\nSecond."])
-    task = orc.start_task(open_project(orc, project), "Explain what divide does")
-    orc.send_message(task["id"], "And subtract?")
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
+    orc.send_message(task["id"], "And is subtract thread-safe? Explain the race conditions.")
     assert [m for _, m in answers(orc, task["id"])] == ["First.", "Second."]
-    assert "Follow-up from the user:\nAnd subtract?" in orc.backends[CLAUDE].requests[1].messages[-1].content
+    assert "Follow-up from the user:\nAnd is subtract thread-safe?" in orc.backends[CLAUDE].requests[1].messages[-1].content
 
 
 def test_claude_unable_to_check_results_leaves_enoys_summary(orc_factory, project):
@@ -270,7 +280,7 @@ def test_project_memory_reaches_the_lead_and_a_checkpoint_is_saved(orc_factory, 
     orc = lead_orc(orc_factory, qwen=[ADD_MULTIPLY], claude=["MODE: answer\nOk.", delegate(plan_task()), "Done.\nNEXT: done"])
     pid = open_project(orc, project)
     orc.db.add_memory(pid, "decisions", "Keep calculator functions pure.", True, "you")
-    orc.start_task(pid, "Explain divide")
+    orc.start_task(pid, "Is divide thread-safe? Explain the race conditions.")
     assert "Keep calculator functions pure." in orc.backends[CLAUDE].requests[0].messages[-1].content
     assert "verified" in orc.backends[CLAUDE].requests[0].messages[-1].content
     task = orc.start_task(pid, "Add a multiply function")
