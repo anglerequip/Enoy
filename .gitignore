@@ -1,0 +1,45 @@
+# Python environment and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# App data never lives here (it is in %LOCALAPPDATA%\FusionAI), but keep stray copies out
+*.db
+*.db-wal
+*.db-shm
+*.log
+.fusion/
+
+# Secrets: never commit real keys or env files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Test fixtures need a fake .env and a node_modules folder (privacy and exclusion tests)
+!fixtures/sample_project/.env
+!fixtures/sample_project/node_modules/
+
+# Old icon (replaced by launch/enoy.ico)
+launch/fusion.ico
+
+# Local tooling and editor settings
+.claude/
+.vscode/
+.idea/
+node_modules/
+!fixtures/**/node_modules/
+
+# Windows
+Thumbs.db
+desktop.ini

@@ -1,0 +1,19 @@
+[project]
+name = "fusion-ai-workspace"
+version = "0.1.0"
+description = "Local-first AI development workspace: Qwen via Ollama, Claude via Claude Code."
+requires-python = ">=3.11"
+dependencies = ["pywebview==5.4"]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5"]
+
+[project.scripts]
+fusion-ai = "fusion_ai.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: talks to the real local Ollama service (skipped when it is not running)",
+]
+addopts = "-ra"
