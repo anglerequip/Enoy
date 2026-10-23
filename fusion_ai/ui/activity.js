@@ -109,7 +109,7 @@ function renderActivity() {
   panel.innerHTML = head(d) + `<div class="ac-body">
     ${AC.error ? `<div class="ac-banner bad">Could not refresh: ${esc(AC.error)}. Showing the last loaded state.</div>` : ""}
     ${overviewHtml(d)}
-    <section class="ac-sec"><h3>Models</h3><div class="ac-agents">${d.agents.map(agentHtml).join("")}</div></section>
+    <section class="ac-sec"><h3>Models</h3>${leadLine(d)}<div class="ac-agents">${d.agents.map(agentHtml).join("")}</div></section>
     ${d.focus && d.focus.team ? teamHtml(d.focus.team) : ""}
     ${d.focus ? workflowHtml(d.focus) : ""}
     ${routingHtml(d.routing)}
@@ -165,7 +165,19 @@ function overviewHtml(d) {
     </div></section>`;
 }
 
-const ROLE = { orchestrator: "Orchestrator", architect: "Architect", developer: "Developer", qa: "QA", reviewer: "Reviewer", debugger: "Debugger", user: "You" };
+// Who leads, and the memory mode, from Enoy's own state (no model is asked to draw this).
+function leadLine(d) {
+  const bits = [];
+  if (d.lead && d.lead.enabled) bits.push(`${who("claude")} <b>leads</b>: reads each new message first, then answers, asks, or plans work for Qwen and the team.`);
+  else bits.push(`<span class="muted">Claude does not lead (Settings → Claude leads). Messages go to the model the router picks.</span>`);
+  const m = d.memory;
+  if (m) bits.push(`<span class="muted">Memory:</span> ${esc(m.mode)} mode, limit ${m.ceiling_mib.toLocaleString()} MiB`
+    + (m.used_mib ? ` · Qwen uses ${Math.round(m.used_mib).toLocaleString()} MiB` : " · Qwen not loaded")
+    + (m.state && !["idle", "within"].includes(m.state) ? ` · <b>${esc(m.state.replace(/_/g, " "))}</b>` : ""));
+  return `<div class="small ac-lead">${bits.map(b => `<div>${b}</div>`).join("")}</div>`;
+}
+
+const ROLE = { lead: "Claude (lead)", orchestrator: "Orchestrator", architect: "Architect", developer: "Developer", qa: "QA", reviewer: "Reviewer", debugger: "Debugger", user: "You" };
 const TEAM_STATE = { planned: "Planned", ready: "Ready", running: "Running", waiting: "Waiting", awaiting_review: "Awaiting review",
   paused: "Paused", completed: "Completed", failed: "Failed", blocked: "Blocked", cancelled: "Cancelled" };
 
@@ -182,16 +194,25 @@ function teamHtml(t) {
         <div>Why this model</div><div>${esc(x.route_reason)}</div>
         ${x.activation ? `<div>Why this role</div><div>${esc(x.activation)}</div>` : ""}
         ${x.after.length ? `<div>Waits for</div><div>${x.after.map(esc).join(", ")}</div>` : ""}
+        ${x.spec.why ? `<div>Why this task</div><div>${esc(x.spec.why)}</div>` : ""}
+        ${x.spec.expected_output ? `<div>Expected</div><div>${esc(x.spec.expected_output)}</div>` : ""}
+        ${x.verification ? `<div>Verified</div><div>${esc(x.verification)}</div>` : ""}
         ${x.files.length ? `<div>Owns files</div><div>${x.files.map(esc).join(", ")}</div>` : ""}
         ${x.changed.length ? `<div>Changed</div><div>${x.changed.map(esc).join(", ")}</div>` : ""}
         ${x.commands.length ? `<div>Checks</div><div>${x.commands.map(c => `<code>${esc(c.command)}</code> ${c.status === "passed" ? `<span class="badge-ok">passed</span>` : `<span class="badge-bad">${esc(c.status)}</span>`}`).join("<br>")}</div>` : ""}
         ${x.findings.length ? `<div>Findings</div><div>${x.findings.map(f => `${esc(f.severity)} ${esc(f.file || "")}${f.line ? ":" + f.line : ""} ${esc(f.problem)}`).join("<br>")}</div>` : ""}
-        ${x.error ? `<div>Problem</div><div class="bad-text">${esc(x.error)}</div>` : ""}</div>` : ""}</div>`;
+        ${x.error ? `<div>Problem</div><div class="bad-text">${esc(x.error)}</div>` : ""}</div>
+        ${ttControls(x)}` : ""}</div>`;
   }).join("");
   const msgs = t.messages.slice(0, 12).map(m => `<div class="small ac-msg"><span class="muted">${clock(m.at)}</span>
     <b>${esc(ROLE[m.from] || m.from)}</b> → ${esc(ROLE[m.to] || m.to)} <span class="muted">(${esc(m.type.replace(/_/g, " "))})</span>: ${esc(m.body)}</div>`).join("");
   const verif = { passed: "checks passed", failed: "checks FAILED", not_run: "no test command available" }[t.verification] || "not verified yet";
-  return `<section class="ac-sec"><h3>Team</h3>
+  const hold = t.status && !["completed", "failed", "cancelled"].includes(t.status)
+    ? `<button class="btn small" data-action="ac-hold" data-id="${AC.data.focus.task.id}" data-hold="${t.hold ? "" : "1"}"
+        title="${t.hold ? "Hand out the remaining tasks again" : "Finish the current step, then start nothing new. Finished work is kept."}">${t.hold ? "▶ Resume delegation" : "⏸ Pause delegation"}</button>` : "";
+  return `<section class="ac-sec"><h3>Team ${hold}</h3>
+    ${t.lead ? `<div class="small">${who("claude")} ${esc(t.lead_state)}</div>` : ""}
+    ${t.git && t.git.user_changes && t.git.user_changes.length ? `<div class="small muted">Git: ${t.git.user_changes.length} file(s) had uncommitted changes of yours; changes to them wait for your review.</div>` : ""}
     <div class="small">Run: <b>${esc((t.status || "").replace(/_/g, " "))}</b> · ${esc(verif)} · ${t.model_calls} model request(s), ${t.claude_calls} to Claude${t.repairs ? ` · ${t.repairs} repair round(s)` : ""}</div>
     <div class="small muted">Roles used: ${t.roles_used.map(r => esc(ROLE[r] || r)).join(", ") || "none yet"}${t.running_now.length > 1 ? ` · running at the same time: ${t.running_now.map(esc).join(", ")}` : ""}
       · plan by ${esc(t.planned_by || "…")}${t.auto_apply ? " · changes apply automatically (Settings)" : " · changes wait for your approval"}</div>
@@ -199,6 +220,17 @@ function teamHtml(t) {
     ${t.acceptance.length ? `<details class="small"><summary class="muted">Acceptance criteria (${t.acceptance.length})</summary>${t.acceptance.map(a => `<div>• ${esc(a)}</div>`).join("")}</details>` : ""}
     <div class="ac-board">${board}</div>
     ${msgs ? `<details class="small" data-key="team-msgs" ${AC.openDetails.has("team-msgs") ? "open" : ""}><summary class="muted">Messages between roles</summary>${msgs}</details>` : ""}</section>`;
+}
+
+function ttControls(x) {
+  const b = [];
+  if (x.can.retry) b.push(`<button class="btn small" data-action="ac-tt-do" data-do="retry" data-id="${x.id}">Retry</button>`);
+  if (x.can.cancel) b.push(`<button class="btn small" data-action="ac-tt-do" data-do="cancel" data-id="${x.id}">Cancel task</button>`);
+  if (x.can.model) {
+    const other = x.provider === "claude" ? "qwen" : "claude";
+    b.push(`<button class="btn small ghost" data-action="ac-tt-do" data-do="model" data-provider="${other}" data-id="${x.id}">Use ${other === "claude" ? "Claude" : "Qwen"} instead</button>`);
+  }
+  return b.length ? `<div class="row ac-tt-ctl">${b.join("")}</div>` : "";
 }
 
 function routeRows(r) {
@@ -389,6 +421,20 @@ Object.assign(actions, {
     await loadActivity();
   }),
   "ac-focus": el => { AC.focus = Number(el.dataset.id); AC.stage = null; loadActivity(); },
+  "ac-hold": el => guarded(async () => {
+    const hold = !!el.dataset.hold;
+    await api("POST", `/api/tasks/${el.dataset.id}/team/hold`, { hold });
+    toast(hold ? "Delegation paused. The current step finishes; nothing new starts." : "Delegation resumed.");
+    await loadActivity();
+  }),
+  "ac-tt-do": el => guarded(async () => {
+    const what = el.dataset.do;
+    if (what === "model" && el.dataset.provider === "claude" && !(await confirmBox("Move this task to Claude?",
+      `<p>The task will be sent to Claude through Claude Code when it runs. This uses your Claude plan.</p>`, "Use Claude"))) return;
+    await api("POST", `/api/team-tasks/${el.dataset.id}/${what}`, { provider: el.dataset.provider });
+    toast({ retry: "The task will run again.", cancel: "Task cancelled.", model: "Model changed for this task." }[what]);
+    await loadActivity();
+  }),
   "ac-tt": el => { const k = "tt" + el.dataset.id; AC.expanded.has(k) ? AC.expanded.delete(k) : AC.expanded.add(k); renderActivity(); },
   "ac-stage": el => { AC.stage = AC.stage === el.dataset.key ? null : el.dataset.key; renderActivity(); },
   "ac-ev": el => { const id = Number(el.dataset.id); AC.expanded.has(id) ? AC.expanded.delete(id) : AC.expanded.add(id); renderActivity(); },

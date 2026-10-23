@@ -44,7 +44,8 @@ log = logging.getLogger("fusion.orchestrator")
 BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude"}
 MAX_READ_ROUNDS = 3  # How many times Qwen may ask for more project files in one answer.
 CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review Qwen's change",
-                     "edit": "Write the change", "ask": "Answer"}
+                     "edit": "Write the change", "ask": "Answer", "lead": "Read the request and decide (lead)",
+                     "lead_review": "Check the team's results (lead)"}
 CANCEL_NOTE = {
     LOCAL: "Cancel requested. Enoy closes its connection to Ollama; Ollama stops generating when the connection closes.",
     CLAUDE: "Cancel requested. Enoy stops the local Claude Code process. If Anthropic already received the "
@@ -550,6 +551,13 @@ class Orchestrator:
             self._act(task_id, "privacy.checked", f"Local only: {block}. Nothing from this task is sent to Claude.",
                       "system", "analysis", outcome="local-only")
         general = ctx.is_general(self.workspace(task["project_id"]))
+        lead, lead_why = self._lead_check(task_id, state)
+        if lead:
+            self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); Claude leads and decides.")
+            self._lead(task_id, pack, cls)
+            return
+        if lead_why and self._lead_unavailable(task_id, lead_why):
+            return
         if (state.get("team") and team_mod.eligible(cls.kind, general) and decision.backend is not None
                 and not self._team_skips_images(task_id)):
             self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); {cls.kind} task; handed to the team.")
@@ -590,6 +598,18 @@ class Orchestrator:
             return
         task = self.db.get_task(task_id)
         general = ctx.is_general(self.workspace(task["project_id"]))
+        lead, lead_why = self._lead_check(task_id, task["state"], backend)
+        if lead:
+            for tt in self.db.team_tasks(task_id):
+                if tt["status"] in team_mod.open_statuses():
+                    self.db.update_team_task(tt["id"], status="cancelled", error="Replaced by your new message.")
+            self.db.update_task_state(task_id, team_run={})
+            pack, analysis = self._analyze(task_id, task["objective"] + "\n" + text, "Inspect the project for the follow-up")
+            self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); Claude leads and decides.")
+            self._lead(task_id, pack, classify(text, len(pack.files)), followup=text)
+            return
+        if lead_why and task["workflow"] == "claude_leads" and self._lead_unavailable(task_id, lead_why):
+            return
         if (task["state"].get("team") and team_mod.eligible(classify(text).kind, general)
                 and not self._team_skips_images(task_id, latest_only=True)):
             # A new piece of development work in a team chat: a fresh team run for it.
@@ -646,6 +666,160 @@ class Orchestrator:
             self._step_end(analysis, "completed", "Loaded the continuation brief; continuing with Qwen.")
             self._set_owner(task_id, LOCAL, "Retry: continuing locally from the saved state.")
             self._local_loop(task_id, pack, feedback=f"You are resuming an interrupted task. Saved state:\n{brief}")
+
+    # Claude as the lead -------------------------------------------------------------------
+
+    def _lead_check(self, task_id: int, state: dict, backend: str | None = None) -> tuple[bool, str]:
+        """(True, "") when Claude leads this message; (False, why) when it should but cannot; (False, "") when
+        the lead is off or you picked a model yourself."""
+        if not self.cfg["lead"]["enabled"] or backend or state.get("override"):
+            return False, ""
+        if self._cloud_block(task_id):
+            return False, ""  # A local-only chat or project: your privacy choice, not a failure.
+        if self.cfg["routing"].get("zero_paid_mode"):
+            return False, "zero-paid mode is on, so Claude is never used automatically"
+        ok, why = self.claude_available()
+        return (True, "") if ok else (False, f"Claude is not available ({why})")
+
+    def _lead_unavailable(self, task_id: int, why: str) -> bool:
+        """Claude should lead but cannot. Say so, then follow Settings: continue with Qwen, or stop (True)."""
+        stop = self.cfg["routing"].get("claude_fallback", "local") == "stop"
+        self._act(task_id, "lead.unavailable", f"Claude cannot lead this message: {why}.", "system", "analysis",
+                  outcome="stopped" if stop else "qwen")
+        if stop:
+            self._fail(task_id, f"Claude cannot lead this message: {why}. Settings say to stop instead of continuing "
+                                "with Qwen. Pick Qwen in the chat to run it locally.")
+            return True
+        self._event(task_id, "note", f"Claude cannot lead this message: {why}. Qwen handles it instead, and its "
+                                     "replies are labeled Qwen.")
+        return False
+
+    def _lead(self, task_id: int, pack: ctx.ContextPack, cls: Any, followup: str = "") -> None:
+        self._set(task_id, kind=cls.kind, complexity=cls.complexity, workflow="claude_leads",
+                  routing_reason="Claude leads: it reads every new message first and decides whether to answer, ask, "
+                                 "or plan the work for Qwen and the team.")
+        self._act(task_id, "lead.started", "Claude (lead) is reading the request.", CLAUDE, "analysis",
+                  reason="Settings: Claude leads new messages.")
+        self._set_owner(task_id, CLAUDE, "Claude leads this chat.")
+        self._request_claude(task_id, "lead", pack, extra=f"Follow-up from the user:\n{followup}" if followup else "",
+                             reason="Claude leads: it decides how to handle each message.")
+
+    def _handle_lead(self, task_id: int, pending: dict, text: str) -> None:
+        task = self.db.get_task(task_id)
+        ws = self.workspace(task["project_id"])
+        step_id = pending.get("step_id")
+        mode, message, plan_text = ctx.parse_lead(text)
+        note = ""
+        plan = None
+        if mode == "delegate":
+            if ctx.is_general(ws) or not ws.index and not plan_text:
+                note = "Claude chose to delegate, but there is no project code to change here."
+            elif not plan_text:
+                note = "Claude chose to delegate but sent no plan, so nothing was changed."
+            else:
+                try:
+                    plan = team_mod.parse_plan(plan_text, self.cfg["team"]["max_tasks"])
+                except team_mod.PlanError as exc:
+                    note = f"Enoy could not use Claude's plan ({exc}), so nothing was changed."
+            if plan is None:
+                self._act(task_id, "lead.plan_rejected", note, "system", "plan")
+                mode = "answer"
+        if note:
+            message = (message + f"\n\n*{note}*").strip()
+        self.db.update_task_state(task_id, decisions=[f"Claude (lead) chose: {mode}."])
+        self.db.add_memory(task["project_id"], "decisions", f"Claude (lead) chose to {mode}: {_first_line(message)}",
+                           False, "Claude (lead)", task_id)
+        if message:
+            self.db.add_message(task_id, "assistant", message, CLAUDE)
+            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
+        if plan is None:
+            self._step_end(step_id, "completed", "Asked you a question." if mode == "clarify" else "Answered directly.")
+            self._act(task_id, f"lead.{mode}", "Claude asked you a question." if mode == "clarify"
+                      else "Claude answered directly; no team work was needed.", CLAUDE, "claude")
+            self._complete(task_id, _first_line(message))
+            return
+        self._step_end(step_id, "completed", f"Planned {len(plan[0])} task(s) for the team.")
+        self._set(task_id, kind="edit", workflow="claude_leads")
+        objective = task["objective"] + (f"\n\nFollow-up: {pending['followup']}" if pending.get("followup") else "")
+        team_mod.TeamRunner(self, task_id).start_from_lead(objective, plan)
+
+    def _handle_lead_review(self, task_id: int, pending: dict, text: str) -> None:
+        message, verdict, instruction = ctx.parse_lead_review(text)
+        self._step_end(pending.get("step_id"), "completed", "Checked the results"
+                       + (f" and asked for a fix: {instruction[:120]}" if verdict == "fix" else "."))
+        if message:
+            self.db.add_message(task_id, "assistant", message, CLAUDE)
+            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
+        self._act(task_id, "lead.reviewed", "Claude checked the team's results" + (" and ordered a fix." if verdict == "fix"
+                  else "."), CLAUDE, "review")
+        self._set(task_id, status="running")
+        team_mod.TeamRunner(self, task_id).finish_after_lead(verdict, instruction, bool(message))
+
+    def team_task_action(self, team_task_id: int, action: str, provider: str | None = None) -> dict:
+        """Your controls on one team task: cancel it, retry it, or pick its model."""
+        tt = self.db.get_team_task(team_task_id)
+        if not tt:
+            raise TaskError("No such team task.")
+        task_id = tt["task_id"]
+        runner = team_mod.TeamRunner(self, task_id)
+        label = f"{tt['plan_key']} {tt['title'][:60]}"
+        if action == "cancel":
+            if tt["status"] not in ("planned", "ready", "paused", "blocked"):
+                raise TaskError("Only a task that has not started can be cancelled. Use Cancel on the chat to stop running work.")
+            self.db.update_team_task(team_task_id, status="cancelled", error="You cancelled it.")
+            runner.msg("user", tt["role"], "cancellation", f"You cancelled {label}.", team_task_id)
+        elif action == "model":
+            if provider not in (LOCAL, CLAUDE):
+                raise TaskError("Pick Qwen or Claude.")
+            if tt["status"] not in ("planned", "ready", "paused", "blocked", "failed") or tt["role"] not in ("developer", "debugger"):
+                raise TaskError("The model can only be changed for a developer task that is not running or finished.")
+            if provider == CLAUDE and self._cloud_block(task_id):
+                raise TaskError(f"Not sent to Claude: {self._cloud_block(task_id)}.")
+            self.db.update_team_task(team_task_id, provider=provider, route_reason=f"You picked {BACKEND_LABEL[provider]}.")
+            runner.msg("user", tt["role"], "assignment", f"You moved {label} to {BACKEND_LABEL[provider]}.", team_task_id)
+        elif action == "retry":
+            if tt["status"] not in ("failed", "blocked", "cancelled") or tt["role"] not in ("developer", "debugger"):
+                raise TaskError("Only a developer task that failed, was blocked or was cancelled can be retried.")
+            for other in self.db.team_tasks(task_id):  # Its dependents get another chance too.
+                if other["status"] == "blocked":
+                    self.db.update_team_task(other["id"], status="planned", error="")
+            self.db.update_team_task(team_task_id, status="planned", attempts=0, error="")
+            runner.msg("user", tt["role"], "assignment", f"You asked to retry {label}.", team_task_id)
+            task = self.db.get_task(task_id)
+            if task["status"] not in ("running", "queued", "awaiting_claude"):
+                runner._save_run(status="running", finished=None)
+                self._set(task_id, status="running")
+                self._cancel[task_id] = threading.Event()
+                self._spawn(self._guard, task_id, lambda tid: team_mod.TeamRunner(self, tid).continue_run())
+        else:
+            raise TaskError(f"Unknown action {action}.")
+        self._act(task_id, f"team.task_{action}", f"You changed {label}: {action}.", "user", "team")
+        self._task_changed(task_id)
+        return self.db.get_team_task(team_task_id)
+
+    def hold_delegation(self, task_id: int, hold: bool) -> dict:
+        """Pause or resume handing out team tasks in one chat. Finished work is kept."""
+        task = self._require(task_id)
+        run = task["state"].get("team_run") or {}
+        if not run:
+            raise TaskError("This chat has no team run.")
+        runner = team_mod.TeamRunner(self, task_id)
+        runner._save_run(hold=bool(hold))
+        if hold:
+            self._act(task_id, "team.hold", "You paused delegation. The current step finishes; nothing new starts.", "user")
+            if task["status"] != "running" and run.get("status") not in ("completed", "failed", "cancelled"):
+                runner._pause("You paused delegation for this chat.")
+        elif run.get("status") == "paused":
+            for tt in self.db.team_tasks(task_id):
+                if tt["status"] == "paused":
+                    self.db.update_team_task(tt["id"], status="planned")
+            runner._save_run(status="running")
+            self._act(task_id, "team.resumed", "Delegation resumed where it stopped.", "user")
+            self._set(task_id, status="running")
+            self._cancel[task_id] = threading.Event()
+            self._spawn(self._guard, task_id, lambda tid: team_mod.TeamRunner(self, tid).continue_run())
+        self._task_changed(task_id)
+        return self.db.get_task(task_id)
 
     # Local attempts ---------------------------------------------------------------------
 
@@ -1049,12 +1223,23 @@ class Orchestrator:
         new_files = {f.path for f in allowed if already.get(f.path) != f.sha}
         skipped_same = [f.path for f in allowed if f.path not in new_files]
 
-        system = ctx.CLAUDE_SYSTEM
+        system = ctx.CLAUDE_LEAD_SYSTEM if purpose in ("lead", "lead_review") else ctx.CLAUDE_SYSTEM
         header = ctx.project_header(ws, pack)
         parts = []
         if not session:
             parts.append(header)
-        if purpose == "review":
+        if purpose == "lead":
+            if not ctx.is_general(ws):
+                parts.append(ctx.memory_block(self.db.memory(task["project_id"], None, 30)))
+            parts.append(ctx.task_message(task["objective"], pack, extra, only=new_files))
+            parts.append(ctx.LEAD_INSTRUCTIONS.format(
+                max_tasks=self.cfg["team"]["max_tasks"],
+                delegate_note=ctx.LEAD_NO_DELEGATE if ctx.is_general(ws) else ""))
+        elif purpose == "lead_review":
+            parts.append(f"The user's request:\n{task['objective'].strip()}")
+            parts.append(extra)
+            parts.append(ctx.LEAD_REVIEW_INSTRUCTIONS)
+        elif purpose == "review":
             cs = self.db.get_changeset(changeset_id)
             diff = "\n".join(f["diff"] for f in cs["files"] if not privacy.cloud_excluded(f["path"], globs))
             parts.append(ctx.task_message(task["objective"], pack, only=new_files))
@@ -1070,6 +1255,10 @@ class Orchestrator:
             parts.append("Files you already have from earlier in this conversation (unchanged): " + ", ".join(skipped_same))
         if purpose == "review" and extra:
             parts.append(extra)
+        if purpose == "lead" and extra.startswith("Follow-up from the user:"):
+            followup = extra.split("\n", 1)[1] if "\n" in extra else ""
+        else:
+            followup = ""
         prompt = privacy.finalize("\n\n".join(p for p in parts if p), private, check)
         files_meta = [{"path": f.path, "sha": f.sha, "chars": len(f.content)} for f in allowed if f.path in new_files]
         check.sent_files = [f["path"] for f in files_meta]
@@ -1082,6 +1271,7 @@ class Orchestrator:
             # A resumed Claude session already has earlier pictures; send only new ones.
             "images": self._image_ids(task_id, latest_only=bool(session)),
             "knowledge": sorted({k.name for k in cloud_knowledge}),
+            "followup": followup,
         }
         if pending["images"]:
             pending["privacy"] += f" Includes {len(pending['images'])} image(s); images are not scanned for secrets."
@@ -1164,8 +1354,9 @@ class Orchestrator:
             self.db.set_transmission_usage(trans_id, note)
             self._event(task_id, "usage", f"Reported by Claude Code: {note}", CLAUDE)
         self.db.kv_set("claude_last_verified", time.time())
-        self.db.add_message(task_id, "assistant", result.text, CLAUDE)
-        self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
+        if pending["purpose"] not in ("lead", "lead_review"):  # The lead's reply is split into message and plan first.
+            self.db.add_message(task_id, "assistant", result.text, CLAUDE)
+            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
         self._handle_claude_result(task_id, pending, result.text)
 
     def _handle_claude_result(self, task_id: int, pending: dict, text: str) -> None:
@@ -1173,6 +1364,12 @@ class Orchestrator:
         ws = self.workspace(task["project_id"])
         purpose = pending["purpose"]
         step_id = pending.get("step_id")
+        if purpose == "lead":
+            self._handle_lead(task_id, pending, text)
+            return
+        if purpose == "lead_review":
+            self._handle_lead_review(task_id, pending, text)
+            return
         if purpose == "plan":
             self._step_end(step_id, "completed", "Wrote the implementation plan.")
             self.db.update_task_state(task_id, plan=text, decisions=["Plan written by Claude."])
@@ -1225,6 +1422,13 @@ class Orchestrator:
     def _after_claude_skipped(self, task_id: int, pending: dict, why: str, declined: bool = False) -> None:
         """Claude was declined or failed: keep whatever local work exists."""
         purpose = pending["purpose"]
+        if purpose == "lead_review":  # The team's work is done; Enoy's own summary is the answer.
+            self._set(task_id, status="running")
+            team_mod.TeamRunner(self, task_id).end_lead_run(False, why)
+            return
+        if purpose == "lead" and not declined and self.cfg["routing"].get("claude_fallback", "local") == "stop":
+            self._fail(task_id, f"{why} Settings say to stop instead of continuing with Qwen.")
+            return
         self._set_owner(task_id, LOCAL, f"{why} Claude did not handle this request.")
         task = self.db.get_task(task_id)
         if self.db.list_changesets(task_id, "pending"):
@@ -1286,9 +1490,10 @@ class Orchestrator:
         self.bus.publish({"type": "changeset", "task_id": task_id, "changeset_id": cs_id})
         return cs_id
 
-    def _await_approval(self, task_id: int) -> None:
+    def _await_approval(self, task_id: int, ask: bool = False) -> None:
+        """ask: always wait for you, even with auto-apply on (the team holds this change for your review)."""
         pending = self.db.list_changesets(task_id, "pending")
-        if self.cfg["permissions"]["auto_apply_patches"] and len(pending) == 1 and all(
+        if not ask and self.cfg["permissions"]["auto_apply_patches"] and len(pending) == 1 and all(
                 f["action"] != "delete" for f in pending[0]["files"]):
             self._event(task_id, "status", "Auto-apply is on in Settings; applying the change.")
             self._act(task_id, "approval.resolved", "Applied without asking because auto-apply is on in Settings.",

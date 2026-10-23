@@ -80,6 +80,7 @@ class App:
                     "routing": orc.cfg["routing"], "config_warnings": self.cfg_warnings,
                     "privacy_never": orc.cfg["privacy"]["cloud_policy"] == "never",
                     "team_default": orc.cfg["team"]["default_new_chats"],
+                    "lead": orc.cfg["lead"]["enabled"],
                     "claude_last_verified": db.kv_get("claude_last_verified")}
 
         @r("GET", "/api/config")
@@ -515,6 +516,14 @@ class App:
         @r("GET", r"/api/tasks/(\d+)/team")
         def task_team_view(q, body, tid):
             return orc.team_view(int(tid))
+
+        @r("POST", r"/api/tasks/(\d+)/team/hold")
+        def task_team_hold(q, body, tid):
+            return {"task": orc.hold_delegation(int(tid), bool(body.get("hold")))}
+
+        @r("POST", r"/api/team-tasks/(\d+)/(cancel|retry|model)")
+        def team_task_action(q, body, ttid, action):
+            return {"team_task": orc.team_task_action(int(ttid), action, body.get("provider"))}
 
         @r("POST", r"/api/tasks/(\d+)/local-only")
         def task_local_only(q, body, tid):

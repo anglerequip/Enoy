@@ -79,6 +79,91 @@ work that needs stronger reasoning. You cannot open files or run commands: you
 only see what is in this message. Ask for a specific file if you need it.
 Be direct and concise."""
 
+CLAUDE_LEAD_SYSTEM = """\
+You lead Enoy, an AI workspace on the user's PC. The user talks to you. Behind
+you is a small team: Qwen (a 9B model running locally, good at clear, routine,
+precisely specified code changes) and roles that Enoy runs as code: QA runs the
+project's real tests, a reviewer checks the diff, a debugger fixes failures.
+You cannot open files or run commands: you see only this message. Be direct,
+concise and creative where it helps."""
+
+LEAD_INSTRUCTIONS = """\
+Decide how to handle the user's latest message. Start your reply with exactly one line:
+MODE: answer    (you answer yourself: questions, explanations, brainstorming, advice, short snippets)
+MODE: clarify   (a wrong guess would be costly: ask at most two short questions)
+MODE: delegate  (files in the project must change) {delegate_note}
+Then write your message to the user in Markdown. For delegate, say in one or two
+sentences what the team will do, then add the plan as one JSON block:
+```json
+{{"acceptance": ["checkable criterion", ...],
+ "architecture": "short notes: modules, interfaces, risks",
+ "tasks": [{{"id": "T1", "title": "...", "description": "the exact change: what, where and how",
+            "files": ["path/in/project"], "depends_on": [], "specialty": "",
+            "model": "qwen", "why": "why this task and this model",
+            "expected_output": "...", "constraints": ["..."]}}]}}
+```
+Plan rules: 1 to {max_tasks} tasks, as few as keep each one focused. Give every
+clear, routine task to Qwen ("model": "qwen") and describe it so precisely that a
+small model needs no guessing. Use "model": "claude" only for a part that needs
+your reasoning. Tasks that change the same file depend on each other. Name only
+files that exist or must be created. Do not delegate questions or brainstorming."""
+
+LEAD_NO_DELEGATE = "Not possible in this chat: no project folder is open, so never choose delegate."
+
+LEAD_REVIEW_INSTRUCTIONS = """\
+Your team finished the work you planned. Below are the results Enoy recorded:
+tasks, changed files with diffs, real test runs and review findings. Check them
+against the user's request and the acceptance criteria. Then write your answer to
+the user: what was done, what was tested (only what the results show), and anything
+that still needs attention. Do not claim checks that did not run.
+End with exactly one line:
+NEXT: done
+or, only if a clear defect remains that the team can fix:
+NEXT: fix <one precise instruction for the developer>"""
+
+LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate)\b[^\n]*(\n|$)", re.I)
+LEAD_PLAN = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.S)
+LEAD_NEXT = re.compile(r"^\s*NEXT:\s*(done|fix)\b:?\s*(.*)$", re.I | re.M)
+
+
+def parse_lead(text: str) -> tuple[str, str, str | None]:
+    """Claude's lead reply: (mode, message to the user, plan JSON or None). Without a MODE line it is an answer."""
+    m = LEAD_MODE.match(text)
+    mode = m.group(1).lower() if m else "answer"
+    body = text[m.end():] if m else text
+    plan = None
+    fence = LEAD_PLAN.search(body)
+    if mode == "delegate" and fence:
+        plan = fence.group(1)
+        body = body[:fence.start()] + body[fence.end():]
+    return mode, body.strip(), plan
+
+
+def parse_lead_review(text: str) -> tuple[str, str, str]:
+    """Claude's final check: (message, "done" or "fix", fix instruction)."""
+    found = list(LEAD_NEXT.finditer(text))
+    if not found:
+        return text.strip(), "done", ""
+    last = found[-1]
+    message = (text[:last.start()] + text[last.end():]).strip()
+    return message, last.group(1).lower(), last.group(2).strip()
+
+
+def memory_block(rows: list[dict], max_chars: int = 3000) -> str:
+    """Shared project memory for a prompt, newest first, marked verified (from real results) or not."""
+    lines, used = [], 0
+    for r in rows:
+        tag = "verified" if r.get("verified") else "suggestion, not verified"
+        line = f"- [{r['category'].replace('_', ' ')}, {tag}, from {r.get('source') or 'unknown'}] " \
+               + " ".join(str(r["content"]).split())[:400]
+        if used + len(line) > max_chars:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return ("Project memory (earlier work in this project; verified items come from real results):\n"
+            + "\n".join(lines)) if lines else ""
+
+
 REVIEW_INSTRUCTIONS = """\
 Review the proposed change below against the task. Reply with:
 VERDICT: APPROVE or VERDICT: CHANGES_NEEDED

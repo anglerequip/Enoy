@@ -54,6 +54,12 @@ _FILE_START = re.compile(r"^<<<FILE\s+(.+?)\s*$")
 _EDIT_START = re.compile(r"^<<<EDIT\s+(.+?)\s*$")
 _DELETE = re.compile(r"^<<<DELETE\s+(.+?)\s*>>>\s*$")
 _RUN = re.compile(r"^<<<RUN\s+(.+?)\s*>>>\s*$")
+_SEPARATOR = re.compile(r"^(===\s*(REPLACE)?|>>>REPLACE)$")  # Not "=====": that can be file content.
+
+
+def _block_start(stripped: str) -> bool:
+    return bool(_FILE_START.match(stripped) or _EDIT_START.match(stripped) or _DELETE.match(stripped)
+                or _RUN.match(stripped))
 
 
 @dataclass
@@ -132,46 +138,51 @@ def parse(output: str) -> ParseResult:
             edits: list[Edit] = []
             i += 1
             closed = False
+            # Qwen's common slips are accepted where the meaning stays unambiguous: "===REPLACE" or ">>>REPLACE"
+            # as the separator, a pair ended by >>>END or the next <<<SEARCH, and a block ended by the next block.
+            # A pair or block cut off by the end of the output is still an error (the answer may be truncated).
             while i < len(lines):
                 s = lines[i].strip()
                 if s == ">>>END":
                     closed = True
+                    i += 1
+                    break
+                if _block_start(s):
+                    closed = bool(edits)  # The next block began; this one was complete.
                     break
                 if s == "<<<SEARCH":
                     search: list[str] = []
                     replace: list[str] = []
                     i += 1
-                    while i < len(lines) and lines[i].strip() not in ("===", ">>>REPLACE"):
+                    while i < len(lines) and not _SEPARATOR.match(lines[i].strip()):
                         search.append(lines[i])
                         i += 1
-                    if i < len(lines) and lines[i].strip() == ">>>REPLACE":
-                        # Qwen often writes the pair as SEARCH lines, >>>REPLACE, new lines, then >>>END or the next
-                        # <<<SEARCH. That layout is unambiguous, so it is accepted too.
-                        i += 1
-                        while i < len(lines) and lines[i].strip() not in (">>>END", "<<<SEARCH"):
-                            replace.append(lines[i])
-                            i += 1
-                        if i >= len(lines):
-                            errors.append(f"EDIT block for '{path}' has an unterminated SEARCH/REPLACE pair.")
-                            break
-                        edits.append(Edit("\n".join(search), "\n".join(replace)))
-                        continue
+                    if i >= len(lines):
+                        errors.append(f"EDIT block for '{path}' has an unterminated SEARCH/REPLACE pair.")
+                        break
+                    separator = lines[i].strip()
                     i += 1
-                    while i < len(lines) and lines[i].strip() != ">>>REPLACE":
+                    while i < len(lines):
+                        s = lines[i].strip()
+                        if s in (">>>END", "<<<SEARCH") or _block_start(s) or (s == ">>>REPLACE" and separator != s):
+                            break
                         replace.append(lines[i])
                         i += 1
                     if i >= len(lines):
                         errors.append(f"EDIT block for '{path}' has an unterminated SEARCH/REPLACE pair.")
                         break
+                    if lines[i].strip() == ">>>REPLACE":
+                        i += 1
                     edits.append(Edit("\n".join(search), "\n".join(replace)))
+                    continue
                 i += 1
             if not closed:
-                errors.append(f"EDIT block for '{path}' is missing its >>>END line (output may be truncated).")
+                if not any(e.startswith(f"EDIT block for '{path}'") for e in errors):
+                    errors.append(f"EDIT block for '{path}' is missing its >>>END line (output may be truncated).")
             elif not edits:
                 errors.append(f"EDIT block for '{path}' contains no SEARCH/REPLACE pairs.")
             else:
                 changes.append(ProposedChange("edit", path, edits=edits))
-            i += 1
         else:
             if not changes:
                 explanation.append(line)

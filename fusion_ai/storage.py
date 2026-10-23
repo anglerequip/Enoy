@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS team_tasks (
     result TEXT NOT NULL DEFAULT '{}',
     changeset_id INTEGER,
     error TEXT NOT NULL DEFAULT '',
+    spec TEXT NOT NULL DEFAULT '{}',
     created REAL NOT NULL,
     started REAL,
     finished REAL
@@ -278,6 +279,8 @@ class Storage:
                           ("created", "REAL"), ("updated", "REAL")):
             if name not in pcols:
                 self._exec(f"ALTER TABLE projects ADD COLUMN {name} {ddl}")
+        if "spec" not in {r["name"] for r in self._all("PRAGMA table_info(team_tasks)")}:
+            self._exec("ALTER TABLE team_tasks ADD COLUMN spec TEXT NOT NULL DEFAULT '{}'")
         self._exec("UPDATE projects SET created = last_opened WHERE created IS NULL")
         self._exec("UPDATE projects SET updated = last_opened WHERE updated IS NULL")
 
@@ -756,19 +759,19 @@ class Storage:
     def add_team_task(self, task_id: int, role: str, title: str, *, plan_key: str = "", specialty: str = "",
                       description: str = "", acceptance: list[str] | None = None, files: list[str] | None = None,
                       depends_on: list[int] | None = None, provider: str = "", route_reason: str = "",
-                      activation_reason: str = "", status: str = "planned") -> dict:
+                      activation_reason: str = "", status: str = "planned", spec: dict | None = None) -> dict:
         cur = self._exec(
             "INSERT INTO team_tasks (task_id, plan_key, role, specialty, title, description, acceptance, files, "
-            "depends_on, provider, route_reason, activation_reason, status, created) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "depends_on, provider, route_reason, activation_reason, status, spec, created) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task_id, plan_key, role, specialty, redact(title), redact(description), json.dumps(acceptance or []),
              json.dumps(files or []), json.dumps(depends_on or []), provider, redact(route_reason),
-             redact(activation_reason), status, time.time()),
+             redact(activation_reason), status, redact(json.dumps(spec or {})), time.time()),
         )
         return self.get_team_task(cur.lastrowid)
 
     _TEAM_FIELDS = {"status", "provider", "route_reason", "attempts", "result", "changeset_id", "error",
-                    "depends_on", "files", "description", "title"}
+                    "depends_on", "files", "description", "title", "spec"}
 
     def update_team_task(self, team_task_id: int, **fields: Any) -> None:
         sets, params = [], []
@@ -778,6 +781,8 @@ class Storage:
                 raise KeyError(f"Unknown team task field {key}")
             if key in ("result", "depends_on", "files"):
                 value = json.dumps(value)
+            elif key == "spec":
+                value = redact(json.dumps(value))
             elif key in ("error", "route_reason", "description", "title"):
                 value = redact(value)
             sets.append(f"{key} = ?")
@@ -797,6 +802,7 @@ class Storage:
         for key in ("acceptance", "files", "depends_on"):
             row[key] = json.loads(row[key] or "[]")
         row["result"] = json.loads(row["result"] or "{}")
+        row["spec"] = json.loads(row.get("spec") or "{}")
         return row
 
     def get_team_task(self, team_task_id: int) -> dict | None:

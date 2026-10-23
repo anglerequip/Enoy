@@ -66,6 +66,7 @@ class FakeBackend:
 def cfg():
     c, _ = config_mod.validate({})
     c["claude"]["confirm_before_send"] = False
+    c["lead"]["enabled"] = False  # Tests of Claude as the lead turn it on themselves (test_lead.py).
     return c
 
 

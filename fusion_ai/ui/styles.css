@@ -391,6 +391,9 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .team-pill:hover { border-color: var(--muted); color: var(--text); }
 .team-pill.on { color: var(--text); border-color: var(--ok); }
 .ac-board { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 2px; }
+.ac-lead { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; }
+.ac-tt-ctl { gap: 6px; padding: 2px 10px 8px; flex-wrap: wrap; }
+.ac-sec h3 .btn { margin-left: 8px; vertical-align: middle; }
 .ac-tt-main { grid-template-columns: 42px 86px minmax(0, 1fr) auto; }
 .ac-msg { padding: 2px 0; overflow-wrap: anywhere; }
 .ac-share { position: relative; display: flex; height: 8px; border-radius: 4px; overflow: visible; background: var(--border); }

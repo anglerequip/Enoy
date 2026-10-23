@@ -105,6 +105,8 @@ async function loadStatus(refresh = false) {
   MODELS.claude.desc = "Strongest reasoning. Uses your Claude plan." + (cm ? "" : " Model: Claude Code's default (change it in Settings).");
   renderStatusLine();
   renderModelPicker();
+  const note = document.querySelector(".composer-note");  // Only the note: typing in the box is not disturbed.
+  if (note) note.innerHTML = composerNoteHtml();
 }
 function qwenOk() { return !!(S.status && S.status.local.available); }
 function claudeOk() { return !!(S.status && S.status.claude.available); }
@@ -400,8 +402,10 @@ function runHtml(r, isLatest) {
 function statusHtml(t) {
   const state = t.state || {};
   const run = state.team_run || {};
-  if (t.workflow === "team" && ["running", "queued"].includes(t.status)) {
-    return `<div class="msg-ai live"><div class="ai-head">${avatar("team")}Team<span class="where">· ${esc(run.status || "working")}</span></div>
+  if ((t.workflow === "team" || run.lead) && ["running", "queued"].includes(t.status)) {
+    const who = run.lead ? `${avatar("claude")}Claude<span class="where">· leading · team ${esc((run.status || "working").replace(/_/g, " "))}</span>`
+      : `${avatar("team")}Team<span class="where">· ${esc(run.status || "working")}</span>`;
+    return `<div class="msg-ai live"><div class="ai-head">${who}</div>
       <div class="ai-body" id="live-body"></div>
       <div id="live-wait"><span class="typing"><span></span><span></span><span></span></span></div>
       <div class="small muted">Open <a href="#" data-action="toggle-activity">Activity</a> to see each role, its model and why.</div></div>`;
@@ -520,7 +524,7 @@ function renderComposer() {
                : `<button class="round-btn send" id="send-btn" data-action="send" title="Send (Enter)" aria-label="Send" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>`}
       </div>
     </div>
-    <div class="composer-note">${teamOn() && !(S.project && S.project.is_default) ? "Team roles on: code changes are planned, checked and reviewed. " : ""}${composerNote()}</div>`;
+    <div class="composer-note">${composerNoteHtml()}</div>`;
   const ta = $("prompt");
   const draft = S.draft || "";
   ta.value = draft;
@@ -543,10 +547,14 @@ function localOnlyReason() {
   if (S.chat ? S.chat.task.state.local_only : S.localOnly) return "this chat stays on your PC";
   return "";
 }
+function composerNoteHtml() {
+  return (teamOn() && !(S.project && S.project.is_default) ? "Team roles on: code changes are planned, checked and reviewed. " : "") + composerNote();
+}
 function composerNote() {
   const lo = localOnlyReason();
   if (lo) return `🔒 Local only: ${esc(lo)}. Nothing here is sent to Claude.`;
   if (S.model === "claude") return "Claude uses your Claude plan.";
+  if (S.model === "auto" && S.status && S.status.lead) return "Claude leads: it reads your message first and hands routine coding to Qwen on your PC. Uses your Claude plan.";
   return "Qwen runs on your PC. Claude only gets the relevant files (secrets removed) when needed, and asks first.";
 }
 
@@ -702,6 +710,11 @@ async function settingsModels() {
       ${preset ? "" : `<div class="small muted">Custom setup (see Advanced below).</div>`}
     </div>
     ${c.routing.mode === "auto" ? smartRoutingHtml(c) : ""}
+    <div class="set-section"><h3>${avatar("claude")} Claude leads</h3>
+      <div class="small muted">Claude reads each new message first. It answers questions and brainstorms itself, asks when a wrong guess would be costly, and for code changes writes a plan: Qwen does the routine coding on your PC, QA runs your real checks, a reviewer checks the diff, and Claude checks the results and writes the answer. Each Claude request uses your Claude plan; "Ask before sending to Claude" still applies. Picking Qwen or Claude in the chat skips the lead for that message. If Claude is unavailable, Enoy says so and follows "If Claude is unavailable".</div>
+      ${toggleRow("lead", "enabled", "Claude leads new messages", "Off: the router sends each message to Qwen or Claude as before.")}
+      ${toggleRow("lead", "final_review", "Claude checks the team's results", "One more Claude request per delegated task. Off: Enoy's own summary of the results is the answer.")}
+      <div class="grid2">${inputRow("lead", "max_followups", "Fix rounds Claude may order", "After its check, before the result is handed to you.", "number")}</div></div>
     <div class="set-section"><h3>${avatar("team")} TEAM ROLES</h3>
       <div class="small muted">A chat with TEAM ROLES on hands code changes to a small team: an orchestrator (plain code) plans and tracks the work, an architect is added for larger features, developers write the code, QA runs your project's real checks, a reviewer checks the diff, and a debugger steps in after repeated failures. Each part is routed to Qwen or Claude by the smart router. Questions are always answered directly. Switch it per chat with the TEAM ROLES button at the top.</div>
       ${toggleRow("team", "default_new_chats", "Turn TEAM ROLES on for new chats", "Each chat keeps its own setting; this only sets the starting point.")}

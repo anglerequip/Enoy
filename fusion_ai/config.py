@@ -85,6 +85,12 @@ DEFAULTS: dict[str, Any] = {
         "max_handoffs": 2,
         "zero_paid_mode": False,        # Never use Claude automatically; only when you pick it yourself.
     },
+    "lead": {
+        "enabled": True,                # Claude reads each new message first: it answers, asks, or plans and hands
+                                        # the code to Qwen and the team. Picking a model in the chat skips the lead.
+        "final_review": True,           # After a delegated run, Claude checks the results and writes the answer.
+        "max_followups": 1,             # Fix rounds Claude may order after its final check.
+    },
     "team": {
         "default_new_chats": False,     # TEAM ROLES for new chats; each chat keeps its own setting.
         "max_tasks": 6,                 # Developer tasks per plan.
@@ -95,7 +101,7 @@ DEFAULTS: dict[str, Any] = {
         "review_min_lines": 60,         # Added lines before a model review is added to the automatic checks.
     },
     "memory": {
-        "mode": "chill",                # Default on a new install. The 9B model does not fit Chill.
+        "mode": "chill",                # Default on a new install (1,200 MiB; Qwen 3.5 9B runs at a 4k context).
         "margin_percent": 10,           # Warning threshold below the ceiling (monitoring delay, spikes).
         "enforce": True,                # No longer used: enforcement is always on. Kept so old config files load.
         "os_cap": True,                 # Windows hard RAM cap (working-set maximum) on Ollama's model runner.
@@ -176,6 +182,11 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "claude_fallback": (str, _choice(("local", "stop"))),
         "max_handoffs": (int, _range(1, 5)),
         "zero_paid_mode": (bool, None),
+    },
+    "lead": {
+        "enabled": (bool, None),
+        "final_review": (bool, None),
+        "max_followups": (int, _range(0, 3)),
     },
     "team": {
         "default_new_chats": (bool, None),

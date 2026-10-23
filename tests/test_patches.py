@@ -170,3 +170,23 @@ def test_edit_pair_without_separator_is_accepted():
     (change,) = r.changes
     assert [(e.search, e.replace) for e in change.edits] == [
         ("def a():\n    pass", "def a():\n    pass\n\n\ndef b():\n    pass"), ("x = 1", "x = 2")]
+
+
+def test_qwen_layout_slips_are_read_correctly():
+    """===REPLACE as separator, and a block left open before the next block starts."""
+    out = ("Both.\n<<<EDIT a.py\n<<<SEARCH\nx = 1\n===REPLACE\nx = 2\n>>>END\n"
+           "<<<EDIT b.py\n<<<SEARCH\ny = 1\n===\ny = 2\n>>>REPLACE\n"
+           "<<<EDIT c.py\n<<<SEARCH\nz = 1\n===\nz = 2\n>>>REPLACE\n>>>END\n")
+    r = patches.parse(out)
+    assert not r.errors
+    assert [(c.path, [(e.search, e.replace) for e in c.edits]) for c in r.changes] == [
+        ("a.py", [("x = 1", "x = 2")]), ("b.py", [("y = 1", "y = 2")]), ("c.py", [("z = 1", "z = 2")])]
+
+
+def test_cut_off_edit_is_still_an_error():
+    r = patches.parse("<<<EDIT a.py\n<<<SEARCH\nx = 1\n===\nx = 2\n")
+    assert r.errors and not r.changes
+    r = patches.parse("<<<EDIT a.py\n<<<SEARCH\nx = 1\n")
+    assert r.errors and not r.changes
+    r = patches.parse("<<<EDIT a.py\n<<<SEARCH\nTitle\n=====\n===\nNew\n>>>REPLACE\n>>>END\n")
+    assert r.changes[0].edits[0].search == "Title\n====="  # A long ===== line is content, not a separator.

@@ -342,7 +342,10 @@ def _team_block(orc: Any, task: dict) -> dict:
     keys = {t["id"]: t["plan_key"] for t in tasks}
     active_roles = sorted({t["role"] for t in tasks if t["status"] in ("running", "waiting", "awaiting_review")})
     run = view["run"]
+    open_ = ("planned", "ready", "paused", "blocked")
     return {
+        "lead": bool(run.get("lead")), "lead_state": _lead_state(run, tasks), "hold": bool(run.get("hold")),
+        "git": run.get("git"),
         "status": run.get("status", ""), "acceptance": run.get("acceptance", []), "planned_by": run.get("planned_by", ""),
         "plan_note": run.get("plan_note", ""), "verification": run.get("verification"), "repairs": run.get("repairs", 0),
         "model_calls": run.get("model_calls", 0), "claude_calls": run.get("claude_calls", 0),
@@ -354,11 +357,45 @@ def _team_block(orc: Any, task: dict) -> dict:
                    "route_reason": t["route_reason"] or "Reason not recorded.", "activation": t["activation_reason"],
                    "after": [keys.get(d, f"#{d}") for d in t["depends_on"]], "files": t["files"][:8],
                    "changed": t["result"].get("changed", []), "findings": t["result"].get("findings", [])[:8],
-                   "commands": [{"command": c["command"], "status": c["status"]} for c in t["result"].get("commands", [])]}
+                   "commands": [{"command": c["command"], "status": c["status"]} for c in t["result"].get("commands", [])],
+                   "spec": t.get("spec") or {}, "verification": (t.get("spec") or {}).get("verification", ""),
+                   "can": {"cancel": t["status"] in open_,
+                           "retry": t["status"] in ("failed", "blocked", "cancelled") and t["role"] in ("developer", "debugger"),
+                           "model": t["status"] in open_ + ("failed",) and t["role"] in ("developer", "debugger")}}
                   for t in tasks],
         "messages": [{"from": m["from_role"], "to": m["to_role"], "type": m["type"], "body": m["body"], "at": m["created"]}
                      for m in view["messages"][:25]],
     }
+
+
+def _lead_state(run: dict, tasks: list[dict]) -> str:
+    """One line on what Claude, as the lead, is doing in this run. Built from recorded state only."""
+    if not run.get("lead"):
+        return ""
+    status = run.get("status", "")
+    if status == "lead_review":
+        return "Claude is checking the team's results."
+    if status in ("completed", "failed", "cancelled"):
+        return "Claude handed the result to you."
+    if status == "paused":
+        return "Delegation is paused; Claude's plan is kept."
+    working = [t["plan_key"] for t in tasks if t["status"] == "running" and t["provider"] == "qwen"]
+    if working:
+        return f"Claude is waiting for Qwen ({', '.join(working)})."
+    if any(t["status"] == "awaiting_review" for t in tasks):
+        return "Claude's plan is waiting for your review of a change."
+    return "Claude planned the work; the team is carrying it out."
+
+
+def _memory_info(orc: Any) -> dict | None:
+    """Memory mode and the last measured use, from the supervisor's own readings (no new measurement)."""
+    sup = orc.memory
+    if sup is None:
+        return None
+    from .memory_guard import LABEL
+    cur = sup.current or {}
+    return {"mode": LABEL.get(sup.mode, sup.mode), "ceiling_mib": sup.ceiling_mib, "used_mib": cur.get("total_mib"),
+            "state": sup.state}
 
 
 def snapshot(orc: Any, focus_id: int | None = None, task_filter: int | None = None, limit: int = 150,
@@ -415,6 +452,8 @@ def snapshot(orc: Any, focus_id: int | None = None, task_filter: int | None = No
             "cancelled": counts.get("cancelled", 0),
         },
         "routing": orc.routing_stats(),
+        "lead": {"enabled": bool(orc.cfg["lead"]["enabled"]), "final_review": bool(orc.cfg["lead"]["final_review"])},
+        "memory": _memory_info(orc),
         "agents": [agent_card(orc, LOCAL, statuses[LOCAL], open_steps),
                    agent_card(orc, CLAUDE, statuses[CLAUDE], open_steps)],
         "focus": focus_block,
