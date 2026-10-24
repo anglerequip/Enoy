@@ -281,6 +281,28 @@ def _fuzzy_locate(text: str, search: str) -> tuple[int, int] | None:
     return offsets[i], offsets[end_line] + len(lines[end_line])
 
 
+# "/* ... existing content unchanged ... */", "// rest of the file", "# ... remaining code ...": a model
+# that writes this in place of real code would delete that code.
+_ELIDED = re.compile(r"(\.\.\.|…)[^\n]{0,40}\b(existing|unchanged|rest of|remaining|omitted|same as before)\b"
+                     r"|\b(rest of|remaining|existing) (the )?(content|code|file|styles|functions|lines)\b[^\n]{0,30}"
+                     r"\b(unchanged|omitted|here|as before|stays)\b", re.I)
+
+
+def lost_content(path: str, before: str | None, after: str, whole_file: bool = True) -> str:
+    """Why this change would silently delete code, or "". Checked for every proposal and every agent write."""
+    if before is None:
+        return ""
+    new_marks = [m.group(0) for m in _ELIDED.finditer(after) if m.group(0) not in before]
+    if new_marks:
+        return (f"{path}: the change contains a placeholder ('{new_marks[0][:60]}') instead of the real code, "
+                "which would delete that code. Use EDIT blocks that change only the lines you mean.")
+    old_n, new_n = len(before.splitlines()), len(after.splitlines())
+    if whole_file and old_n >= 60 and new_n < old_n // 2:
+        return (f"{path}: replacing the whole file would delete {old_n - new_n} of its {old_n} lines. Use EDIT "
+                "blocks for the parts you change (or DELETE the file if that is really meant).")
+    return ""
+
+
 def check_syntax(path: str, content: str) -> tuple[list[str], list[str]]:
     """Return (errors, warnings) from language-specific checks."""
     ext = PurePosixPath(path).suffix.lower()
@@ -477,6 +499,10 @@ def validate(ws: Workspace, changes: list[ProposedChange], seen_hashes: dict[str
             new_text = change.content or ""
         if REDACTED in new_text and (base is None or REDACTED not in base):
             errors.append(f"{rel}: the proposal contains '{REDACTED}' placeholders that would overwrite real values.")
+            continue
+        lost = lost_content(rel, base, new_text, whole_file=change.action != "edit")
+        if lost:
+            errors.append(lost)
             continue
         if base is not None and new_text == base:
             warnings.append(f"{rel}: proposed content is identical to the current file; skipped.")

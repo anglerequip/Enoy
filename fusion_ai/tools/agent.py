@@ -60,12 +60,15 @@ class AgentFiles:
         except PathError as exc:
             raise ToolError("denied", str(exc)) from exc
 
-    def save(self, path: str, content: str) -> dict:
+    def save(self, path: str, content: str, whole_file: bool = True) -> dict:
         rel = self._norm(path)
         problems, warnings = patches.check_syntax(rel, content)
         if problems:
             raise ToolError("invalid", "Not written, the result would not be valid: " + "; ".join(problems[:5]))
         before = self.read(rel)
+        lost = patches.lost_content(rel, before, content, whole_file=whole_file)
+        if lost:
+            raise ToolError("invalid", "Not written: " + lost)
         if rel not in self.changes:
             self.changes[rel] = {"orig": before, "orig_hash": None if before is None else sha256_text(before), "now": before}
         if self.apply:
@@ -179,7 +182,7 @@ def _edit_file(args: dict, ctx: ToolContext) -> dict:
     new, errors = patches._apply_edits(current, [patches.Edit(args["old_text"], args["new_text"])], args["path"])
     if errors:
         raise ToolError("invalid", errors[0] + " Read the file again and copy old_text exactly, including indentation.")
-    return files.save(args["path"], new)
+    return files.save(args["path"], new, whole_file=False)
 
 
 def _write_file(args: dict, ctx: ToolContext) -> dict:

@@ -204,3 +204,38 @@ def test_several_edit_blocks_for_one_file_apply_in_order(project):
     assert "import math\n\n\ndef add(a, b):" in new and "def subtract2(a, b):" in new
     write_twice = [patches.ProposedChange("write", "x.py", "a = 1\n"), patches.ProposedChange("write", "x.py", "a = 2\n")]
     assert any("more than once" in e for e in patches.validate(ws, write_twice).errors)
+
+
+STYLES = "".join(f".rule{i} {{ color: red; }}\n" for i in range(120))
+
+
+def test_placeholder_instead_of_real_code_is_refused(tmp_path):
+    """A real run: Claude sent styles.css as '/* ... existing content unchanged ... */' plus new rules."""
+    (tmp_path / "styles.css").write_text(STYLES, encoding="utf-8")
+    ws = Workspace(tmp_path)
+    out = "Restyled.\n<<<FILE styles.css\n/* ... existing content unchanged ... */\n\n.pill { color: blue; }\n>>>END\n"
+    result = patches.validate(ws, patches.parse(out).changes)
+    assert not result.ok and "placeholder" in result.errors[0]
+
+
+def test_whole_file_that_drops_most_lines_is_refused_but_edits_work(tmp_path):
+    (tmp_path / "styles.css").write_text(STYLES, encoding="utf-8")
+    ws = Workspace(tmp_path)
+    short = patches.parse("<<<FILE styles.css\n.pill { color: blue; }\n>>>END\n").changes
+    assert "would delete 119 of its 120 lines" in patches.validate(ws, short).errors[0]
+    edit = patches.parse("<<<EDIT styles.css\n<<<SEARCH\n.rule0 { color: red; }\n===\n.rule0 { color: blue; }\n"
+                         ">>>REPLACE\n>>>END\n").changes
+    assert patches.validate(ws, edit).ok
+    assert patches.validate(ws, patches.parse("<<<FILE new.css\n/* rest of the file here */\n>>>END\n").changes).ok
+
+
+def test_agent_write_refuses_to_drop_code(tmp_path):
+    from fusion_ai.tools import ToolError
+    from fusion_ai.tools.agent import AgentFiles
+    (tmp_path / "styles.css").write_text(STYLES, encoding="utf-8")
+    files = AgentFiles(Workspace(tmp_path), True, tmp_path / "bk")
+    with pytest.raises(ToolError, match="placeholder"):
+        files.save("styles.css", "/* ... rest of the file unchanged ... */\n.pill {}\n")
+    with pytest.raises(ToolError, match="would delete"):
+        files.save("styles.css", ".pill {}\n")
+    assert (tmp_path / "styles.css").read_text(encoding="utf-8") == STYLES
