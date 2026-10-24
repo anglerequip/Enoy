@@ -809,7 +809,9 @@ async function settingsModels() {
       <div class="grid2"><label class="field">How Claude leads<select data-cfg="lead.style">${Object.entries(LEAD_STYLES).map(([k, v]) => `<option value="${k}" ${k === (c.lead.style || "claude_first") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
         <span class="small">${(c.lead.style || "claude_first") === "claude_first"
           ? `Every message starts with Claude. Claude talks and plans, and hands the writing it does not need to do itself to Qwen, aiming for Qwen to write ${c.routing.target_local_share}% of the text (the target share under Smart routing). Claude checks the team's results only when something failed.`
-          : "Casual messages go straight to Qwen; Claude answers everything else itself and checks the team's results."}</span></label></div>
+          : "Casual messages go straight to Qwen; Claude answers everything else itself and checks the team's results."}</span></label>
+        <label class="field">Claude's effort when leading<select data-cfg="lead.effort">${Object.entries(LEAD_EFFORTS).map(([k, v]) => `<option value="${k}" ${k === (c.lead.effort || "medium") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+          <span class="small">For Claude's own lead requests: deciding, handing off to Qwen and checking results. Less effort means less thinking, which uses less of your Claude plan. Team work and chats where you pick Claude keep the effort set under Claude.</span></label></div>
       ${toggleRow("lead", "final_review", "Claude checks the team's results", "One more Claude request per delegated task. Off: Enoy's own summary of the results is the answer.")}
       <div class="grid2">${inputRow("lead", "max_followups", "Fix rounds Claude may order", "After its check, before the result is handed to you.", "number")}</div></div>
     <div class="set-section"><h3>${avatar("team")} TEAM ROLES</h3>
@@ -867,6 +869,7 @@ async function settingsModels() {
 }
 
 const AGGRESSIVENESS = { prefer_qwen: "Prefer Qwen", balanced: "Balanced", prefer_claude: "Prefer Claude" };
+const LEAD_EFFORTS = { inherit: "Same as Claude's effort", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", "": "Claude Code's default" };
 const LEAD_STYLES = { claude_first: "Claude first, Qwen does most of the writing", balanced: "Balanced (casual messages go to Qwen)" };
 
 function smartRoutingHtml(c) {

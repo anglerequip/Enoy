@@ -705,6 +705,11 @@ class Orchestrator:
         """Claude-first lead: every message starts with Claude, and Claude hands most of the writing to Qwen."""
         return self.cfg["lead"].get("style", "claude_first") == "claude_first"
 
+    def _lead_effort(self, purpose: str) -> str | None:
+        """--effort for the lead's own requests (lead.effort); None = the Claude setting, as for all other work."""
+        level = self.cfg["lead"].get("effort", "medium")
+        return None if purpose not in ("lead", "lead_review") or level == "inherit" else level
+
     def _casual(self, text: str, cls: Any = None) -> bool:
         """Small talk or a simple question that Qwen handles well on its own."""
         cls = cls or classify(text, 0)
@@ -1767,7 +1772,7 @@ class Orchestrator:
                       ChatMessage("user", pending["prompt"], self._load_images(task_id, image_ids))],
             purpose=pending["purpose"], cancel=self._cancel.setdefault(task_id, threading.Event()),
             resume_session=pending.get("session"), web_tools=web, enoy_tools=enoy,
-            enoy_env=self._mcp_env() if enoy else {},
+            enoy_env=self._mcp_env() if enoy else {}, effort=self._lead_effort(pending["purpose"]),
         )
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": pending["purpose"], "since": time.time()}

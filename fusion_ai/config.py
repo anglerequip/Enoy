@@ -94,6 +94,8 @@ DEFAULTS: dict[str, Any] = {
         "style": "claude_first",        # claude_first: every message starts with Claude, which talks and plans and
                                         # hands most of the writing to Qwen (target_local_share of it). balanced:
                                         # casual messages go straight to Qwen and Claude answers the rest itself.
+        "effort": "medium",             # Claude's --effort for the lead's own requests (deciding, handing off,
+                                        # checking results); "inherit" uses claude.effort. Team work keeps claude.effort.
     },
     "team": {
         "default_new_chats": False,     # TEAM ROLES for new chats; each chat keeps its own setting.
@@ -216,6 +218,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "final_review": (bool, None),
         "max_followups": (int, _range(0, 3)),
         "style": (str, _choice(LEAD_STYLES)),
+        "effort": (str, _choice(("inherit",) + CLAUDE_EFFORT)),
     },
     "team": {
         "default_new_chats": (bool, None),

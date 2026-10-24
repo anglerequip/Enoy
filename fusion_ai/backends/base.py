@@ -59,6 +59,7 @@ class ChatRequest:
     web_tools: bool = False            # Claude: allow Claude Code's own WebSearch and WebFetch for this request.
     enoy_tools: list[str] = field(default_factory=list)   # Claude: Enoy tools offered through Enoy's MCP server.
     enoy_env: dict = field(default_factory=dict)          # Settings the MCP server enforces (no secrets).
+    effort: str | None = None          # Claude: --effort for this request only; None = the Claude setting.
 
 
 @dataclass

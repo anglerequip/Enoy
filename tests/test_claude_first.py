@@ -80,3 +80,22 @@ def test_writing_share_is_measured_from_reported_tokens(orc_factory, project):
     work = orc.routing_stats()["work"]
     assert (work["qwen_tokens"], work["claude_tokens"], work["qwen_pct"]) == (700, 300, 70)
     assert work["estimated"] is False
+
+
+def test_lead_requests_use_the_lead_effort_and_team_work_keeps_claudes(orc_factory, project):
+    orc = first_orc(orc_factory, qwen=["UNUSED"], claude=[delegate(plan_task(model="claude")), "Done, no blocks."])
+    orc.start_task(open_project(orc, project), "Add a multiply function")
+    reqs = orc.backends[CLAUDE].requests
+    assert reqs[0].purpose == "lead" and reqs[0].effort == "medium"
+    assert reqs[1].effort is None  # The developer task: Claude's own effort setting.
+    orc.cfg["lead"]["effort"] = "inherit"
+    assert orc._lead_effort("lead") is None and orc._lead_effort("edit") is None
+
+
+def test_effort_flag_per_request():
+    from fusion_ai.backends.claude_code import ClaudeCodeBackend
+    b = ClaudeCodeBackend({"effort": "high", "model": ""})
+    flag = lambda args: args[args.index("--effort") + 1] if "--effort" in args else None  # noqa: E731
+    assert flag(b.build_args("s", None)) == "high"
+    assert flag(b.build_args("s", None, effort="medium")) == "medium"
+    assert flag(b.build_args("s", None, effort="")) is None  # Claude Code's own default.

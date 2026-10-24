@@ -119,7 +119,8 @@ class ClaudeCodeBackend:
                              version, self.verified, extra={"auth": auth, "last_verified": self.last_verified})
 
     def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False,
-                   mcp_config: str | None = None, enoy_tools: list[str] | None = None) -> list[str]:
+                   mcp_config: str | None = None, enoy_tools: list[str] | None = None,
+                   effort: str | None = None) -> list[str]:
         builtin = "WebSearch,WebFetch" if web else ""
         allowed = (["WebSearch", "WebFetch"] if web else []) + [f"mcp__enoy__{n}" for n in enoy_tools or []]
         tools = ["--tools", builtin] + (["--allowedTools", ",".join(allowed)] if allowed else [])
@@ -147,8 +148,9 @@ class ClaudeCodeBackend:
             args += ["--system-prompt", system_prompt]
         if self.settings.get("model"):
             args += ["--model", self.settings["model"]]
-        if self.settings.get("effort"):
-            args += ["--effort", self.settings["effort"]]
+        level = self.settings.get("effort") if effort is None else effort  # "" = Claude Code's own default.
+        if level:
+            args += ["--effort", level]
         if resume:
             args += ["--resume", resume]
         return args
@@ -174,7 +176,7 @@ class ClaudeCodeBackend:
                                                              "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
         mcp_config = _write_mcp_config(request.enoy_tools, request.enoy_env) if request.enoy_tools else None
         cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools,
-                                                 mcp_config, request.enoy_tools)
+                                                 mcp_config, request.enoy_tools, request.effort)
         timeout = float(self.settings.get("timeout_s", 600))
         start = time.monotonic()
         try:
