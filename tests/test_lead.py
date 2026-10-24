@@ -427,3 +427,11 @@ def test_qwen_team_edit_that_fails_is_retried_with_feedback(orc_factory, project
     assert dev["status"] == "completed" and dev["attempts"] == 2
     retry = [m.content for m in orc.backends[LOCAL].requests[2].messages if m.role == "user"][0]
     assert "could not be applied" in retry and "no file changes" in retry and "edit_file" in retry
+
+
+def test_mode_line_after_narration_still_counts():
+    """A real run: with file tools, Claude wrote a sentence before 'MODE: delegate', and the plan was lost."""
+    text = "I've finished mapping the code; here's the plan.\n\n" + delegate(plan_task())
+    mode, msg, plan = ctx.parse_lead(text)
+    assert mode == "delegate" and msg == "The team will add it." and json.loads(plan)["tasks"][0]["id"] == "T1"
+    assert ctx.parse_lead("Looked around.\nMODE: folder C:/Code/app\nIt is there.")[2] == "C:/Code/app"

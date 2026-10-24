@@ -164,7 +164,7 @@ NEXT: done
 or, only if a clear defect remains that the team can fix:
 NEXT: fix <one precise instruction for the developer>"""
 
-LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate|handoff|folder)\b([^\n]*)(\n|$)", re.I)
+LEAD_MODE = re.compile(r"^[ \t]*MODE:\s*(answer|clarify|delegate|handoff|folder)\b([^\n]*)(\n|$)", re.I | re.M)
 LEAD_PLAN = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.S)
 LEAD_HANDOFF = re.compile(r"```qwen[^\n]*\n(.*?)```", re.S)
 LEAD_NEXT = re.compile(r"^\s*NEXT:\s*(done|fix)\b:?\s*(.*)$", re.I | re.M)
@@ -173,8 +173,10 @@ LEAD_NEXT = re.compile(r"^\s*NEXT:\s*(done|fix)\b:?\s*(.*)$", re.I | re.M)
 def parse_lead(text: str) -> tuple[str, str, str | None]:
     """Claude's lead reply: (mode, message to the user, plan JSON or Qwen's instructions, or None).
 
-    Without a MODE line it is an answer."""
-    m = LEAD_MODE.match(text)
+    Without a MODE line it is an answer. With its file tools Claude often narrates first ("I've mapped the
+    code; here's the plan."), so the MODE line counts wherever it starts a line, and the narration before it
+    is dropped."""
+    m = LEAD_MODE.search(text)
     mode = m.group(1).lower() if m else "answer"
     body = text[m.end():] if m else text
     plan = None
