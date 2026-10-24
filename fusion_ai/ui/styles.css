@@ -777,7 +777,13 @@ input[type=text]:focus, input[type=number]:focus, input[type=search]:focus, sele
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border)); box-shadow: var(--shadow-sm);
 }
 .avatar { border-radius: 8px; box-shadow: 0 2px 8px color-mix(in srgb, currentColor 0%, rgba(0, 0, 0, .12)); }
-.avatar.qwen { background: linear-gradient(135deg, var(--qwen), color-mix(in srgb, var(--qwen) 70%, #3b82f6)); }
+/* Qwen: an ink tile that flips with the theme (dark on light, light on dark) and an ember dot for "on your PC".
+   Neutral next to Claude's orange tile, and in the Ember palette in both themes. */
+.avatar.qwen { position: relative; overflow: visible; color: var(--bg);
+  background: linear-gradient(145deg, var(--text), color-mix(in srgb, var(--text) 82%, var(--accent))); }
+.avatar.qwen svg { width: 15px; height: 15px; }
+.avatar.qwen::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--grad); box-shadow: 0 0 0 2px var(--bg); }
 .avatar.claude { background: linear-gradient(135deg, var(--claude), var(--accent-2)); }
 .ai-head { letter-spacing: -.005em; }
 .typing span { background: var(--grad); }

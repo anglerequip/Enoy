@@ -135,7 +135,7 @@ DEFAULTS: dict[str, Any] = {
         "claude_web": True,             # Claude may use Claude Code's own WebSearch and WebFetch for live questions.
         "agent": True,                  # Qwen works as an agent: reads, searches, edits and runs tools in a loop.
         "agent_apply": True,            # Agent edits are written at once (backups, one Undo per turn). Off: one proposal at the end.
-        "agent_max_steps": 14,          # Tool rounds per agent turn.
+        "agent_max_steps": 24,          # Tool rounds per agent turn (finding code in a big project takes several).
         "claude_enoy_mcp": False,       # Claude calls Enoy's tools itself (MCP). Needs Claude Code without --safe-mode;
                                         # off: Enoy reads the PC facts first and puts them in Claude's request.
     },

@@ -44,10 +44,12 @@ const $ = id => document.getElementById(id);
 function md(text, streaming = false) { return streaming ? MD.render(text, true) : MD.cached(text); }
 
 function clock(ts) { return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+// Qwen's mark: a "Q" drawn as a ring with a tail, in the tile's ink color (the tile flips with the theme).
+const QWEN_MARK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="11.5" r="6.8"/><path d="M13.2 13.6 18.4 19.6"/></svg>`;
 function avatar(b) {
   if (b === "team") return `<span class="avatar team">◆</span>`;
   if (b === "enoy") return `<img class="avatar enoy" src="/static/logo.svg" alt="">`;
-  return `<span class="avatar ${b === "claude" ? "claude" : "qwen"}">${b === "claude" ? "✳" : "Q"}</span>`;
+  return b === "claude" ? `<span class="avatar claude">✳</span>` : `<span class="avatar qwen">${QWEN_MARK}</span>`;
 }
 
 let toastTimer;
@@ -477,6 +479,16 @@ function statusHtml(t) {
       <div class="row"><button class="btn accent" data-action="claude-yes">Send to Claude</button>
         <button class="btn" data-action="claude-no">Keep it with Qwen</button>
         <button class="btn ghost small" data-action="claude-preview">See exactly what is sent</button></div></div>`;
+  }
+  if (state.pending_folder && !["running", "queued"].includes(t.status)) {
+    const f = state.pending_folder;
+    return `<div class="card accent">
+      <div class="card-title">${FOLDER_ICON} Work in ${esc(f.is_enoy ? "Enoy's own source code" : f.name)}?</div>
+      ${f.reason ? `<div class="card-sub">${esc(f.reason)}</div>` : ""}
+      <div class="small"><code>${esc(f.path)}</code></div>
+      <div class="small">Enoy moves this chat to that folder and continues with your last message there.${f.is_enoy ? " Changes to Enoy itself take effect after you restart Enoy; Undo restores the files." : " Changes there can be undone."}</div>
+      <div class="row"><button class="btn accent" data-action="folder-yes">Move and continue</button>
+        <button class="btn" data-action="folder-no">Stay here</button></div></div>`;
   }
   if (t.status === "failed") {
     return `<div class="card bad"><div class="card-title">Something went wrong</div>
@@ -1218,6 +1230,15 @@ const actions = {
   "copy-code": el => { const pre = el.closest(".codeblock").querySelector("pre"); copy(pre.textContent); },
   "copy-msg": el => { const m = S.chat.messages.find(x => x.id === Number(el.dataset.id)); if (m) copy(m.content); },
   "ask-claude": () => chatAction("ask-claude"),
+  "folder-no": () => chatAction("folder", { accept: false }),
+  "folder-yes": () => guarded(async () => {
+    // The chat (or, if it already changed files here, a new chat) now lives in the other folder: follow it there.
+    const task = (await api("POST", `/api/tasks/${S.chat.task.id}/folder`, { accept: true })).task;
+    await loadProjects();
+    await useProject(task.project_id);
+    await loadChat(task.id);
+    renderAll(true);
+  }),
   "claude-yes": () => chatAction("claude/approve"),
   "claude-no": () => chatAction("claude/decline"),
   "claude-preview": () => guarded(async () => {

@@ -13,6 +13,7 @@ blocked ones never run.
 from __future__ import annotations
 
 import fnmatch
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -130,8 +131,33 @@ def _read_file(args: dict, ctx: ToolContext) -> dict:
 
 def _search_code(args: dict, ctx: ToolContext) -> dict:
     files = _files(ctx)
-    hits = files.ws.search(args["query"], max_results=int(args.get("max_results") or 40))
-    return {"query": args["query"], "matches": [{"path": h["path"], "line": h["line"], "text": h["text"]} for h in hits]}
+    limit = int(args.get("max_results") or 40)
+    hits = files.ws.search(args["query"], max_results=limit)
+    out = {"query": args["query"], "matches": [{"path": h["path"], "line": h["line"], "text": h["text"]} for h in hits]}
+    # Models often search several words at once ("ollama ready qwen ready"). When the exact phrase finds
+    # little, lines holding most of the words follow, best first.
+    words = sorted(set(re.findall(r"[\w.-]{3,}", args["query"].lower())))
+    if len(hits) < limit and len(words) > 1:
+        need = max(2, (len(words) + 1) // 2)
+        seen = {(h["path"], h["line"]) for h in hits}
+        extra = []
+        for rel, info in files.ws.index.items():
+            if info.size > 1_000_000:
+                continue
+            try:
+                text = (files.ws.root / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for n, line in enumerate(text.splitlines(), 1):
+                low = line.lower()
+                score = sum(w in low for w in words)
+                if score >= need and (rel, n) not in seen:
+                    extra.append((-score, rel, n, line.strip()[:200]))
+        extra.sort()
+        out["matches"] += [{"path": p, "line": n, "text": t} for _, p, n, t in extra[:limit - len(hits)]]
+        if extra and not hits:
+            out["note"] = "No line has the exact phrase; these lines contain most of its words."
+    return out
 
 
 def _edit_file(args: dict, ctx: ToolContext) -> dict:

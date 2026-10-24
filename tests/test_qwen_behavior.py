@@ -185,9 +185,9 @@ def test_empty_project_folder_gets_a_clear_note(orc_factory, tmp_path):
     empty = tmp_path / "annat enoy"
     empty.mkdir()
     orc = orc_factory(qwen=["This folder is empty."])
-    task = orc.start_task(open_project(orc, empty), "rebuild the header of this application")
+    task = orc.start_task(open_project(orc, empty), "rebuild the header of my website")
     notes = [e["text"] for e in orc.db.events(task["id"]) if e["type"] == "note"]
-    assert any("is empty" in n and "Open folder" in n for n in notes)
+    assert any("is empty" in n and "move the chat to that folder" in n for n in notes)
     assert "is empty" in system_of(orc.backends[LOCAL].requests[0])
     t = orc.db.get_task(task["id"])
     assert t["kind"] == "edit" and t["status"] == "completed" and t["local_attempts"] == 1  # Not retried or escalated.

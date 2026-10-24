@@ -61,10 +61,12 @@ create it."""
 
 CLAUDE_EMPTY_FOLDER = """\
 The project folder ({path}) is empty: it has no files. If the user asks to change
-existing code (Enoy itself, "this app", "my script"), do not plan or write changes:
-say in one or two sentences that this folder is empty and that they can open the
-folder that holds the code with "Open folder…" in Enoy. Only create new files here
-when the user asks for something new."""
+existing code (Enoy itself, "this app", "my script"), do not plan or write changes
+here and do not tell the user to open the folder themselves: choose MODE: folder
+with the folder that holds the code (Enoy's own source is listed below). If you do
+not know where it is and handoff is available, hand off to Qwen: it can search this
+PC for folders and ask to move the chat. Only create new files here when the user
+asks for something new."""
 
 CONVERSATION_NOTE = """\
 Conversation so far in this chat (oldest first). These messages were already
@@ -106,6 +108,8 @@ already handled, so do not repeat their answers. Start your reply with exactly o
 MODE: answer    (you answer yourself: questions, explanations, brainstorming, advice, short snippets)
 MODE: clarify   (a wrong guess would be costly: ask at most two short questions)
 {handoff_mode}MODE: delegate  (files in the project must change) {delegate_note}
+MODE: folder <full path>   (the request is about code in another folder, such as Enoy's own
+                source: Enoy asks the user to move this chat there, then you continue there)
 Then write your message to the user in Markdown. For delegate, say in one or two
 sentences what the team will do, then add the plan as one JSON block:
 ```json
@@ -146,7 +150,8 @@ Do not write the answer itself here.
 Qwen's reply goes to the user as it is, labeled Qwen, so put everything it needs in
 the instructions; it also sees the recent chat."""
 
-LEAD_NO_DELEGATE = "Not possible in this chat: no project folder is open, so never choose delegate."
+LEAD_NO_DELEGATE = ("Not possible in this chat: no project folder is open, so never choose delegate; for work on "
+                    "code, choose folder.")
 
 LEAD_REVIEW_INSTRUCTIONS = """\
 Your team finished the work you planned. Below are the results Enoy recorded:
@@ -159,7 +164,7 @@ NEXT: done
 or, only if a clear defect remains that the team can fix:
 NEXT: fix <one precise instruction for the developer>"""
 
-LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate|handoff)\b[^\n]*(\n|$)", re.I)
+LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate|handoff|folder)\b([^\n]*)(\n|$)", re.I)
 LEAD_PLAN = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.S)
 LEAD_HANDOFF = re.compile(r"```qwen[^\n]*\n(.*?)```", re.S)
 LEAD_NEXT = re.compile(r"^\s*NEXT:\s*(done|fix)\b:?\s*(.*)$", re.I | re.M)
@@ -177,6 +182,8 @@ def parse_lead(text: str) -> tuple[str, str, str | None]:
     if mode == "delegate" and fence:
         plan = fence.group(1)
         body = body[:fence.start()] + body[fence.end():]
+    if mode == "folder":  # plan = the folder's path, written on the MODE line.
+        plan = m.group(2).strip().strip("`\"'<>: ") or None
     if mode == "handoff":  # plan = Qwen's instructions; without the block, the whole reply is the instructions.
         block = LEAD_HANDOFF.search(body)
         if block:

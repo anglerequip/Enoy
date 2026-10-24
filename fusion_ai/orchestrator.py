@@ -35,6 +35,7 @@ from . import patches
 from . import privacy
 from . import team as team_mod
 from . import tools as tools_mod
+from .tools import folders as folders_mod
 from .backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ChatResult
 from .project import PathError, Workspace, sha256_text
 from .redact import redact
@@ -509,9 +510,10 @@ class Orchestrator:
         )
         names = ", ".join(f.path for f in pack.files) or "none"
         self._event(task_id, "context", f"Selected {len(pack.files)} relevant file(s): {names}")
-        if not ctx.is_general(ws) and not ws.index:
-            self._event(task_id, "note", f"This project's folder ({ws.root}) is empty, so there is no code to read or "
-                        "change. To work on existing code, use Open folder… and pick the folder that holds it.")
+        if not ctx.is_general(ws) and not ws.index and not task["state"].get("empty_note"):
+            self.db.update_task_state(task_id, empty_note=True)  # Once per chat, not under every message.
+            self._event(task_id, "note", f"This chat's folder ({ws.root}) is empty. Ask about code anywhere on this PC "
+                        "(Enoy itself too) and Enoy offers to move the chat to that folder.")
         return pack
 
     def _analyze(self, task_id: int, objective: str, title: str) -> tuple[ctx.ContextPack, int]:
@@ -523,7 +525,7 @@ class Orchestrator:
 
     def _run_new(self, task_id: int) -> None:
         task = self.db.get_task(task_id)
-        if self._pc_request(task_id, task["objective"]):
+        if self._pc_request(task_id, task["objective"]) or self._enoy_request(task_id, task["objective"]):
             return
         task = self.db.get_task(task_id)
         state = task["state"]
@@ -598,7 +600,7 @@ class Orchestrator:
         self._local_loop(task_id, pack, reason=decision.reason)
 
     def _run_followup(self, task_id: int, text: str, backend: str | None) -> None:
-        if self._pc_request(task_id, text):
+        if self._pc_request(task_id, text) or self._enoy_request(task_id, text):
             return
         task = self.db.get_task(task_id)
         general = ctx.is_general(self.workspace(task["project_id"]))
@@ -757,6 +759,18 @@ class Orchestrator:
                 self._lead_handoff(task_id, pending, message, plan_text)
                 return
             mode = "answer"  # An empty handoff: Claude's words are the answer.
+        if mode == "folder":
+            if message:
+                self.db.add_message(task_id, "assistant", message, CLAUDE)
+                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
+            self._step_end(step_id, "completed", "Asked to work in another folder.")
+            self._complete(task_id, _first_line(message) or "Claude asked to work in another folder.")
+            if plan_text:
+                self._request_folder(task_id, plan_text, _first_line(message), CLAUDE)  # Says so if unusable.
+            else:
+                self._event(task_id, "note", "Claude asked for another folder but named none, so nothing was moved.",
+                            CLAUDE)
+            return
         if mode == "delegate":
             if ctx.is_general(ws) or not ws.index and not plan_text:
                 note = "Claude chose to delegate, but there is no project code to change here."
@@ -995,14 +1009,21 @@ class Orchestrator:
         num_ctx, _ = self._local_window()
         offer = None
         if num_ctx < 8192:  # A small window cannot hold every tool definition plus real work.
-            offer = (tools_mod.CORE_AGENT_TOOLS if files else set()) | tools_mod.select(text)
-        runner = self._tool_runner(task_id, LOCAL, offer, services={"files": files} if files else None)
+            offer = (tools_mod.CORE_AGENT_TOOLS if files else set()) | tools_mod.select(text) | tools_mod.FOLDER_TOOL_NAMES
+        folders = self._folder_service(task)
+        services = {"folders": folders, **({"files": files} if files else {})}
+        runner = self._tool_runner(task_id, LOCAL, offer, services=services)
         names = [t.name for t in runner.available()]
         if not names:
             runner = None
         budget = ctx.prompt_budget(*self._local_window())
         if general:
             where = "There is no project folder in this chat (general chat)."
+        elif not ws.index:
+            where = (f"This chat's folder ({ws.root}) is empty. When the user talks about existing code (\"these "
+                     "buttons\", \"the sidebar\", their app, Enoy itself), that code is NOT here: find it with "
+                     "find_folders and ask to move with switch_folder. Never start a new program here unless the "
+                     "user clearly asks for something new.")
         else:
             listing = ctx.file_list(ws, min(2500, budget // 8)) if hasattr(ctx, "file_list") else ""
             rules = "\n".join(f"{p}:\n{t[:1500]}" for p, t in ws.instructions()[:2])
@@ -1010,6 +1031,7 @@ class Orchestrator:
                      + (f"Project instructions:\n{rules}\n" if rules else "")
                      + ("Edits are written to disk at once (with backups; the user can undo the whole turn)."
                         if files and files.apply else "Edits are staged and shown to the user as one proposal at the end."))
+        where += "\n" + self._folder_context(folders)
         system = tools_mod.AGENT_SYSTEM.format(names=", ".join(names) or "none", context=where) if runner else \
             ctx.local_system_prompt(ws, pack, "ask")
         convo = self._conversation(task_id, limit=8)
@@ -1020,7 +1042,7 @@ class Orchestrator:
         try:
             if runner:
                 result = self._chat_local_tools(task_id, messages, "agent", step, runner, budget,
-                                                rounds=int(s.get("agent_max_steps", 14)))
+                                                rounds=int(s.get("agent_max_steps", 24)))
             else:
                 result = self._chat_local(task_id, messages, "ask", step)
         except BackendError as exc:
@@ -1054,6 +1076,8 @@ class Orchestrator:
             self._await_approval(task_id, ask=True)
             return
         self._complete(task_id, _first_line(result.text))
+        if folders.requested:
+            self._request_folder(task_id, folders.requested["path"], folders.requested["reason"], LOCAL)
 
     def _agent_finish_files(self, task_id: int, files: Any, partial: bool = False) -> str:
         """Record the agent's file changes as one change set (applied with Undo, or pending for review)."""
@@ -1142,6 +1166,7 @@ class Orchestrator:
         rounds = rounds or int(self.cfg.get("tools", {}).get("max_rounds", 5))
         per_result = max(2500, min(8000, budget // 3))
         spec_chars = len(json.dumps(specs))
+        nudged = False
         for n in range(rounds + 1):
             self._check_cancel(task_id)
             last = n == rounds
@@ -1150,6 +1175,14 @@ class Orchestrator:
                                                 "and say what you could not find out."))
             _fit_window(msgs, budget - spec_chars)
             result = self._chat_local(task_id, msgs, purpose, step_id, tools=None if last else specs)
+            if not result.tool_calls and not last and not nudged and _announces_more(result.text):
+                # "Now let me write the tests:" and then nothing: a small model stops when it means to go on.
+                nudged = True
+                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
+                msgs.append(ChatMessage("assistant", result.text))
+                msgs.append(ChatMessage("user", "Do that now with the tools; do not describe it. When everything "
+                                                "is done and checked, give your final answer."))
+                continue
             if not result.tool_calls or last:
                 if not result.text.strip():
                     raise BackendError("malformed", "Qwen called tools but gave no answer.")
@@ -1653,6 +1686,7 @@ class Orchestrator:
         if purpose in ("lead", "edit") and not ctx.is_general(ws) and not ws.index:
             parts.append(ctx.CLAUDE_EMPTY_FOLDER.format(path=ws.root))
         if purpose == "lead":
+            parts.append(self._folder_context(self._folder_service(task)))
             if not ctx.is_general(ws):
                 parts.append(ctx.memory_block(self.db.memory(task["project_id"], None, 30)))
             parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
@@ -2335,6 +2369,30 @@ class Orchestrator:
         self._complete(task_id, text.splitlines()[0])
         return True
 
+    def _enoy_request(self, task_id: int, text: str) -> bool:
+        """A change to Enoy itself asked from a chat without its code: offer to move there, without a model.
+
+        Small models guess here (Qwen once started a new tkinter app in an empty folder), and asking Claude
+        costs a request, so Enoy recognises these itself. True when it offered the move."""
+        source = folders_mod.enoy_source()
+        task = self.db.get_task(task_id)
+        if task["state"].get("skip_enoy_check"):  # You chose "Stay here" for this message.
+            self.db.update_task_state(task_id, skip_enoy_check=False)
+            return False
+        if not source or not folders_mod.about_enoy_change(text):
+            return False
+        ws = self.workspace(task["project_id"])
+        if ws.index and not ctx.is_general(ws):
+            return False  # A real project is open: the request may well be about its code.
+        if not self._request_folder(task_id, source, "This is about Enoy itself, and its source code is in that "
+                                                     "folder.", "system"):
+            return False
+        self.db.add_message(task_id, "assistant", "This is a change to Enoy itself. Its source code is not in this "
+                            f"chat's folder but in `{source}`. Move the chat there and the work starts.", "enoy")
+        self.bus.publish({"type": "message_done", "task_id": task_id, "backend": "enoy"})
+        self._complete(task_id, "Offered to move this chat to Enoy's source code.")
+        return True
+
     def _pc_request(self, task_id: int, text: str) -> bool:
         """Handle a direct PC request typed by the user. Returns True if handled here."""
         intent = pc.detect(text)
@@ -2488,6 +2546,84 @@ class Orchestrator:
                 raise TaskError("Chats about a code folder stay with that folder: their changes belong to its files.")
         self.db.move_task(task_id, project_id)
         self._task_changed(task_id)
+        return self.db.get_task(task_id)
+
+    # Working in the right folder ------------------------------------------------------------
+
+    def _folder_service(self, task: dict) -> Any:
+        """What the folder tools and prompts know: this chat's folder, Enoy's own source, folders opened before."""
+        ws = self.workspace(task["project_id"])
+        known = [(p["name"], p["path"]) for p in self.db.list_projects()
+                 if p.get("kind", "folder") == "folder" and not self.is_default_project(p)][:10]
+        return tools_mod.FolderService("" if ctx.is_general(ws) else str(ws.root), known, folders_mod.enoy_source())
+
+    def _folder_context(self, svc: Any) -> str:
+        lines = ["Folders on this PC that you may need:"]
+        if svc.source:
+            lines.append(f"- Enoy's own source code (this app: its window, sidebar, status dots, chat, settings, "
+                         f"styles; Python in fusion_ai/, the interface in fusion_ai/ui/): {svc.source}")
+        lines += [f"- {name}: {path}" for name, path in svc.known
+                  if os.path.normcase(path) not in (os.path.normcase(svc.source), os.path.normcase(svc.current))]
+        lines.append(f"This chat works in: {svc.current or 'no folder (general chat)'}. Work on code in another "
+                     "folder by moving the chat there (the user confirms first).")
+        return "\n".join(lines)
+
+    def _request_folder(self, task_id: int, path: str, reason: str, by: str) -> bool:
+        """A model asked to move this chat to another folder: show the user a card. False if the folder is unusable."""
+        task = self.db.get_task(task_id)
+        svc = self._folder_service(task)
+        try:
+            target = folders_mod.check_target(path, svc.current)
+        except tools_mod.ToolError as exc:
+            self._event(task_id, "note", f"{BACKEND_LABEL.get(by, 'Enoy')} suggested another folder, but {exc}", by)
+            return False
+        users = [m["content"] for m in self.db.messages(task_id) if m["role"] == "user"]
+        self.db.update_task_state(task_id, pending_folder={
+            "path": str(target), "name": target.name, "reason": reason, "by": by,
+            "is_enoy": bool(svc.source) and os.path.normcase(str(target)) == os.path.normcase(svc.source),
+            "text": users[-1] if users else task["objective"]})
+        self._act(task_id, "folder.requested", f"{BACKEND_LABEL.get(by, 'Enoy')} asks to move this chat to {target}.", by,
+                  "analysis", reason=reason or "The request is about code in that folder.", outcome="waiting")
+        self._task_changed(task_id)
+        return True
+
+    def answer_folder(self, task_id: int, accept: bool) -> dict:
+        """Your answer to a folder request: move the chat there and continue, or stay."""
+        task = self._require(task_id)
+        req = task["state"].get("pending_folder")
+        if not req:
+            raise TaskError("Nothing is waiting for a folder decision.")
+        if task["status"] in ("running", "queued", "awaiting_claude", "awaiting_approval"):
+            raise TaskError("This chat is still working or waiting for you.")
+        self.db.update_task_state(task_id, pending_folder=None)
+        if not accept:
+            self._act(task_id, "folder.declined", f"You kept this chat in its folder (not moved to {req['path']}).", "user")
+            if req.get("by") == "system":
+                # Enoy offered the move before any model saw the message: answer it here after all.
+                self.db.update_task_state(task_id, skip_enoy_check=True)
+                self._set(task_id, status="running")
+                self._cancel[task_id] = threading.Event()
+                self._spawn(self._guard, task_id, lambda tid: self._run_followup(tid, req["text"], None))
+            else:
+                self._task_changed(task_id)
+            return self.db.get_task(task_id)
+        target = self.open_project(req["path"])
+        if self.db.list_changesets(task_id):
+            # Changes made here belong to this folder's files (and its Undo): the work continues in a new chat.
+            new = self.start_task(target["id"], req["text"])
+            self._event(task_id, "note", f"Continued in a new chat in {req['path']}, because this chat already changed "
+                                         "files in its own folder.")
+            self._task_changed(task_id)
+            return self.db.get_task(new["id"])
+        self.db.move_task(task_id, target["id"])
+        # A resumed Claude session still believes it is in the old folder: start fresh with the new project.
+        self.db.update_task_state(task_id, claude_session=None, claude_sent={}, empty_note=False)
+        self._act(task_id, "folder.moved", f"Moved this chat to {req['path']} and continued there.", "user",
+                  reason=req.get("reason", ""))
+        self._event(task_id, "status", f"Moved to {req['path']}.")
+        self._set(task_id, status="running")
+        self._cancel[task_id] = threading.Event()
+        self._spawn(self._guard, task_id, lambda tid: self._run_followup(tid, req["text"], None))
         return self.db.get_task(task_id)
 
     CHAT_TITLE_MAX = 200
@@ -2816,6 +2952,20 @@ def missing_tool(output: str) -> str:
         if m:
             return m.group(1)
     return ""
+
+
+_MORE = re.compile(r"^(now |next,? |first,? )?(let me(?! know)|let's|i'll now|i will now|i'm going to)\b", re.I)
+
+
+def _announces_more(text: str) -> bool:
+    """The reply ends by announcing a next step ("Now let me write the tests:") instead of finishing.
+
+    "Let me know if..." and offers ("If you want, I'll add tests.") are endings, not announcements."""
+    tail = (text or "").strip()
+    if not tail:
+        return False
+    last = re.split(r"(?<=[.!?])\s+|\n", tail)[-1].strip()
+    return tail.endswith(":") or bool(_MORE.match(last))
 
 
 def _fit_window(msgs: list[ChatMessage], budget: int) -> None:

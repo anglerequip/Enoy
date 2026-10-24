@@ -342,11 +342,11 @@ def test_follow_up_sends_claude_the_replies_it_did_not_write(orc_factory, tmp_pa
     orc = lead_orc(orc_factory, qwen=["Doing well! Trollhattan: overcast, 10.2 C (SMHI)."],
                    claude=["MODE: answer\nThis folder is empty; open the folder with Enoy's code."])
     task = orc.start_task(open_project(orc, empty), "hey, how are you?")
-    orc.send_message(task["id"], "Add an Ollama status dot to the app's sidebar.")
+    orc.send_message(task["id"], "Add a dark mode toggle to my website's sidebar.")
     prompt = orc.backends[CLAUDE].requests[0].messages[-1].content
     assert "First message of this chat:\nhey, how are you?" in prompt
     assert ctx.CONVERSATION_NOTE in prompt and "[Qwen]\nDoing well! Trollhattan: overcast" in prompt
-    assert prompt.count("Add an Ollama status dot") == 1  # Only as the follow-up, not also in the conversation.
+    assert prompt.count("Add a dark mode toggle") == 1  # Only as the follow-up, not also in the conversation.
     assert ctx.CLAUDE_EMPTY_FOLDER.format(path=empty) in prompt
     assert orc.db.get_task(task["id"])["status"] == "completed"
 

@@ -628,6 +628,11 @@ class App:
             self.routes.append(("POST", re.compile(rf"^/api/tasks/(\d+)/{action}$"),
                                 (lambda f: lambda q, body, tid: {"result": f(int(tid))})(fn)))
 
+        @r("POST", r"/api/tasks/(\d+)/folder")
+        def folder(q, body, tid):
+            """Your answer to "Move this chat to <folder>?": accept moves it and continues there."""
+            return {"task": orc.answer_folder(int(tid), bool(body.get("accept")))}
+
         @r("POST", r"/api/tasks/(\d+)/fix")
         def fix(q, body, tid):
             return {"task": orc.fix_failure(int(tid), int(body["run_id"]))}

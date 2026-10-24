@@ -12,24 +12,26 @@ import re
 from .registry import Tool, ToolError, ToolResult, ToolRunner, clear_cache, validate
 from . import search
 from .agent import AGENT_TOOLS, AgentFiles
+from .folders import FOLDER_TOOLS, FolderService
 from .search import WEB_SEARCH
 from .system import SYSTEM_TOOLS
 from .weather import WEATHER
 from .web import FETCH_PAGE
 
 __all__ = ["Tool", "ToolError", "ToolResult", "ToolRunner", "clear_cache", "validate", "registry", "wants_tools",
-           "TOOL_SYSTEM", "CLAUDE_WEB_NOTE", "CLAUDE_ENOY_NOTE", "select", "about_this_pc"]
+           "FolderService", "TOOL_SYSTEM", "CLAUDE_WEB_NOTE", "CLAUDE_ENOY_NOTE", "select", "about_this_pc"]
 
 
 WEB_TOOLS = {WEATHER.name, WEB_SEARCH.name, FETCH_PAGE.name}
 PC_TOOLS = {t.name for t in SYSTEM_TOOLS}
 WORKSPACE_TOOLS = {t.name for t in AGENT_TOOLS}
 CORE_AGENT_TOOLS = {"list_files", "read_file", "search_code", "edit_file", "write_file", "run_command"}
+FOLDER_TOOL_NAMES = {t.name for t in FOLDER_TOOLS}
 
 
 def registry() -> dict[str, Tool]:
     """Every tool Enoy can run. Shared by all models; what each may use is decided per call."""
-    return {t.name: t for t in (WEATHER, WEB_SEARCH, FETCH_PAGE, *SYSTEM_TOOLS, *AGENT_TOOLS)}
+    return {t.name: t for t in (WEATHER, WEB_SEARCH, FETCH_PAGE, *SYSTEM_TOOLS, *AGENT_TOOLS, *FOLDER_TOOLS)}
 
 
 _LIVE = re.compile(
@@ -110,6 +112,8 @@ AGENT_SYSTEM = """You are Enoy's agent, running on the user's own PC. Enoy runs 
 Work like a capable engineer and assistant, not like a chatbot:
 - Do the task. Use the tools to look things up, change files, run the tests and check the result yourself.
 - Never ask the user for something a tool can find (file contents, project layout, hardware, weather, docs).
+- When the request is about code that is not in this chat's folder (Enoy itself, another project), do not give
+  up and do not ask the user to open it: use find_folders, then switch_folder with the right folder.
 - Ask a question only when the request is truly ambiguous and a wrong guess would waste real work.
 - Files: list_files or search_code to find things, read_file before changing a file, then edit_file with
   old_text copied exactly from the file (without the line numbers). Use write_file for new files.

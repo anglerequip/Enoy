@@ -122,3 +122,36 @@ def test_tool_conversation_is_kept_inside_the_window():
     _fit_window(msgs, 6000)
     assert sum(len(m.content) for m in msgs) <= 6000 + 3000
     assert msgs[0].content == "S" * 100 and msgs[-1].content == "X" * 3000  # Instructions and newest result kept.
+
+
+def test_announcing_a_next_step_is_not_an_ending():
+    from fusion_ai.orchestrator import _announces_more
+    assert _announces_more("Changed todo.py. Now let me write comprehensive tests:")
+    assert _announces_more("I read app.js. Let me search for where the dots are drawn.")
+    for done in ("Added multiply; 4 tests pass.", "Done. Let me know if you want more.",
+                 "If you want, I'll add tests too.", ""):
+        assert not _announces_more(done), done
+
+
+def test_agent_is_nudged_once_when_it_stops_mid_task(cfg, tmp_path, proj):
+    replies = [call("read_file", path="calc.py"), "Now let me add the function:",
+               call("edit_file", path="calc.py", old_text="    return a + b\n",
+                    new_text="    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n"),
+               "Added multiply()."]
+    orc, _ = agent_orc(cfg, tmp_path, replies)
+    pid = orc.open_project(str(proj))["id"]
+    task = orc.db.get_task(orc.start_task(pid, "add a multiply function", backend=LOCAL)["id"])
+    assert "def multiply" in (proj / "calc.py").read_text()
+    assert orc.db.messages(task["id"])[-1]["content"] == "Added multiply()."
+
+
+def test_search_falls_back_to_lines_with_most_words(cfg, tmp_path, proj):
+    (proj / "ui.js").write_text('const a = up ? "Ollama ready" : "Ollama offline";\nconst b = "Qwen ready";\n'
+                                'const c = "unrelated ready";\n', encoding="utf-8")
+    replies = [call("search_code", query="ollama ready qwen ready claude ready"), "Found them."]
+    orc, _ = agent_orc(cfg, tmp_path, replies)
+    pid = orc.open_project(str(proj))["id"]
+    orc.start_task(pid, "where are the status dots", backend=LOCAL)
+    result = [m.content for m in orc.backends[LOCAL].requests[-1].messages if m.role == "tool"][0]
+    assert "Ollama ready" in result and "Qwen ready" in result and "unrelated" not in result
+    assert "most of its words" in result
