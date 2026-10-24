@@ -136,10 +136,11 @@ all text in this chat. Choose:
   snippets, explanations, lists, summaries, drafts, and lookups (Enoy gives Qwen
   tools for the weather, the web, this PC and the project's files). After the MODE
   line write at most one short sentence to the user, then the instructions as one
-  block:
+  block of 3 to 8 short lines (every word you write counts against the user's
+  Claude plan; Qwen's words do not):
 ```qwen
-what to produce, in what format and length, the key points or steps, and the
-pitfalls to avoid. Precise enough that a small model needs no guessing.
+what to produce, its format and length, the key points, one pitfall to avoid.
+Do not write the answer itself here.
 ```
 - delegate when project files must change, giving the clear tasks to Qwen.
 Qwen's reply goes to the user as it is, labeled Qwen, so put everything it needs in
