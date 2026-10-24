@@ -105,7 +105,7 @@ Decide how to handle the user's latest message; earlier messages in this chat ar
 already handled, so do not repeat their answers. Start your reply with exactly one line:
 MODE: answer    (you answer yourself: questions, explanations, brainstorming, advice, short snippets)
 MODE: clarify   (a wrong guess would be costly: ask at most two short questions)
-MODE: delegate  (files in the project must change) {delegate_note}
+{handoff_mode}MODE: delegate  (files in the project must change) {delegate_note}
 Then write your message to the user in Markdown. For delegate, say in one or two
 sentences what the team will do, then add the plan as one JSON block:
 ```json
@@ -120,7 +120,30 @@ Plan rules: 1 to {max_tasks} tasks, as few as keep each one focused. Give every
 clear, routine task to Qwen ("model": "qwen") and describe it so precisely that a
 small model needs no guessing. Use "model": "claude" only for a part that needs
 your reasoning. Tasks that change the same file depend on each other. Name only
-files that exist or must be created. Do not delegate questions or brainstorming."""
+files that exist or must be created. Do not delegate questions or brainstorming.{style_note}"""
+
+LEAD_HANDOFF_MODE = "MODE: handoff   (Qwen writes the reply from your instructions)\n"
+
+CLAUDE_FIRST_NOTE = """
+
+How this chat works (Claude first): you talk with the user and decide; Qwen, the
+local model, does most of the writing. Aim for Qwen to write at least {share}% of
+all text in this chat. Choose:
+- answer only for a short reply (a greeting, a quick fact, a decision, under about
+  120 words) or when the reply needs your reasoning: subtle bugs, architecture,
+  security, tricky maths, judging trade-offs.
+- handoff for everything else Qwen can write from clear instructions: code
+  snippets, explanations, lists, summaries, drafts, and lookups (Enoy gives Qwen
+  tools for the weather, the web, this PC and the project's files). After the MODE
+  line write at most one short sentence to the user, then the instructions as one
+  block:
+```qwen
+what to produce, in what format and length, the key points or steps, and the
+pitfalls to avoid. Precise enough that a small model needs no guessing.
+```
+- delegate when project files must change, giving the clear tasks to Qwen.
+Qwen's reply goes to the user as it is, labeled Qwen, so put everything it needs in
+the instructions; it also sees the recent chat."""
 
 LEAD_NO_DELEGATE = "Not possible in this chat: no project folder is open, so never choose delegate."
 
@@ -135,13 +158,16 @@ NEXT: done
 or, only if a clear defect remains that the team can fix:
 NEXT: fix <one precise instruction for the developer>"""
 
-LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate)\b[^\n]*(\n|$)", re.I)
+LEAD_MODE = re.compile(r"^\s*MODE:\s*(answer|clarify|delegate|handoff)\b[^\n]*(\n|$)", re.I)
 LEAD_PLAN = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.S)
+LEAD_HANDOFF = re.compile(r"```qwen[^\n]*\n(.*?)```", re.S)
 LEAD_NEXT = re.compile(r"^\s*NEXT:\s*(done|fix)\b:?\s*(.*)$", re.I | re.M)
 
 
 def parse_lead(text: str) -> tuple[str, str, str | None]:
-    """Claude's lead reply: (mode, message to the user, plan JSON or None). Without a MODE line it is an answer."""
+    """Claude's lead reply: (mode, message to the user, plan JSON or Qwen's instructions, or None).
+
+    Without a MODE line it is an answer."""
     m = LEAD_MODE.match(text)
     mode = m.group(1).lower() if m else "answer"
     body = text[m.end():] if m else text
@@ -150,6 +176,13 @@ def parse_lead(text: str) -> tuple[str, str, str | None]:
     if mode == "delegate" and fence:
         plan = fence.group(1)
         body = body[:fence.start()] + body[fence.end():]
+    if mode == "handoff":  # plan = Qwen's instructions; without the block, the whole reply is the instructions.
+        block = LEAD_HANDOFF.search(body)
+        if block:
+            plan = block.group(1).strip()
+            body = body[:block.start()] + body[block.end():]
+        else:
+            plan, body = body.strip(), ""
     return mode, body.strip(), plan
 
 

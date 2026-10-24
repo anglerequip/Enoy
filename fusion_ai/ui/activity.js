@@ -253,6 +253,7 @@ function routingHtml(r) {
       <div class="q" style="width:${pct}%"></div><div class="c" style="width:${100 - pct}%"></div><div class="tgt" style="left:${r.target_qwen_pct}%"></div></div>` : "";
   return `<section class="ac-sec"><h3>Model share</h3>
     ${r.counted ? `<div class="small">Last ${r.counted} finished: <span class="who qwen">Qwen ${r.qwen}</span> (${pct}%) · <span class="who claude">Claude ${r.claude}</span> (${100 - pct}%) · target Qwen ${r.target_qwen_pct}%</div>` : ""}
+    ${r.work && r.work.qwen_pct != null ? `<div class="small">Writing: <span class="who qwen">Qwen ${r.work.qwen_pct}%</span> · <span class="who claude">Claude ${100 - r.work.qwen_pct}%</span> (${(r.work.qwen_tokens + r.work.claude_tokens).toLocaleString()} tokens${r.work.estimated ? ", partly estimated" : ""})</div>` : ""}
     ${bar}<div class="small muted">${esc(r.note)}</div>
     ${r.claude ? `<div class="small muted">Claude: ${r.direct} routed directly · ${r.escalated} escalated after Qwen failed (${r.escalations_completed} then completed) · ${r.manual} picked by you</div>` : ""}</section>`;
 }

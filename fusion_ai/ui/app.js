@@ -602,7 +602,11 @@ function composerNote() {
   const lo = localOnlyReason();
   if (lo) return `🔒 Local only: ${esc(lo)}. Nothing here is sent to Claude.`;
   if (S.model === "claude") return "Claude uses your Claude plan.";
-  if (S.model === "auto" && S.status && S.status.lead) return "Claude leads: it reads your message first and hands routine coding to Qwen on your PC. Uses your Claude plan.";
+  if (S.model === "auto" && S.status && S.status.lead && claudeOk()) {
+    return S.status.lead_style === "balanced"
+      ? "Claude leads: it reads your message first and hands routine coding to Qwen on your PC. Uses your Claude plan."
+      : "Claude first: Claude reads every message and hands most of the writing to Qwen on your PC. Uses your Claude plan.";
+  }
   return "Qwen runs on your PC. Claude only gets the relevant files (secrets removed) when needed, and asks first.";
 }
 
@@ -802,6 +806,10 @@ async function settingsModels() {
     <div class="set-section"><h3>${avatar("claude")} Claude leads</h3>
       <div class="small muted">Claude reads each new message first. It answers questions and brainstorms itself, asks when a wrong guess would be costly, and for code changes writes a plan: Qwen does the routine coding on your PC, QA runs your real checks, a reviewer checks the diff, and Claude checks the results and writes the answer. Each Claude request uses your Claude plan; "Ask before sending to Claude" still applies. Picking Qwen or Claude in the chat skips the lead for that message. If Claude is unavailable, Enoy says so and follows "If Claude is unavailable".</div>
       ${toggleRow("lead", "enabled", "Claude leads new messages", "Off: the router sends each message to Qwen or Claude as before.")}
+      <div class="grid2"><label class="field">How Claude leads<select data-cfg="lead.style">${Object.entries(LEAD_STYLES).map(([k, v]) => `<option value="${k}" ${k === (c.lead.style || "claude_first") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+        <span class="small">${(c.lead.style || "claude_first") === "claude_first"
+          ? `Every message starts with Claude. Claude talks and plans, and hands the writing it does not need to do itself to Qwen, aiming for Qwen to write ${c.routing.target_local_share}% of the text (the target share under Smart routing). Claude checks the team's results only when something failed.`
+          : "Casual messages go straight to Qwen; Claude answers everything else itself and checks the team's results."}</span></label></div>
       ${toggleRow("lead", "final_review", "Claude checks the team's results", "One more Claude request per delegated task. Off: Enoy's own summary of the results is the answer.")}
       <div class="grid2">${inputRow("lead", "max_followups", "Fix rounds Claude may order", "After its check, before the result is handed to you.", "number")}</div></div>
     <div class="set-section"><h3>${avatar("team")} TEAM ROLES</h3>
@@ -859,6 +867,7 @@ async function settingsModels() {
 }
 
 const AGGRESSIVENESS = { prefer_qwen: "Prefer Qwen", balanced: "Balanced", prefer_claude: "Prefer Claude" };
+const LEAD_STYLES = { claude_first: "Claude first, Qwen does most of the writing", balanced: "Balanced (casual messages go to Qwen)" };
 
 function smartRoutingHtml(c) {
   const r = c.routing;
@@ -884,7 +893,9 @@ async function loadRoutingStats() {
   try { s = await api("GET", "/api/routing/stats"); } catch (e) { return; }
   const el = $("routing-stats");
   if (!el) return;
-  el.innerHTML = s.counted ? `<b>Last ${s.counted} finished task(s):</b> Qwen ${s.qwen} (${s.qwen_pct}%), Claude ${s.claude} (${100 - s.qwen_pct}%). Target: Qwen ${s.target_qwen_pct}%.<br>${esc(s.note)}<br><span class="muted">${esc(s.rule)}</span>`
+  const w = s.work || {};
+  const written = w.qwen_pct == null ? "" : `<br><b>Writing:</b> Qwen ${w.qwen_tokens.toLocaleString()} tokens (${w.qwen_pct}%), Claude ${w.claude_tokens.toLocaleString()} (${100 - w.qwen_pct}%)${w.estimated ? " (partly estimated)" : ""}.`;
+  el.innerHTML = s.counted ? `<b>Last ${s.counted} finished task(s):</b> Qwen ${s.qwen} (${s.qwen_pct}%), Claude ${s.claude} (${100 - s.qwen_pct}%). Target: Qwen ${s.target_qwen_pct}%.${written}<br>${esc(s.note)}<br><span class="muted">${esc(s.rule)} ${esc(w.rule || "")}</span>`
     : `No finished tasks yet. ${esc(s.rule)}`;
 }
 

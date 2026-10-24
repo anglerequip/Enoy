@@ -81,7 +81,7 @@ class App:
                     "routing": orc.cfg["routing"], "config_warnings": self.cfg_warnings,
                     "privacy_never": orc.cfg["privacy"]["cloud_policy"] == "never",
                     "team_default": orc.cfg["team"]["default_new_chats"],
-                    "lead": orc.cfg["lead"]["enabled"],
+                    "lead": orc.cfg["lead"]["enabled"], "lead_style": orc.cfg["lead"].get("style", "claude_first"),
                     "claude_last_verified": db.kv_get("claude_last_verified")}
 
         @r("GET", "/api/config")

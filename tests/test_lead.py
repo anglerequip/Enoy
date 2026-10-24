@@ -26,6 +26,7 @@ def real_checks(monkeypatch):
 
 def lead_orc(orc_factory, qwen=None, claude=None, **kw):
     kw.setdefault("lead__enabled", True)
+    kw.setdefault("lead__style", "balanced")  # The Claude-first tests below set claude_first themselves.
     kw.setdefault("permissions__auto_apply_patches", True)
     return orc_factory(qwen=qwen, claude=claude, **kw)
 

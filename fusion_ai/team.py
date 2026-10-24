@@ -1086,6 +1086,11 @@ class TeamRunner:
         orc = self.orc
         run = self.run
         why = "the final check by Claude is off in Settings" if not orc.cfg["lead"]["final_review"] else self._claude_allowed()
+        clean = status == "completed" and run.get("verification") != "failed" and not any(
+            t["status"] in ("failed", "blocked") for t in tasks)
+        if not why and clean and orc._claude_first():
+            # Claude first saves Claude for decisions: a run where everything finished needs no second look.
+            why = "Claude first checks only runs with problems, and every task finished"
         if why:
             orc._act(self.task_id, "lead.review_skipped", f"Claude did not check the results: {why}.", "system", "team")
             self._save_run(lead_review_note=f"Claude did not check the results: {why}.")

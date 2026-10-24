@@ -106,6 +106,7 @@ class Orchestrator:
         self.memory: MemorySupervisor | None = None  # Started by the app; tests run without it.
         self._stop_reason: dict[int, str] = {}
         self._partial: dict[int, str] = {}  # Text streamed so far, kept if the user stops the answer.
+        self._work_lock = threading.Lock()  # Qwen and Claude can finish at once in a team run.
         self._cancel: dict[int, threading.Event] = {}
         self._run_cancel: dict[int, threading.Event] = {}
         self._local_lock = threading.Lock()
@@ -688,7 +689,7 @@ class Orchestrator:
         the lead is off, you picked a model yourself, or the message is casual enough for Qwen alone."""
         if not self.cfg["lead"]["enabled"] or backend or state.get("override"):
             return False, ""
-        if text and self._casual(text, cls):
+        if text and not self._claude_first() and self._casual(text, cls):
             self._act(task_id, "lead.skipped", "Casual message: Qwen answers directly, Claude is not asked.",
                       "system", "analysis", reason="Short chat or a simple question; no code changes, research or "
                       "hard reasoning.", outcome="local")
@@ -699,6 +700,10 @@ class Orchestrator:
             return False, "zero-paid mode is on, so Claude is never used automatically"
         ok, why = self.claude_available()
         return (True, "") if ok else (False, f"Claude is not available ({why})")
+
+    def _claude_first(self) -> bool:
+        """Claude-first lead: every message starts with Claude, and Claude hands most of the writing to Qwen."""
+        return self.cfg["lead"].get("style", "claude_first") == "claude_first"
 
     def _casual(self, text: str, cls: Any = None) -> bool:
         """Small talk or a simple question that Qwen handles well on its own."""
@@ -742,6 +747,11 @@ class Orchestrator:
         mode, message, plan_text = ctx.parse_lead(text)
         note = ""
         plan = None
+        if mode == "handoff":
+            if plan_text:
+                self._lead_handoff(task_id, pending, message, plan_text)
+                return
+            mode = "answer"  # An empty handoff: Claude's words are the answer.
         if mode == "delegate":
             if ctx.is_general(ws) or not ws.index and not plan_text:
                 note = "Claude chose to delegate, but there is no project code to change here."
@@ -773,6 +783,29 @@ class Orchestrator:
         self._set(task_id, kind="edit", workflow="claude_leads")
         objective = task["objective"] + (f"\n\nFollow-up: {pending['followup']}" if pending.get("followup") else "")
         team_mod.TeamRunner(self, task_id).start_from_lead(objective, plan)
+
+    def _lead_handoff(self, task_id: int, pending: dict, message: str, instructions: str) -> None:
+        """Claude planned the reply; Qwen writes it (agent mode, with its tools) and the user sees Qwen's text."""
+        task = self.db.get_task(task_id)
+        self._step_end(pending.get("step_id"), "completed", "Handed the reply to Qwen with instructions.")
+        self.db.update_task_state(task_id, decisions=["Claude (lead) chose: handoff."])
+        self._act(task_id, "lead.handoff", "Claude planned the reply; Qwen writes it.", CLAUDE, "plan",
+                  reason="Claude first: Claude decides, Qwen does the writing it can do from clear instructions.",
+                  outcome="qwen")
+        if message:
+            self.db.add_message(task_id, "assistant", message, CLAUDE)
+            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
+        users = [m["content"] for m in self.db.messages(task_id) if m["role"] == "user"]
+        latest = pending.get("followup") or (users[-1] if users else task["objective"])
+        brief = (f"{latest}\n\n---\nClaude, who leads this chat, read the message above and wrote these instructions "
+                 f"for your reply. Follow them; your reply is what the user sees:\n{instructions}")
+        ws = self.workspace(task["project_id"])
+        pack = ctx.gather(ws, latest + "\n" + instructions, self.cfg["context"]) if ws.index else ctx.ContextPack()
+        try:
+            self._local_loop(task_id, pack, followup=brief, reason="Claude handed this reply to Qwen.")
+        finally:
+            # The chat stays Claude-led: the next message starts with Claude again, and Retry asks Claude.
+            self._set(task_id, workflow="claude_leads")
 
     def _handle_lead_review(self, task_id: int, pending: dict, text: str) -> None:
         message, verdict, instruction = ctx.parse_lead_review(text)
@@ -917,6 +950,7 @@ class Orchestrator:
                       "local", step_id=step_id)
             result = backend.chat(req)
             self._partial.pop(task_id, None)
+            self._count_work(task_id, LOCAL, result)
             return result
         finally:
             if self.memory is not None:
@@ -1617,9 +1651,12 @@ class Orchestrator:
             if not ctx.is_general(ws):
                 parts.append(ctx.memory_block(self.db.memory(task["project_id"], None, 30)))
             parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
+            first = self._claude_first()
             parts.append(ctx.LEAD_INSTRUCTIONS.format(
                 max_tasks=self.cfg["team"]["max_tasks"],
-                delegate_note=ctx.LEAD_NO_DELEGATE if ctx.is_general(ws) else ""))
+                delegate_note=ctx.LEAD_NO_DELEGATE if ctx.is_general(ws) else "",
+                handoff_mode=ctx.LEAD_HANDOFF_MODE if first else "",
+                style_note=ctx.CLAUDE_FIRST_NOTE.format(share=self.cfg["routing"]["target_local_share"]) if first else ""))
         elif purpose == "lead_review":
             parts.append(f"The user's request:\n{task['objective'].strip()}")
             parts.append(extra)
@@ -1755,6 +1792,7 @@ class Orchestrator:
         sent = dict(task["state"].get("claude_sent", {}) if pending.get("session") else {})
         sent.update({f["path"]: f["sha"] for f in pending["files"]})
         self.db.update_task_state(task_id, pending_claude=None, claude_session=result.session_id, claude_sent=sent)
+        self._count_work(task_id, CLAUDE, result)
         if result.usage:
             note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
             self.db.set_transmission_usage(trans_id, note)
@@ -2504,12 +2542,32 @@ class Orchestrator:
             self._busy.pop(CLAUDE, None)
         task = self.db.get_task(task_id)
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
+        self._count_work(task_id, CLAUDE, result)
         if result.usage:
             note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
             self.db.set_transmission_usage(trans, note)
             self._act(task_id, "backend.usage", f"Reported by Claude Code: {note}", CLAUDE, step_id=step_id)
         self.db.kv_set("claude_last_verified", time.time())
         return result
+
+    def _count_work(self, task_id: int | None, backend: str, result: Any) -> None:
+        """Tokens each model wrote for this chat: what the Claude-first share is measured on.
+
+        Uses the counts the backends report (Ollama's eval_count, Claude Code's output_tokens); without one, the
+        text length / 4 is the fallback, and the record says so."""
+        if not task_id:
+            return
+        usage = getattr(result, "usage", None) or {}
+        n = usage.get("eval_count" if backend == LOCAL else "output_tokens")
+        estimated = not isinstance(n, int)
+        if estimated:
+            n = len(getattr(result, "text", "") or "") // 4
+        with self._work_lock:
+            work = dict(self.db.get_task(task_id)["state"].get("work") or {})
+            work[backend] = int(work.get(backend, 0)) + int(n)
+            if estimated:
+                work["estimated"] = True
+            self.db.update_task_state(task_id, work=work)
 
     def _cloud_block(self, task_id: int) -> str:
         task = self.db.get_task(task_id)
@@ -2618,7 +2676,22 @@ class Orchestrator:
             c = (t["state"].get("route") or {}).get("category", "other").replace("_", " ")
             cats[c] = cats.get(c, 0) + 1
         qwen_pct = round(100 * qwen / n) if n else None
-        if n < 5:
+        # Claude first touches every chat, so there the share of the writing is what counts, not tasks.
+        written = {b: sum(int((t["state"].get("work") or {}).get(b, 0)) for t in rows) for b in (LOCAL, CLAUDE)}
+        total = written[LOCAL] + written[CLAUDE]
+        work = {"qwen_tokens": written[LOCAL], "claude_tokens": written[CLAUDE],
+                "qwen_pct": round(100 * written[LOCAL] / total) if total else None,
+                "estimated": any((t["state"].get("work") or {}).get("estimated") for t in rows),
+                "rule": "Tokens each model wrote in these tasks, as Ollama and Claude Code report them."}
+        if self._claude_first() and self.cfg["lead"]["enabled"]:
+            if not total or n < 5:
+                note = "Claude first: too few finished chats to compare Qwen's share of the writing with the target yet."
+            elif work["qwen_pct"] >= target:
+                note = f"Claude first: Qwen wrote {work['qwen_pct']}% of the text, at or above the {target}% target."
+            else:
+                note = (f"Claude first: Qwen wrote {work['qwen_pct']}% of the text, below the {target}% target. "
+                        "Claude answered more itself (short or hard replies) than it handed over.")
+        elif n < 5:
             note = "Too few finished tasks to compare with the target yet."
         elif abs(qwen_pct - target) <= 5:
             note = "On target."
@@ -2638,7 +2711,7 @@ class Orchestrator:
         return {
             "window": window, "counted": n, "qwen": qwen, "claude": len(claude_rows), "qwen_pct": qwen_pct,
             "target_qwen_pct": target, "direct": len(direct), "escalated": len(escalated),
-            "escalations_completed": len(improved), "manual": len(manual), "note": note,
+            "escalations_completed": len(improved), "manual": len(manual), "note": note, "work": work,
             "rule": "Counts completed and failed tasks only. A task counts as Claude's if Claude handled any part of it.",
         }
 

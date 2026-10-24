@@ -91,6 +91,9 @@ DEFAULTS: dict[str, Any] = {
                                         # the code to Qwen and the team. Picking a model in the chat skips the lead.
         "final_review": True,           # After a delegated run, Claude checks the results and writes the answer.
         "max_followups": 1,             # Fix rounds Claude may order after its final check.
+        "style": "claude_first",        # claude_first: every message starts with Claude, which talks and plans and
+                                        # hands most of the writing to Qwen (target_local_share of it). balanced:
+                                        # casual messages go straight to Qwen and Claude answers the rest itself.
     },
     "team": {
         "default_new_chats": False,     # TEAM ROLES for new chats; each chat keeps its own setting.
@@ -153,6 +156,9 @@ DEFAULTS: dict[str, Any] = {
     },
 }
 
+LEAD_STYLES = ("claude_first", "balanced")
+
+
 # (type, check) per leaf. check returns an error string or None.
 def _range(lo: float, hi: float):
     return lambda v: None if lo <= v <= hi else f"must be between {lo} and {hi}"
@@ -209,6 +215,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "enabled": (bool, None),
         "final_review": (bool, None),
         "max_followups": (int, _range(0, 3)),
+        "style": (str, _choice(LEAD_STYLES)),
     },
     "team": {
         "default_new_chats": (bool, None),
