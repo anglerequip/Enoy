@@ -132,15 +132,17 @@ def _read_file(args: dict, ctx: ToolContext) -> dict:
 def _search_code(args: dict, ctx: ToolContext) -> dict:
     files = _files(ctx)
     limit = int(args.get("max_results") or 40)
-    hits = files.ws.search(args["query"], max_results=limit)
-    out = {"query": args["query"], "matches": [{"path": h["path"], "line": h["line"], "text": h["text"]} for h in hits]}
-    # Models often search several words at once ("ollama ready qwen ready"). When the exact phrase finds
-    # little, lines holding most of the words follow, best first.
-    words = sorted(set(re.findall(r"[\w.-]{3,}", args["query"].lower())))
-    if len(hits) < limit and len(words) > 1:
+    query = args["query"]
+    hits = files.ws.search(query, max_results=500)
+    # Models often search several words at once ("save button settings dialog"). Lines holding most of
+    # the words count too, word pairs from the query ("save button") count double, and the code itself comes
+    # before tests and docs, which tend to quote the request word for word.
+    seq = re.findall(r"[\w.-]{2,}", query.lower())
+    words = sorted({w for w in seq if len(w) >= 3})
+    pairs = {f"{a} {b}" for a, b in zip(seq, seq[1:])}
+    scored = {(h["path"], h["line"]): (100, h["text"]) for h in hits}
+    if len(words) > 1:
         need = max(2, (len(words) + 1) // 2)
-        seen = {(h["path"], h["line"]) for h in hits}
-        extra = []
         for rel, info in files.ws.index.items():
             if info.size > 1_000_000:
                 continue
@@ -151,13 +153,22 @@ def _search_code(args: dict, ctx: ToolContext) -> dict:
             for n, line in enumerate(text.splitlines(), 1):
                 low = line.lower()
                 score = sum(w in low for w in words)
-                if score >= need and (rel, n) not in seen:
-                    extra.append((-score, rel, n, line.strip()[:200]))
-        extra.sort()
-        out["matches"] += [{"path": p, "line": n, "text": t} for _, p, n, t in extra[:limit - len(hits)]]
-        if extra and not hits:
-            out["note"] = "No line has the exact phrase; these lines contain most of its words."
+                if score >= need and (rel, n) not in scored:
+                    flat = re.sub(r"[^\w.-]+", " ", low)
+                    scored[(rel, n)] = (score + 2 * sum(p in flat for p in pairs), line.strip()[:200])
+    ranked = sorted(scored.items(), key=lambda kv: (_secondary(kv[0][0]), -kv[1][0], kv[0][0], kv[0][1]))
+    out = {"query": query, "matches": [{"path": p, "line": n, "text": t} for (p, n), (_, t) in ranked[:limit]]}
+    if ranked and not hits:
+        out["note"] = "No line has the exact phrase; these lines contain most of its words, the code first."
     return out
+
+
+def _secondary(path: str) -> bool:
+    """Tests and docs: listed after the code in search results."""
+    low = path.lower()
+    name = low.rsplit("/", 1)[-1]
+    return low.startswith(("tests/", "test/", "docs/")) or "/tests/" in low or name.startswith("test_") \
+        or name.endswith((".md", ".txt", ".rst"))
 
 
 def _edit_file(args: dict, ctx: ToolContext) -> dict:
