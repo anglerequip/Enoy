@@ -385,3 +385,45 @@ def test_team_does_not_resend_when_claude_changes_nothing_and_retry_asks_the_lea
     last = orc.backends[CLAUDE].requests[-1].messages[-1].content
     assert "MODE: delegate" in last and "Continuation brief" not in last
     assert answers(orc, task["id"])[-1] == (CLAUDE, "Open the folder that holds the app's code.")
+
+
+# Qwen's team tasks in agent mode -------------------------------------------------------------
+
+def _tool(name, **args):
+    from fusion_ai.backends.base import ChatResult
+    return ChatResult(text="", backend=LOCAL, model="fake", tool_calls=[{"name": name, "arguments": args}])
+
+
+def test_qwen_team_task_works_step_by_step_with_tools(orc_factory, project):
+    edits = [_tool("search_code", query="def add"), _tool("read_file", path="calculator.py"),
+             _tool("edit_file", path="calculator.py", old_text="def add(a, b):\n    return a + b\n",
+                   new_text="def add(a, b):\n    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n"),
+             "Added multiply() after add().\nUNRESOLVED: none"]
+    orc = lead_orc(orc_factory, qwen=edits, claude=[delegate(plan_task())], tools__agent=True,
+                   lead__style="claude_first")
+    task = orc.start_task(open_project(orc, project), "Add a multiply function")
+    dev = next(x for x in orc.db.team_tasks(task["id"]) if x["plan_key"] == "T1")
+    assert dev["status"] == "completed" and dev["provider"] == LOCAL, dev["error"]
+    assert "def multiply(a, b):" in (project / "calculator.py").read_text(encoding="utf-8")
+    first = orc.backends[LOCAL].requests[0]
+    assert {t["function"]["name"] for t in first.tools} == {"list_files", "read_file", "search_code", "edit_file",
+                                                            "write_file"}
+    assert "Team task T1" in first.messages[1].content and "Do not run tests" in first.messages[0].content
+    assert orc.db.get_task(task["id"])["status"] == "completed"
+    assert len(orc.backends[CLAUDE].requests) == 1  # The plan only: clean run, no review by Claude.
+
+
+def test_qwen_team_edit_that_fails_is_retried_with_feedback(orc_factory, project):
+    bad = [_tool("edit_file", path="calculator.py", old_text="def nope():\n", new_text="x"),
+           "I could not find it.\nUNRESOLVED: the edit"]
+    good = [_tool("read_file", path="calculator.py"),
+            _tool("edit_file", path="calculator.py", old_text="def add(a, b):\n    return a + b\n",
+                  new_text="def add(a, b):\n    return a + b\n\n\ndef multiply(a, b):\n    return a * b\n"),
+            "Added multiply().\nUNRESOLVED: none"]
+    orc = lead_orc(orc_factory, qwen=bad + good, claude=[delegate(plan_task())], tools__agent=True,
+                   lead__style="claude_first")
+    task = orc.start_task(open_project(orc, project), "Add a multiply function")
+    dev = next(x for x in orc.db.team_tasks(task["id"]) if x["plan_key"] == "T1")
+    assert dev["status"] == "completed" and dev["attempts"] == 2
+    retry = [m.content for m in orc.backends[LOCAL].requests[2].messages if m.role == "user"][0]
+    assert "could not be applied" in retry and "no file changes" in retry and "edit_file" in retry

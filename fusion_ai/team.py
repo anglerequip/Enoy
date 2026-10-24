@@ -354,6 +354,35 @@ class TeamRunner:
             return result.text
         return self.orc._claude_direct(self.task_id, step, purpose, system, user, files_meta, private or set()).text
 
+    def _agent_mode(self) -> bool:
+        s = self.orc.cfg.get("tools", {})
+        return bool(s.get("enabled", True) and s.get("agent", True))
+
+    def _agent_develop(self, tt: dict, ws: Any, brief: str, feedback: str, system_note: str = "") -> tuple[str, list]:
+        """Qwen does one team task as an agent. Edits are staged; Enoy validates them like any proposal and
+        applies them as one change set. Returns (Qwen's summary, the changes as FILE writes)."""
+        from pathlib import Path
+        from . import tools as tools_mod
+        orc = self.orc
+        over = self._budget_left(LOCAL)
+        if over:
+            raise _Stop(f"Stopped: {over}.")
+        self._save_run(model_calls=self.run.get("model_calls", 0) + 1)
+        step = self.db.get_team_task(tt["id"]).get("result", {}).get("step")
+        files = tools_mod.AgentFiles(ws, apply=False, backup_dir=Path("."))
+        runner = orc._tool_runner(self.task_id, LOCAL, offer=TEAM_AGENT_TOOLS, services={"files": files})
+        names = ", ".join(t.name for t in runner.available())
+        where = (f"Project folder: {ws.name}. Paths are relative to it.\nEdits are staged: Enoy checks them and applies "
+                 "them as one change set when you finish.\n" + TEAM_AGENT_NOTE)
+        system = tools_mod.AGENT_SYSTEM.format(names=names, context=where) + system_note
+        user = brief + (f"\n\n{feedback}" if feedback else "")
+        budget = ctx.prompt_budget(*orc._local_window())
+        rounds = int(orc.cfg.get("tools", {}).get("agent_max_steps", 24))
+        result = orc._chat_local_tools(self.task_id, [ChatMessage("system", system), ChatMessage("user", user)],
+                                       "edit", step, runner, budget, rounds=rounds)
+        changes = [patches.ProposedChange("write", f["path"], f["new_content"]) for f in files.changeset_files()]
+        return result.text, changes
+
     # Run ------------------------------------------------------------------------------
 
     def start(self, objective: str) -> None:
@@ -724,8 +753,17 @@ class TeamRunner:
             user = ctx.project_header(ws, view) + "\n\n" + user + "\n\n" + patches.FORMAT_INSTRUCTIONS
         files_meta = [{"path": f.path, "sha": f.sha, "chars": len(f.content)} for f in view.files]
         versions = {f.path: f.sha for f in pack.files}
+        agent = provider == LOCAL and self._agent_mode()
         try:
-            text = self.call(self.db.get_team_task(tt["id"]), provider, system, user, "edit", files_meta, private)
+            if agent:
+                # Qwen works step by step with tools (search, read, small exact edits, each checked at once)
+                # instead of writing every change in one long reply that its window cuts off.
+                text, changes = self._agent_develop(tt, ws, brief, feedback, system_note=(
+                    DEBUG_PROMPT if role == "debugger" else "") + (
+                    "\n\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2] if tt["specialty"] else ""))
+                versions = None  # The agent read the current files itself.
+            else:
+                text = self.call(self.db.get_team_task(tt["id"]), provider, system, user, "edit", files_meta, private)
         except BackendError as exc:
             if exc.kind == "cancelled":
                 raise
@@ -739,7 +777,7 @@ class TeamRunner:
         else:
             self.db.add_message(self.task_id, "assistant", f"**{label}** · {tt['title']}\n\n{text}", provider)
             orc.bus.publish({"type": "message_done", "task_id": self.task_id, "backend": provider})
-        parsed = patches.parse(text)
+        parsed = patches.ParseResult(changes, [], text, []) if agent else patches.parse(text)
         validation = patches.validate(ws, parsed.changes, versions)
         problems = parsed.errors + validation.errors
         if not validation.files and not problems:
@@ -755,7 +793,9 @@ class TeamRunner:
             orc._step_end(step, "failed", error="Proposal failed Enoy's checks: " + "; ".join(problems[:3]))
             tt = self.db.get_team_task(tt["id"])
             fb = ("Your previous answer could not be applied because:\n- " + "\n- ".join(problems[:6])
-                  + "\nSend corrected blocks for ALL intended changes, following the block format exactly.")
+                  + ("\nNothing from that attempt was kept. Do the task again with the tools: read the lines first, "
+                     "then edit_file with old_text copied exactly." if agent else
+                     "\nSend corrected blocks for ALL intended changes, following the block format exactly."))
             self.msg("orchestrator", role, "rejection", f"{tt['plan_key']} proposal rejected: {problems[0][:160]}", tt["id"])
             if tt["attempts"] < self.orc.cfg["routing"]["max_local_attempts"]:
                 self._develop(tt, fb)
@@ -1148,6 +1188,15 @@ class _Stop(BackendError):
 
     def __init__(self, message: str):
         super().__init__("budget", message)
+
+
+TEAM_AGENT_TOOLS = {"list_files", "read_file", "search_code", "edit_file", "write_file"}
+TEAM_AGENT_NOTE = """This is one task from a team plan. Do exactly this task, nothing more:
+- Find the code with search_code, read the lines with read_file, then change them with edit_file: small edits,
+  old_text copied exactly from what you just read. If an edit is refused, read the lines again and retry.
+- When the plan gives code, put that code in; do not redesign it.
+- Do not run tests or commands: Enoy's QA runs the project's checks after you.
+- Finish with one or two sentences on what you changed, then the UNRESOLVED line."""
 
 
 def _first_line(text: str) -> str:
