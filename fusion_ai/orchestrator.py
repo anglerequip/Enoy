@@ -661,6 +661,16 @@ class Orchestrator:
         self._event(task_id, "status", f"Resuming with {BACKEND_LABEL[backend]} from the continuation brief.")
         self._act(task_id, "task.retry", f"Retrying with {BACKEND_LABEL[backend]} from the saved state.", "user",
                   reason=f"You pressed Retry/Resume; the task was {task['status']}.")
+        if (backend == CLAUDE and task["workflow"] == "claude_leads" and self.cfg["lead"]["enabled"]
+                and self.claude_available()[0] and not self._cloud_block(task_id)):
+            # The lead decides again on the user's latest message. The continuation brief is built around
+            # the chat's first message, which made Claude "write the change" for an old or answered request.
+            users = [m["content"] for m in self.db.messages(task_id) if m["role"] == "user"]
+            latest = users[-1] if users else task["objective"]
+            followup = latest if len(users) > 1 else ""
+            self._step_end(analysis, "completed", "Claude (lead) decides again on your latest message.")
+            self._lead(task_id, pack, classify(latest, len(pack.files)), followup=followup)
+            return
         if backend == CLAUDE and self.claude_available()[0] and not self._cloud_block(task_id):
             self._step_end(analysis, "completed", "Loaded the continuation brief; Claude owned this task.")
             self._request_claude(task_id, task["kind"], pack, extra=brief,
@@ -1540,6 +1550,34 @@ class Orchestrator:
 
     # Claude requests ---------------------------------------------------------------------
 
+    def _conversation_for_claude(self, task_id: int, objective: str, session: str | None,
+                                 limit: int = 8, chars: int = 1500) -> str:
+        """The chat Claude has not seen yet, without the latest user message (sent separately).
+
+        A resumed Claude session already holds Claude's own turns, so only what came after its last reply is
+        added; a new session gets the recent chat. Privacy redaction runs on the whole prompt afterwards.
+        """
+        msgs = [m for m in self.db.messages(task_id) if m["role"] in ("user", "assistant")]
+        if msgs and msgs[-1]["role"] == "user":
+            msgs = msgs[:-1]
+        if session:
+            last = max((i for i, m in enumerate(msgs) if m.get("backend") == CLAUDE), default=-1)
+            msgs = msgs[last + 1:]
+        if msgs and msgs[0]["role"] == "user" and msgs[0]["content"].strip() == objective.strip():
+            msgs = msgs[1:]  # Already sent as the first message.
+        msgs = msgs[-limit:]
+        if not msgs:
+            return ""
+        who = {LOCAL: "Qwen", CLAUDE: "Claude"}
+        lines = []
+        for m in msgs:
+            name = "User" if m["role"] == "user" else who.get(m.get("backend") or "", "Enoy")
+            text = m["content"].strip()
+            if len(text) > chars:
+                text = text[:chars].rstrip() + " […]"
+            lines.append(f"[{name}]\n{text}")
+        return ctx.CONVERSATION_NOTE + "\n\n" + "\n\n".join(lines)
+
     def _request_claude(self, task_id: int, purpose: str, pack: ctx.ContextPack, extra: str = "",
                         changeset_id: int | None = None, reason: str = "",
                         depends_on: list[int] | None = None) -> None:
@@ -1567,10 +1605,18 @@ class Orchestrator:
         parts = []
         if not session:
             parts.append(header)
+        # A follow-up: Claude also needs the replies it did not write itself (Qwen's, the team's), or it
+        # answers the first message again as if nobody had.
+        is_followup = extra.startswith("Follow-up from the user:")
+        label = "First message of this chat" if is_followup else "Task"
+        talk = self._conversation_for_claude(task_id, task["objective"], session) if is_followup else ""
+        asked = "\n\n".join(x for x in (talk, extra) if x)
+        if purpose in ("lead", "edit") and not ctx.is_general(ws) and not ws.index:
+            parts.append(ctx.CLAUDE_EMPTY_FOLDER.format(path=ws.root))
         if purpose == "lead":
             if not ctx.is_general(ws):
                 parts.append(ctx.memory_block(self.db.memory(task["project_id"], None, 30)))
-            parts.append(ctx.task_message(task["objective"], pack, extra, only=new_files))
+            parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
             parts.append(ctx.LEAD_INSTRUCTIONS.format(
                 max_tasks=self.cfg["team"]["max_tasks"],
                 delegate_note=ctx.LEAD_NO_DELEGATE if ctx.is_general(ws) else ""))
@@ -1587,7 +1633,7 @@ class Orchestrator:
             parts.append(ctx.task_message(task["objective"], pack, only=new_files))
             parts.append(ctx.PLAN_INSTRUCTIONS)
         else:
-            parts.append(ctx.task_message(task["objective"], pack, extra, only=new_files))
+            parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
             if purpose == "edit":
                 parts.append(patches.FORMAT_INSTRUCTIONS)
         if skipped_same:
@@ -1762,6 +1808,16 @@ class Orchestrator:
             return
         if purpose == "edit":
             parsed = patches.parse(text)
+            if not parsed.changes and not parsed.errors:
+                # No change blocks at all: Claude explained instead (the code is not here, the request is a
+                # question...). Its reply is the answer, not a broken proposal to retry.
+                if parsed.commands:
+                    self.db.update_task_state(task_id, suggested_commands=parsed.commands)
+                self._event(task_id, "note", "Claude replied without changing any files, so nothing in the project "
+                                             "changed.", CLAUDE)
+                self._step_end(step_id, "completed", "Answered without changing any files.")
+                self._complete(task_id, _first_line(text))
+                return
             validation = patches.validate(ws, parsed.changes, task["state"].get("file_versions"))
             problems = parsed.errors + validation.errors
             if parsed.commands:

@@ -59,6 +59,19 @@ sentences that this folder is empty and that they can open the folder that holds
 the code with "Open folder…" in Enoy. Then stop. If they ask for something new,
 create it."""
 
+CLAUDE_EMPTY_FOLDER = """\
+The project folder ({path}) is empty: it has no files. If the user asks to change
+existing code (Enoy itself, "this app", "my script"), do not plan or write changes:
+say in one or two sentences that this folder is empty and that they can open the
+folder that holds the code with "Open folder…" in Enoy. Only create new files here
+when the user asks for something new."""
+
+CONVERSATION_NOTE = """\
+Conversation so far in this chat (oldest first). These messages were already
+handled: do not answer them again unless the latest message asks. Answers from Qwen
+may use live data that Enoy fetched with its tools (weather, web pages, this PC);
+trust those and never tell the user that live data is unavailable."""
+
 EDIT_SYSTEM = """\
 Your job in this step is to make the change. Keep it minimal and consistent with
 the existing style. Say in one to three sentences what you changed, then give
@@ -88,7 +101,8 @@ You cannot open files or run commands: you see only this message. Be direct,
 concise and creative where it helps."""
 
 LEAD_INSTRUCTIONS = """\
-Decide how to handle the user's latest message. Start your reply with exactly one line:
+Decide how to handle the user's latest message; earlier messages in this chat are
+already handled, so do not repeat their answers. Start your reply with exactly one line:
 MODE: answer    (you answer yourself: questions, explanations, brainstorming, advice, short snippets)
 MODE: clarify   (a wrong guess would be costly: ask at most two short questions)
 MODE: delegate  (files in the project must change) {delegate_note}
@@ -433,8 +447,9 @@ def local_system_prompt(ws: Workspace, pack: ContextPack, kind: str, list_chars:
     return "\n\n".join(parts)
 
 
-def task_message(objective: str, pack: ContextPack, extra: str = "", only: set[str] | None = None) -> str:
-    parts = [f"Task:\n{objective.strip()}"]
+def task_message(objective: str, pack: ContextPack, extra: str = "", only: set[str] | None = None,
+                 label: str = "Task") -> str:
+    parts = [f"{label}:\n{objective.strip()}"]
     files = pack.files_text(only)
     if files:
         parts.append("Relevant files:\n\n" + files)

@@ -108,6 +108,12 @@ async function loadStatus(refresh = false) {
   const note = document.querySelector(".composer-note");  // Only the note: typing in the box is not disturbed.
   if (note) note.innerHTML = composerNoteHtml();
 }
+// Keep the status dots live (Ollama can be started or closed while Enoy is open). Local checks only:
+// Claude's status is the cached one unless you press Refresh.
+setInterval(async () => {
+  if (document.hidden) return;
+  try { S.status = await api("GET", "/api/status"); renderStatusLine(); } catch (e) { /* the next tick tries again */ }
+}, 15000);
 function qwenOk() { return !!(S.status && S.status.local.available); }
 function claudeOk() { return !!(S.status && S.status.claude.available); }
 
@@ -179,7 +185,10 @@ function renderStatusLine() {
   if (!st) { el.innerHTML = `<span class="pill"><span class="dot bad"></span>App not responding</span>`; return; }
   const cl = st.claude;
   const claudeText = !cl.available ? "Claude off" : (cl.verified || st.claude_last_verified ? "Claude ready" : "Claude not tested");
-  el.innerHTML = `<span class="pill"><span class="dot ${st.local.available ? "ok" : "bad"}"></span>${st.local.available ? "Qwen ready" : "Qwen offline"}
+  // Ollama answers /api/version when it runs, even if Qwen's model is missing; that is what this dot shows.
+  const ollamaUp = !!st.local.version;
+  el.innerHTML = `<span class="pill" title="${esc(ollamaUp ? `Ollama ${st.local.version} is running on this PC.` : st.local.detail || "Ollama is not running.")}"><span class="dot ${ollamaUp ? "ok" : "bad"}"></span>${ollamaUp ? "Ollama ready" : "Ollama offline"}</span>
+    <span class="pill"><span class="dot ${st.local.available ? "ok" : "bad"}"></span>${st.local.available ? "Qwen ready" : "Qwen offline"}
     <span class="dot ${cl.available ? (cl.verified || st.claude_last_verified ? "ok" : "warn") : ""}" style="margin-left:8px"></span>${claudeText}</span>
     <span class="settings-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</span>`;
 }

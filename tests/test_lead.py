@@ -330,3 +330,57 @@ def test_one_qwen_backend_serves_every_role(orc_factory, project):
     assert orc.backends[LOCAL] is backend and len(orc.backends) == 2
     assert orc._local_lock.acquire(blocking=False)
     orc._local_lock.release()
+
+
+# The chat Claude sees, empty folders and "no changes" replies ---------------------------------
+
+def test_follow_up_sends_claude_the_replies_it_did_not_write(orc_factory, tmp_path):
+    """Qwen answered the first message; Claude must see that answer, not answer the first message again."""
+    empty = tmp_path / "Enoy General"
+    empty.mkdir()
+    orc = lead_orc(orc_factory, qwen=["Doing well! Trollhattan: overcast, 10.2 C (SMHI)."],
+                   claude=["MODE: answer\nThis folder is empty; open the folder with Enoy's code."])
+    task = orc.start_task(open_project(orc, empty), "hey, how are you?")
+    orc.send_message(task["id"], "Add an Ollama status dot to the app's sidebar.")
+    prompt = orc.backends[CLAUDE].requests[0].messages[-1].content
+    assert "First message of this chat:\nhey, how are you?" in prompt
+    assert ctx.CONVERSATION_NOTE in prompt and "[Qwen]\nDoing well! Trollhattan: overcast" in prompt
+    assert prompt.count("Add an Ollama status dot") == 1  # Only as the follow-up, not also in the conversation.
+    assert ctx.CLAUDE_EMPTY_FOLDER.format(path=empty) in prompt
+    assert orc.db.get_task(task["id"])["status"] == "completed"
+
+
+def test_resumed_claude_session_gets_only_what_came_after_its_reply(orc_factory, project):
+    orc = lead_orc(orc_factory, claude=["MODE: answer\nFirst."])
+    task = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
+    orc.db.add_message(task["id"], "assistant", "Qwen's later reply.", LOCAL)
+    orc.db.add_message(task["id"], "user", "And subtract?")
+    talk = orc._conversation_for_claude(task["id"], "Is divide thread-safe? Explain the race conditions.", "sess-1")
+    assert "[Qwen]\nQwen's later reply." in talk and "First." not in talk and "And subtract?" not in talk
+
+
+def test_claude_explaining_instead_of_editing_is_an_answer(orc_factory, project):
+    orc = orc_factory(claude=["I can't see that code in this project, so nothing was changed."])
+    before = (project / "calculator.py").read_text(encoding="utf-8")
+    task = orc.start_task(open_project(orc, project), "Add an Ollama status dot to the sidebar", backend=CLAUDE)
+    t = orc.db.get_task(task["id"])
+    assert t["status"] == "completed", t["summary"]
+    assert "failed validation" not in t["summary"]
+    assert answers(orc, task["id"])[-1] == (CLAUDE, "I can't see that code in this project, so nothing was changed.")
+    assert (project / "calculator.py").read_text(encoding="utf-8") == before
+
+
+def test_team_does_not_resend_when_claude_changes_nothing_and_retry_asks_the_lead(orc_factory, project):
+    orc = lead_orc(orc_factory, claude=[delegate(plan_task(model="claude", title="Add an Ollama dot to the sidebar")),
+                                        "The sidebar code is not in this project, so I changed nothing.",
+                                        "Nothing was changed: the sidebar code is not here.\nNEXT: done",
+                                        "MODE: answer\nOpen the folder that holds the app's code."])
+    task = orc.start_task(open_project(orc, project), "Add an Ollama status dot to the sidebar")
+    dev = next(x for x in orc.db.team_tasks(task["id"]) if x["plan_key"] == "T1")
+    assert dev["status"] == "failed" and "Claude made no changes" in dev["error"]
+    edits = [r for r in orc.backends[CLAUDE].requests if "<<<FILE" in r.messages[-1].content]
+    assert len(edits) == 1  # Not asked again with the same files.
+    orc.resume(task["id"])
+    last = orc.backends[CLAUDE].requests[-1].messages[-1].content
+    assert "MODE: delegate" in last and "Continuation brief" not in last
+    assert answers(orc, task["id"])[-1] == (CLAUDE, "Open the folder that holds the app's code.")

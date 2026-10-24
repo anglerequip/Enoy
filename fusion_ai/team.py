@@ -744,6 +744,13 @@ class TeamRunner:
         problems = parsed.errors + validation.errors
         if not validation.files and not problems:
             problems = ["No usable file changes were produced."]
+        if provider == CLAUDE and not parsed.changes and not parsed.errors:
+            # Claude explained why it changed nothing (the code is not in this project...). Asking again with
+            # the same files gets the same answer and costs another request, so its reason ends the task.
+            why = _first_line(parsed.explanation or text)[:300]
+            orc._step_end(step, "failed", error=f"Claude made no changes: {why}")
+            self._task_failed(tt, f"Claude made no changes: {why}", step_done=True)
+            return
         if problems:
             orc._step_end(step, "failed", error="Proposal failed Enoy's checks: " + "; ".join(problems[:3]))
             tt = self.db.get_team_task(tt["id"])
