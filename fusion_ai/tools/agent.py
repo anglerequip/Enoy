@@ -97,6 +97,37 @@ class AgentFiles:
         return out
 
 
+class CloudView:
+    """The project as Claude may see it: files that the privacy settings keep from Claude are left out."""
+
+    def __init__(self, ws: Workspace, hidden: Callable[[str], bool]):
+        self._ws, self.hidden = ws, hidden
+        self.index = {k: v for k, v in ws.index.items() if not hidden(k)}
+
+    def __getattr__(self, name: str):
+        return getattr(self._ws, name)
+
+    def search(self, query: str, max_results: int = 200) -> list[dict]:
+        return [h for h in self._ws.search(query, max_results=max_results * 3) if not self.hidden(h["path"])][:max_results]
+
+
+class CloudFiles(AgentFiles):
+    """Read-only files for Claude (through Enoy's MCP server). Secrets files and the user's private globs are
+    refused; the server redacts secrets in every result before Claude sees it."""
+
+    def __init__(self, ws: Workspace, hidden: Callable[[str], bool]):
+        super().__init__(CloudView(ws, hidden), apply=False, backup_dir=Path("."))
+
+    def _norm(self, path: str) -> str:
+        rel = super()._norm(path)
+        if self.ws.hidden(rel):
+            raise ToolError("denied", f"'{rel}' is kept private by the user's settings and is not shared with Claude.")
+        return rel
+
+    def save(self, path: str, content: str, whole_file: bool = True) -> dict:
+        raise ToolError("denied", "Read-only: write your changes in the blocks Enoy asked for.")
+
+
 def _files(ctx: ToolContext) -> AgentFiles:
     files = (ctx.services or {}).get("files")
     if files is None:

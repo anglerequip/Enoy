@@ -108,6 +108,13 @@ CLAUDE_ENOY_NOTE = """For this request you also have tools that Enoy runs on the
 mcp__enoy__): read-only hardware information from Windows and weather from official services. Use them instead of \
 asking the user to look things up, base the answer on what they return, and say so if one fails."""
 
+CLAUDE_FILES = ("list_files", "read_file", "search_code")
+CLAUDE_FILES_NOTE = """You can look at this project's files yourself with Enoy's read-only tools \
+(mcp__enoy__search_code, mcp__enoy__read_file, mcp__enoy__list_files). Before you plan or write a change, find \
+the exact code: search first, then read only the lines you need (start_line/end_line). Never guess what a file \
+contains, and never ask the user for file contents. Files the user keeps private are not available. The tools \
+cannot change anything: write changes in the blocks Enoy asks for."""
+
 AGENT_SYSTEM = """You are Enoy's agent, running on the user's own PC. Enoy runs tools for you: {names}.
 Work like a capable engineer and assistant, not like a chatbot:
 - Do the task. Use the tools to look things up, change files, run the tests and check the result yourself.

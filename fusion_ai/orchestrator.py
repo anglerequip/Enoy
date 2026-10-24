@@ -1254,13 +1254,31 @@ class Orchestrator:
         return ("Facts about the user's PC, read from Windows by Enoy just now (read-only; answer from these, "
                 "do not ask the user to look them up):\n" + res.for_model(9000))
 
-    def _mcp_env(self) -> dict:
+    def _mcp_env(self, files_task: int | None = None) -> dict:
+        """Settings for Enoy's MCP server. With files_task, also that chat's project folder and privacy rules."""
         try:
             runtime = self._tool_runtime()
         except Exception as exc:
             runtime = {"error": str(exc)}
-        return {"ENOY_MCP_CFG": {"tools": self.cfg.get("tools", {}), "pc": self.cfg.get("pc", {})},
-                "ENOY_MCP_RUNTIME": runtime}
+        env = {"ENOY_MCP_CFG": {"tools": self.cfg.get("tools", {}), "pc": self.cfg.get("pc", {})},
+               "ENOY_MCP_RUNTIME": runtime}
+        if files_task:
+            env["ENOY_MCP_WORKSPACE"] = str(self.workspace(self.db.get_task(files_task)["project_id"]).root)
+            env["ENOY_MCP_PRIVATE"] = {"cloud_excluded_globs": self.cfg["privacy"]["cloud_excluded_globs"],
+                                       "extra_excluded_globs": self.cfg["permissions"]["extra_excluded_globs"]}
+        return env
+
+    def _claude_file_tools(self, task_id: int) -> list[str]:
+        """Read-only project tools for Claude: only with a project that has files and nothing keeping it local."""
+        s = self.cfg.get("tools", {})
+        if not (s.get("enabled", True) and s.get("claude_files", True)) or self._cloud_block(task_id):
+            return []
+        ws = self.workspace(self.db.get_task(task_id)["project_id"])
+        if ctx.is_general(ws) or not ws.index:
+            return []
+        runner = tools_mod.ToolRunner(self.cfg, tools_mod.registry(), offer=set(tools_mod.CLAUDE_FILES),
+                                      services={"files": None})
+        return sorted(t.name for t in runner.available())
 
     def _record_claude_tools(self, task_id: int, events: list[dict], step_id: int | None) -> None:
         for e in events[:20]:
@@ -1786,6 +1804,10 @@ class Orchestrator:
             pending["system"] += "\n\n" + tools_mod.CLAUDE_WEB_NOTE
         if enoy and tools_mod.CLAUDE_ENOY_NOTE not in pending["system"]:
             pending["system"] += "\n\n" + tools_mod.CLAUDE_ENOY_NOTE
+        files = self._claude_file_tools(task_id)
+        if files and tools_mod.CLAUDE_FILES_NOTE not in pending["system"]:
+            pending["system"] += "\n\n" + tools_mod.CLAUDE_FILES_NOTE
+        enoy = enoy + files
         trans_id = self.db.add_transmission(task_id, CLAUDE, pending["purpose"], pending["files"],
                                             f"[system]\n{pending['system']}\n\n[user]\n{pending['prompt']}"
                                             + (f"\n\n[{len(image_ids)} image(s) attached]" if image_ids else ""))
@@ -1806,7 +1828,8 @@ class Orchestrator:
                       ChatMessage("user", pending["prompt"], self._load_images(task_id, image_ids))],
             purpose=pending["purpose"], cancel=self._cancel.setdefault(task_id, threading.Event()),
             resume_session=pending.get("session"), web_tools=web, enoy_tools=enoy,
-            enoy_env=self._mcp_env() if enoy else {}, effort=self._lead_effort(pending["purpose"]),
+            enoy_env=self._mcp_env(task_id if files else None) if enoy else {},
+            effort=self._lead_effort(pending["purpose"]),
         )
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": pending["purpose"], "since": time.time()}
@@ -2665,6 +2688,9 @@ class Orchestrator:
         check = privacy.CloudCheck(sent_files=[f["path"] for f in allowed],
                                    excluded_files=[f["path"] for f in files_meta if f not in allowed])
         prompt = privacy.finalize(user, private, check)
+        files = self._claude_file_tools(task_id)
+        if files:
+            system += "\n\n" + tools_mod.CLAUDE_FILES_NOTE
         system = redact(system)
         self._act(task_id, "privacy.checked", check.summary(), "system", outcome="passed", step_id=step_id)
         trans = self.db.add_transmission(task_id, CLAUDE, purpose, allowed, f"[system]\n{system}\n\n[user]\n{prompt}")
@@ -2674,7 +2700,8 @@ class Orchestrator:
         try:
             result = self.backends[CLAUDE].chat(ChatRequest(
                 messages=[ChatMessage("system", system), ChatMessage("user", prompt)], purpose=purpose,
-                cancel=self._cancel.setdefault(task_id, threading.Event())))
+                cancel=self._cancel.setdefault(task_id, threading.Event()), enoy_tools=files,
+                enoy_env=self._mcp_env(task_id) if files else {}))
         except BackendError as exc:
             if exc.kind in ("limit", "unavailable"):
                 self._mark_claude_unavailable(str(exc))
@@ -2684,6 +2711,8 @@ class Orchestrator:
         task = self.db.get_task(task_id)
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._count_work(task_id, CLAUDE, result)
+        if files:
+            self._record_claude_tools(task_id, result.tool_events, step_id)
         if result.usage:
             note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
             self.db.set_transmission_usage(trans, note)

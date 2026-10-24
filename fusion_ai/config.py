@@ -138,6 +138,8 @@ DEFAULTS: dict[str, Any] = {
         "agent_max_steps": 24,          # Tool rounds per agent turn (finding code in a big project takes several).
         "claude_enoy_mcp": False,       # Claude calls Enoy's tools itself (MCP). Needs Claude Code without --safe-mode;
                                         # off: Enoy reads the PC facts first and puts them in Claude's request.
+        "claude_files": True,           # Claude may list, read and search the open project's files itself (read-only,
+                                        # through Enoy; secrets files and private globs are never shared).
     },
     "privacy": {
         "cloud_policy": "auto",         # "auto": permitted context may go to Claude; "never": everything stays local.
@@ -262,6 +264,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "agent_apply": (bool, None),
         "agent_max_steps": (int, _range(2, 40)),
         "claude_enoy_mcp": (bool, None),
+        "claude_files": (bool, None),
     },
     "privacy": {
         "cloud_policy": (str, _choice(CLOUD_POLICIES)),

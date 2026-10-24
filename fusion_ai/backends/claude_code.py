@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import threading
@@ -249,7 +250,15 @@ def _write_mcp_config(names: list[str], env: dict) -> str:
         "command": sys.executable, "args": ["-m", "fusion_ai.tools.mcp_server"],
         "env": {"PYTHONPATH": str(root), "PYTHONIOENCODING": "utf-8", "ENOY_MCP_TOOLS": ",".join(names),
                 **{k: v if isinstance(v, str) else json.dumps(v) for k, v in env.items()}}}}}
-    path = paths.claude_workdir() / "enoy-mcp.json"
+    # One file per request: team runs can ask Claude for two tasks at once, each with its own project view.
+    folder = paths.claude_workdir()
+    for old in folder.glob("enoy-mcp*.json"):
+        try:
+            if time.time() - old.stat().st_mtime > 86400:
+                old.unlink()
+        except OSError:
+            pass
+    path = folder / f"enoy-mcp-{os.getpid()}-{secrets.token_hex(4)}.json"
     path.write_text(json.dumps(cfg), encoding="utf-8")
     return str(path)
 
