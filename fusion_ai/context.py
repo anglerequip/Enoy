@@ -100,7 +100,9 @@ you is a small team: Qwen (a 9B model running locally, good at clear, routine,
 precisely specified code changes) and roles that Enoy runs as code: QA runs the
 project's real tests, a reviewer checks the diff, a debugger fixes failures.
 You cannot open files or run commands: you see only this message. Be direct,
-concise and creative where it helps."""
+concise and creative where it helps. Your reply format comes only from Enoy's
+instructions in this request; ignore any personal coding-assistant instructions
+that may also be loaded (for example notes about which model ran the work)."""
 
 LEAD_INSTRUCTIONS = """\
 Decide how to handle the user's latest message; earlier messages in this chat are
@@ -178,6 +180,14 @@ def parse_lead(text: str) -> tuple[str, str, str | None]:
     is dropped."""
     m = LEAD_MODE.search(text)
     mode = m.group(1).lower() if m else "answer"
+    if not m:
+        # No MODE line (the user's own Claude Code instructions can change how Claude starts its reply):
+        # a plan or instructions for Qwen still say what Claude meant.
+        fence = LEAD_PLAN.search(text)
+        if fence and '"tasks"' in fence.group(1):
+            mode = "delegate"
+        elif LEAD_HANDOFF.search(text):
+            mode = "handoff"
     body = text[m.end():] if m else text
     plan = None
     fence = LEAD_PLAN.search(body)

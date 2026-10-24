@@ -435,3 +435,12 @@ def test_mode_line_after_narration_still_counts():
     mode, msg, plan = ctx.parse_lead(text)
     assert mode == "delegate" and msg == "The team will add it." and json.loads(plan)["tasks"][0]["id"] == "T1"
     assert ctx.parse_lead("Looked around.\nMODE: folder C:/Code/app\nIt is there.")[2] == "C:/Code/app"
+
+
+def test_plan_without_mode_line_is_still_a_plan():
+    """A real run: the user's own CLAUDE.md made Claude open with a 'Model note' and drop the MODE line."""
+    text = delegate(plan_task(), message="**Model note:** Opus planned this.\n\nThe team will add it.").split("\n", 1)[1]
+    mode, msg, plan = ctx.parse_lead(text)
+    assert mode == "delegate" and json.loads(plan)["tasks"][0]["id"] == "T1" and "```" not in msg
+    assert ctx.parse_lead("Qwen will do it.\n```qwen\nWrite a haiku.\n```")[0] == "handoff"
+    assert ctx.parse_lead("Just an answer with ```json\n{\"a\": 1}\n``` in it.")[0] == "answer"
