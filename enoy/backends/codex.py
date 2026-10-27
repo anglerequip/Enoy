@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,27 @@ import time
 from pathlib import Path
 
 from .base import CODEX, BackendError, BackendStatus, ChatRequest, ChatResult
+
+
+def find_executable(configured: str = "") -> str | None:
+    """Find Codex even when a desktop launch lacks Codex's injected PATH."""
+    if configured:
+        return configured if Path(configured).is_file() else None
+    found = shutil.which("codex")
+    if found:
+        return found
+    candidates = [Path.home() / ".local" / "bin" / "codex.exe"]
+    if os.environ.get("APPDATA"):
+        candidates.append(Path(os.environ["APPDATA"]) / "npm" / "codex.cmd")
+    if os.environ.get("LOCALAPPDATA"):
+        bundled = Path(os.environ["LOCALAPPDATA"]) / "OpenAI" / "Codex" / "bin"
+        candidates.append(bundled / "codex.exe")
+        try:
+            versions = [p for p in bundled.glob("*/codex.exe") if p.is_file()]
+            candidates.extend(sorted(versions, key=lambda p: p.stat().st_mtime, reverse=True))
+        except OSError:
+            pass
+    return next((str(p) for p in candidates if p.is_file()), None)
 
 
 class CodexBackend:
@@ -24,10 +46,10 @@ class CodexBackend:
         if self.command_prefix:
             return list(self.command_prefix)
         configured = self.settings.get("executable", "")
-        exe = configured if configured and Path(configured).is_file() else None
-        if not configured:
-            exe = shutil.which("codex")
+        exe = find_executable(configured)
         if not exe:
+            if configured:
+                raise BackendError("unavailable", f"Configured Codex executable was not found: {configured}. Update its path in Settings.")
             raise BackendError("unavailable", "Codex CLI was not found. Install Codex and run codex login.")
         return [exe]
 
