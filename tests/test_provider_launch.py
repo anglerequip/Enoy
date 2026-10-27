@@ -38,3 +38,14 @@ def test_missing_cli(monkeypatch):
     monkeypatch.setattr(provider_launch.codex, 'find_executable', lambda _: None)
     with pytest.raises(ValueError, match='not found'):
         provider_launch.launch('codex', {}, 'launch')
+
+
+def test_regular_chat_opens_only_chatgpt_without_prompt(monkeypatch):
+    import webbrowser
+    opened = Mock(return_value=True)
+    monkeypatch.setattr(webbrowser, 'open', opened)
+    assert provider_launch.open_chatgpt()['opened']
+    opened.assert_called_once_with('https://chatgpt.com/', new=2)
+    opened.return_value = False
+    with pytest.raises(ValueError, match='Could not open'):
+        provider_launch.open_chatgpt()

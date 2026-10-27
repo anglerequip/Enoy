@@ -80,6 +80,11 @@ class App:
         orc = self.orc
         db = orc.db
 
+        @r("POST", "/api/chatgpt/open")
+        def open_regular_chatgpt(q, body):
+            from .provider_launch import open_chatgpt
+            return open_chatgpt()
+
         @r("GET", "/api/updates")
         def update_status(q, body):
             return self.updates.snapshot()

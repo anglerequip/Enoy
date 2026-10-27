@@ -1,6 +1,6 @@
 # Enoy
 
-Enoy 0.5.0 is a Windows desktop app where ChatGPT evaluates your request,
+Enoy 0.5.1 is a Windows desktop app where ChatGPT evaluates your request,
 assigns development tasks to Codex or Claude, and reviews the real results.
 Both providers share recent conversation, attached images, task outputs, activity,
 and permitted project files through Enoy. Dark mode is the default.
@@ -22,13 +22,15 @@ The installer is currently unsigned, so Windows may display a publisher or Smart
 
 | Chat | Code |
 | --- | --- |
-| Softer buttons, warm green surfaces, room for everyday questions and ideas. | Compact blue-grey workspace, sharper controls, visible folder path and project tools. |
-| Defaults to **GPT-6 Luna / low effort**. Requests use your Codex allowance; there is no zero-usage model in this integration. | Keeps the configured planning model and automatic execution routing. |
+| Softer buttons, warm green surfaces, and **regular ChatGPT** for creating, learning and exploring. | Compact blue-grey workspace, sharper controls, visible folder path and project tools. |
+| **Open ChatGPT** opens the normal ChatGPT website in your browser. Enoy sends no prompt to Codex or the API. ChatGPT's own account/message limits still apply. Conversations stay in ChatGPT. | Keeps the configured planning model and automatic execution routing. |
 
 ![Chat workspace](docs/screenshots/chat.png)
 ![Code workspace](docs/screenshots/code.png)
 
-Choose a custom **Start** model before any message. Chat defaults can also be changed in **Settings → Models**.
+In **Settings → General → Chat experience**, you can explicitly opt into integrated Codex chat instead. That option defaults to GPT-6 Luna / low effort and uses your Codex allowance. Existing Enoy conversations remain available; continuing them inside Enoy requires selecting integrated chat. Normal ChatGPT conversations are not imported or copied automatically.
+
+Choose a custom **Start** model before any integrated message. Integrated Chat model defaults can also be changed in **Settings → Models**. Regular ChatGPT's model is selected on ChatGPT's own page.
 
 ## Updates
 

@@ -41,6 +41,7 @@ DEFAULT_ALLOWLIST = [
 ]
 
 DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': True, 'claude_complex': True},
+ 'chat': {'experience': 'chatgpt'},
  'blender': {'enabled': False, 'server_executable': '', 'host': '127.0.0.1', 'port': 9876},
  'agent': {'native_tools': True, 'access_mode': 'workspace'},
  'codex': {'enabled': True, 'executable': '', 'model': 'gpt-6.1-sol', 'effort': 'medium', 'timeout_s': 1800,
@@ -120,6 +121,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
                 "port": (int, _range(1, 65535))},
     "agent": {"native_tools": (bool, None), "access_mode": (str, _choice(("workspace", "full")))},
     "coordinator": {"enabled": (bool, None), "claude_reviews": (bool, None), "claude_complex": (bool, None)},
+    "chat": {"experience": (str, _choice(("chatgpt", "integrated")))},
     "codex": {
         "enabled": (bool, None),
         "executable": (str, None),

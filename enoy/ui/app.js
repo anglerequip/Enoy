@@ -30,6 +30,11 @@ const SLASH_COMMANDS = [
 function imgUrl(id) { return `/api/images/${id}?token=${encodeURIComponent(TOKEN)}`; }
 // Chat mode = plain chats (no folder); Code mode = chats about a project folder.
 function mode() { return S.project && (S.project.is_default || S.project.kind === "space") ? "chat" : "code"; }
+function regularChat() { return mode() === "chat" && (S.config?.chat?.experience || "chatgpt") === "chatgpt"; }
+async function openRegularChatGPT() {
+  try { toast((await api("POST", "/api/chatgpt/open", {})).message); }
+  catch (e) { toast(e.message, true); }
+}
 function codeProjects() { return S.projects.filter(p => !p.is_default && p.kind !== "space"); }
 
 // ---------------------------------------------------------------- helpers
@@ -170,6 +175,7 @@ function renderSidebar() {
   const p = S.project;
   const m = mode();
   document.documentElement.dataset.mode = m;
+  document.documentElement.dataset.chatExperience = regularChat() ? "chatgpt" : "integrated";
   $("mode-caption").textContent = m === "chat" ? "A little space to think" : "Your development workspace";
   $("mode-indicator").textContent = m === "chat" ? "Chat" : "Code workspace";
   $("workspace-context").innerHTML = m === "code" ? `<span class="workspace-label">WORKSPACE</span><span class="workspace-path" title="${esc(p?.path || "")}">${esc(p?.path || "Choose a project folder to get started")}</span><button class="btn small ghost" data-action="pick-folder">${p ? "Change folder" : "Open folder"}</button>` : "";
@@ -344,7 +350,7 @@ function renderModelPicker() {
   if (!el) return;
   const m = MODELS[S.model] || MODELS.auto;
   el.innerHTML = `<button class="picker-btn" data-action="model-menu" title="Who answers: ${esc(m.desc)}">
-    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${mode() === "chat" && S.model === "auto" ? "ChatGPT" : m.title}${CHEV}</button>`;
+    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${mode() === "chat" && S.model === "auto" ? "Codex" : m.title}${CHEV}</button>`;
 }
 
 function teamOn() { return S.chat ? !!S.chat.task.state.team : !!S.team; }
@@ -383,6 +389,16 @@ function renderThread(forceBottom = false) {
   const main = $("main");
   if (!S.chat) {
     main.classList.add("empty");
+    if (regularChat()) {
+      $("thread").innerHTML = `<div class="hello regular-chat-home">
+        <div class="home-eyebrow">CHATGPT / CHAT</div>
+        <h1 class="serif">Create, learn, explore.</h1>
+        <p>Your everyday ChatGPT, using your ChatGPT account. Continue on ChatGPT's own page in your browser.</p>
+        <div class="chatgpt-actions"><button class="btn primary" data-action="open-chatgpt">Open ChatGPT ↗</button></div>
+        <p class="small muted chatgpt-note">Enoy sends no prompt to Codex or the API. ChatGPT's own plan and message limits apply. Conversations stay in ChatGPT.</p>
+        <button class="btn ghost small" data-action="integrated-chat">Use integrated Codex chat (uses allowance)</button></div>`;
+      return;
+    }
     const hour = new Date().getHours();
     const greet = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     const general = S.project && S.project.is_default;
@@ -721,6 +737,10 @@ setInterval(() => {
 
 const AUTO_SIZE = CSS.supports("field-sizing", "content");
 function renderComposer() {
+  if (regularChat()) {
+    $("composer-wrap").innerHTML = S.chat ? `<div class="chatgpt-history-note"><span>This is a saved Enoy conversation. Regular ChatGPT conversations stay on ChatGPT.</span><div class="provider-actions"><button class="btn primary" data-action="open-chatgpt">Open ChatGPT ↗</button><button class="btn" data-action="integrated-chat">Continue here with Codex (uses allowance)</button></div></div>` : "";
+    return;
+  }
   const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
   const general = S.project && S.project.is_default;
   const placeholder = S.chat ? "Reply…" : mode() === "chat" ? "What's on your mind?" : S.project ? `Ask about ${S.project.name}, or describe a change…` : "Describe what to build or change. You'll pick the folder next.";
@@ -785,6 +805,7 @@ function composerNote() {
 }
 
 async function send(textOverride) {
+  if (regularChat()) { await openRegularChatGPT(); return; }
   const ta = $("prompt");
   let text = (textOverride ?? (ta ? ta.value : "")).trim();
   if (S.uploading) { toast("Wait a moment: an image is still being added."); return; }
@@ -1008,6 +1029,11 @@ function settingsGeneral() {
   const theme = lsGet("theme") || "dark";
   const p = S.project;
   $("set-body").innerHTML = `
+    <div class="set-section"><h3>Chat experience</h3>
+      <label class="field">Default for Chat<select id="chat-experience">
+      <option value="chatgpt" ${(S.config?.chat?.experience || "chatgpt") === "chatgpt" ? "selected" : ""}>Regular ChatGPT (opens in your browser)</option>
+      <option value="integrated" ${S.config?.chat?.experience === "integrated" ? "selected" : ""}>Integrated Codex chat (uses Codex allowance)</option>
+      </select><span class="small muted">Regular ChatGPT uses its own page and account limits. Enoy sends no model request when opening it.</span></label></div>
     <div class="set-section"><h3>Appearance</h3>
       <div class="set-row"><div class="lbl"><span>Theme</span></div>
         <select id="theme-select">${["system", "light", "dark"].map(t => `<option value="${t}" ${t === theme ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select></div></div>
@@ -1028,7 +1054,16 @@ function settingsGeneral() {
       <a class="btn" href="https://github.com/anglerequip/Enoy/releases" target="_blank" rel="noopener noreferrer">Releases</a></div>
       <p id="update-state" class="small muted" role="status">Updates are checked when you click.</p></div>`;
   $("theme-select").addEventListener("change", e => { applyTheme(e.target.value); lsSet("theme", e.target.value); });
+  $("chat-experience").addEventListener("change", e => guarded(async () => {
+    await setChatExperience(e.target.value);
+  }));
   renderUpdateStatus(S.updates);
+}
+
+async function setChatExperience(value) {
+  const data = await api("POST", "/api/config", {config: {chat: {experience: value}}});
+  S.config = data.config;
+  renderAll();
 }
 
 function renderUpdateStatus(data) {
@@ -1281,7 +1316,7 @@ const actions = {
     closeModal(); renderComposer();
   },
   "toggle-sidebar": () => $("app").classList.toggle("no-sidebar"),
-  "new-chat": () => { closeSidebarIfNarrow(); S.chat = null; S.chatId = null; S.draft = ""; S.localOnly = false;
+  "new-chat": () => { if (regularChat()) { openRegularChatGPT(); return; } closeSidebarIfNarrow(); S.chat = null; S.chatId = null; S.draft = ""; S.localOnly = false;
     S.team = !!(S.status && S.status.team_default); renderAll(); $("prompt").focus(); },
   "team-toggle": () => guarded(async () => {
     if (!S.chat) { S.team = !S.team; renderAll(); return; }
@@ -1324,7 +1359,7 @@ const actions = {
   "pick-folder": () => pickFolder(),
   "mode": el => guarded(async () => {
     const want = el.dataset.mode;
-    if (want === mode() && (want === "chat" || S.project)) return;
+    if (want === mode() && (want === "chat" || S.project)) { if (regularChat()) await openRegularChatGPT(); return; }
     S.chat = null; S.chatId = null; S.draft = "";
     if (want === "chat") await useDefaultProject();
     else {
@@ -1335,7 +1370,10 @@ const actions = {
       else { S.project = null; S.chats = []; renderSidebar(); }
     }
     renderAll();
+    if (want === "chat" && regularChat()) await openRegularChatGPT();
   }),
+  "open-chatgpt": () => openRegularChatGPT(),
+  "integrated-chat": () => guarded(async () => { await setChatExperience("integrated"); toast("Integrated chat uses your Codex plan allowance."); }),
   "add-images": () => { closeMenu(); const i = $("img-input"); if (i) i.click(); },
   "unattach-image": el => { S.images = S.images.filter(im => im.id !== el.dataset.id); renderComposer(); },
   "view-image": (el, e) => { if (e) e.preventDefault();
@@ -1753,7 +1791,7 @@ async function start() {
   setInterval(loadStatus, 20000);
   setInterval(() => api("POST", "/api/heartbeat").catch(() => {}), 30000);
   api("POST", "/api/heartbeat").catch(() => {});
-  try { await loadProjects(); } catch (e) { /* server problem shown in status */ }
+  await Promise.allSettled([loadProjects(), api("GET", "/api/config").then(meta => { S.config = meta.config; })]);
   const last = Number(lsGet("lastProject"));
   const linked = Number((location.hash.match(/^#chat=(\d+)$/) || [])[1]);
   try {

@@ -101,6 +101,18 @@ def test_update_api_requires_auth_and_handles_active_tasks(server, monkeypatch):
     assert call(server, 'POST', '/api/updates', {}) == (200, {'status': 'checking'})
 
 
+def test_regular_chat_launch_never_calls_a_backend(server, monkeypatch):
+    from enoy import provider_launch
+    opened = []
+    monkeypatch.setattr(provider_launch, 'open_chatgpt', lambda: opened.append(True) or {'opened': True})
+    before = {name: len(backend.requests) for name, backend in server.app.orc.backends.items()}
+    assert call(server, 'POST', '/api/chatgpt/open', {}, token=False)[0] == 401
+    assert not opened
+    assert call(server, 'POST', '/api/chatgpt/open', {'prompt': 'must not be forwarded'}) == (200, {'opened': True})
+    assert opened == [True]
+    assert {name: len(backend.requests) for name, backend in server.app.orc.backends.items()} == before
+
+
 def test_api_requires_token_and_local_host(server):
     assert call(server, "GET", "/api/status", token=False)[0] == 401
     assert call(server, "GET", "/api/status", host="evil.example.com")[0] == 403

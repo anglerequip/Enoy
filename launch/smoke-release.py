@@ -1,5 +1,6 @@
 """Exercise the frozen HTTP app and stdio helper without calling a model."""
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -34,6 +35,10 @@ try:
     with urllib.request.urlopen(info['url'], timeout=5) as response:
         html = response.read().decode()
     assert 'mode-indicator' in html and 'workspace-context' in html
+    token = re.search(r'name="enoy-token" content="([^"]+)"', html).group(1)
+    request = urllib.request.Request(info['url'] + 'api/config', headers={'X-Enoy-Token': token})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert json.load(response)['config']['chat']['experience'] == 'chatgpt'
     with urllib.request.urlopen(info['url'] + 'static/styles.css', timeout=5) as response:
         assert 'data-mode="chat"' in response.read().decode()
     print('Packaged app, UI assets and stdio MCP helper passed smoke checks.')

@@ -74,6 +74,19 @@ Private file filters intentionally retain filtered context mode. Observed team
 diffs cover indexed readable text files up to 200 KB each and 16 MB per snapshot;
 native tool activity covers operations beyond that diff preview.
 
+## 0.5.1 ordinary ChatGPT default
+
+- The complete suite passed **332 tests**.
+
+- Regular Chat now opens the fixed `https://chatgpt.com/` URL in the user's browser.
+  The request carries no prompt, attachments, chat history or CLI credentials.
+- Backend and JavaScript regression checks verify the launcher makes no model
+  request, rejects unauthenticated API calls, and the composer/send path cannot
+  silently fall through to Codex in regular Chat mode.
+- Visually checked the default ChatGPT landing screen and verified integrated
+  chat is an explicit setting that persists after reload. Code retains its existing
+  workflow. Existing Enoy chat history stays saved and can be continued after opting in.
+
 ## 0.5.0 distribution and workspace checks
 
 - The final suite passed **329 tests** on Windows, including update integrity,

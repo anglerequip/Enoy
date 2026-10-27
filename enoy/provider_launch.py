@@ -9,6 +9,14 @@ from .backends import claude_code, codex
 from . import paths
 
 
+def open_chatgpt():
+    """Open ordinary ChatGPT without handing it prompts, files or CLI credentials."""
+    import webbrowser
+    if not webbrowser.open("https://chatgpt.com/", new=2):
+        raise ValueError("Could not open your browser. Visit https://chatgpt.com/ to use regular ChatGPT.")
+    return {"opened": True, "message": "ChatGPT opened in your browser. Enoy sent no prompt to Codex or the API."}
+
+
 def install_missing():
     if os.name != "nt":
         raise ValueError("Automatic provider setup is supported on Windows only.")
