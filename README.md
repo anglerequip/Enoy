@@ -75,8 +75,13 @@ starts a fresh native session; both providers still receive Enoy's shared chat,
 task and activity context. Large shared-context records explicitly mark omitted
 text; native session history and tool results remain managed by the provider.
 ChatGPT defaults to gpt-6.1-sol with
-medium reasoning effort for planning and review. Bounded, lower-risk execution
-tasks automatically use GPT-6 Luna at high effort. By default Claude reviews
+medium reasoning effort for planning and review. Simple edits use GPT-6 Luna at
+low effort; Luau, Blender and VFX scripting use Sol at medium effort. Visual
+Blender inspection uses Terra at medium effort, and explicitly unresolved,
+exceptional problems use Astra at high effort. Claude Opus 5.5 handles game
+design and architecture at medium effort and difficult debugging/final review
+at high effort; Claude Code's current Sonnet alias handles VFX art direction.
+By default Claude reviews
 GPT's implementation plan before any workers start, handles complex implementation
 and repairs, then reviews the actual results. Claude may approve or replace the
 plan; revised plans undergo the same dependency and path validation. Automatic
@@ -94,6 +99,10 @@ GPT, the plan is marked as not Claude-reviewed, and GPT performs the final revie
 An unavailable economical GPT model falls back to Sol. Per-run Claude confirmation
 is respected when enabled; choosing an automatic Claude workflow can turn it off
 in Settings. Model switching and fallback decisions appear in Activity.
+
+Enoy currently routes text and code through the Codex and Claude Code CLIs. The
+GPT-Image-2.5 Flare and Sunburst roles in the recommended stack are not wired to
+an image-generation service in Enoy; use a connected image tool separately.
 
 The active model and effort appear beside the assistant's name. An open progress
 summary beneath the response shows routing explanations, public assistant updates

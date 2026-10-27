@@ -118,7 +118,8 @@ class ClaudeCodeBackend:
 
     def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False,
                    mcp_config: str | None = None, enoy_tools: list[str] | None = None,
-                   effort: str | None = None, native_tools: bool = False) -> list[str]:
+                   effort: str | None = None, native_tools: bool = False,
+                   model: str | None = None) -> list[str]:
         builtin = "WebSearch,WebFetch" if web else ""
         allowed = (["WebSearch", "WebFetch"] if web else []) + [f"mcp__enoy__{n}" for n in enoy_tools or []]
         tools = ["--tools", builtin] + (["--allowedTools", ",".join(allowed)] if allowed else [])
@@ -147,8 +148,9 @@ class ClaudeCodeBackend:
             args.append("--safe-mode")
         if system_prompt:
             args += ["--append-system-prompt" if native_tools else "--system-prompt", system_prompt]
-        if self.settings.get("model"):
-            args += ["--model", self.settings["model"]]
+        selected_model = self.settings.get("model") if model is None else model
+        if selected_model:
+            args += ["--model", selected_model]
         level = self.settings.get("effort") if effort is None else effort  # "" = Claude Code's own default.
         if level:
             args += ["--effort", level]
@@ -183,7 +185,8 @@ class ClaudeCodeBackend:
         mcp_config = (_write_mcp_config(request.enoy_tools, request.enoy_env, request.mcp_servers)
                       if request.enoy_tools or request.mcp_servers else None)
         cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools,
-                                                 mcp_config, request.enoy_tools, request.effort, request.native_tools)
+                                                 mcp_config, request.enoy_tools, request.effort, request.native_tools,
+                                                 request.model)
         if request.mcp_servers and not request.native_tools:
             # Keep built-in file/command tools restricted; the Blender server retains
             # Claude's own automatic permission review for scene changes.

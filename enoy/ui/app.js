@@ -545,7 +545,7 @@ function handoffText(e) {
 
 function modelLabel(info) {
   if (!info || !info.model) return "";
-  const names = {"gpt-6.1-sol":"GPT-6.1 Sol", "gpt-6-luna":"GPT-6 Luna"};
+  const names = {"gpt-6.1-sol":"GPT-6.1 Sol", "gpt-6-luna":"GPT-6 Luna", "gpt-6.1-terra":"GPT-6.1 Terra", "gpt-6-astra":"GPT-6 Astra", "claude-opus-5-5":"Claude Opus 5.5", "sonnet":"Claude Sonnet"};
   return `${names[info.model] || info.model}${info.effort ? ` · ${info.effort} effort` : ""}`;
 }
 function messageModelInfo(m) {
@@ -1177,9 +1177,9 @@ async function settingsModels() {
     ${inputRow("codex","executable","Codex executable","Empty: find codex on PATH")}
     ${inputRow("codex","model","Planning and review model","Default: gpt-6.1-sol")}
     ${inputRow("codex","effort","Planning reasoning effort","Default: medium")}
-    ${toggleRow("codex","adaptive_routing","Use economical execution models automatically","Planning and final review use the Codex model above. Bounded, lower-risk implementation tasks use the execution model below; repairs return to the planning model.")}
+    ${toggleRow("codex","adaptive_routing","Use the recommended role-based model stack","Planning/review uses Sol medium; simple edits use Luna low; Luau, Blender and VFX scripting use Sol medium; visual Blender inspection uses Terra medium; unresolved exceptional problems use Astra high. Claude uses Opus for design and difficult review, and Sonnet for VFX art direction.")}
     ${inputRow("codex","execution_model","Execution model","Default: gpt-6-luna")}
-    ${inputRow("codex","execution_effort","Execution reasoning effort","Default: high")}
+    ${inputRow("codex","execution_effort","Execution reasoning effort","Default: low")}
     ${inputRow("codex","chat_model","Chat default model","Default: gpt-6-luna. Uses your Codex plan allowance.")}
     ${inputRow("codex","chat_effort","Chat reasoning effort","Default: low")}
     ${toggleRow("coordinator","claude_reviews","GPT plans, Claude reviews","Claude checks implementation plans before execution and reviews the final results. Unavailable reviews and GPT fallbacks are shown in Activity.")}
@@ -1191,8 +1191,8 @@ async function settingsModels() {
     </select><span class="small">Workspace: work in the selected project. Full Access: explicitly authorize work across your PC using Enoy's Windows account, including from a general chat. Provider approval checks and Windows permissions still apply. This setting does not grant administrator privileges.</span></label>
     ${toggleRow("claude","enabled","Enable Claude","Uses your Claude Code sign-in.")}
     ${toggleRow("claude","confirm_before_send","Ask before sending to Claude","Approve Claude once per delegated run.")}
-    ${inputRow("claude","model","Claude model","Empty: Claude Code default")}
-    ${inputRow("claude","effort","Claude reasoning effort","Uses the supported Claude Code effort setting")}
+    ${inputRow("claude","model","Claude default model","Default: claude-opus-5-5")}
+    ${inputRow("claude","effort","Claude default reasoning effort","Default: medium; difficult debugging and final review route at high")}
     ${inputRow("routing","max_attempts","Attempts per task","","number")}
     ${inputRow("team","max_tasks","Maximum tasks per plan","","number")}
     ${inputRow("team","max_model_calls","Requests per run","","number")}
@@ -1377,7 +1377,7 @@ const actions = {
   ]),
   "starting-model-default": () => { S.startingModel = null; closeMenu(); renderComposer(); },
   "starting-model-light": () => {
-    S.startingModel = { model: S.config?.codex?.execution_model || "gpt-6-luna", effort: S.config?.codex?.execution_effort || "high" };
+    S.startingModel = { model: S.config?.codex?.execution_model || "gpt-6-luna", effort: S.config?.codex?.execution_effort || "low" };
     closeMenu(); renderComposer();
   },
   "starting-model-custom": () => {

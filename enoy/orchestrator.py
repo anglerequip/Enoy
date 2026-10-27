@@ -1508,10 +1508,12 @@ class Orchestrator:
                                    excluded_files=[f["path"] for f in files_meta if f not in allowed])
         prompt = privacy.finalize(user, private, check)
         from . import native, model_policy, blender
-        profile = {'model':self.cfg['claude'].get('model', ''), 'effort':self.cfg['claude'].get('effort', ''),
-                   'reason':'Claude is handling the selected or delegated task.'}
+        task_objective = self.db.get_task(task_id).get('objective', '')
+        profile = model_policy.claude_profile(self.cfg, task_objective, purpose)
         model_policy.announce(self, task_id, CLAUDE, purpose, profile)
-        native_options = native.options(self, task_id, CLAUDE, purpose)
+        native_options = native.options(self, task_id, CLAUDE, purpose, profile)
+        native_options.setdefault('model', profile['model'])
+        native_options.setdefault('effort', profile['effort'])
         files = [] if native_options else self._claude_file_tools(task_id)
         if not native_options and self.cfg.get("tools", {}).get("enabled", True):
             files = files + ["find_folders"]

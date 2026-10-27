@@ -1,5 +1,6 @@
 """Per-request Codex model routing and public progress (never private reasoning)."""
 import time
+import re
 
 from .routing import classify
 from .redact import redact
@@ -9,19 +10,60 @@ def choose(cfg, purpose, objective="", file_count=0, repair=False):
     settings = cfg['codex']
     model, effort = settings.get('model', ''), settings.get('effort', '')
     reason = 'Planning, analysis and review use the planning model.'
-    if settings.get('adaptive_routing', True) and purpose in ('edit', 'native_edit', 'ask') and not repair:
+    if settings.get('adaptive_routing', True) and purpose in ('edit', 'native_edit', 'ask', 'review', 'lead_review', 'plan', 'lead') and not repair:
         task = classify(objective, file_count)
-        if (task.kind == 'edit' and task.complexity == 'low' and task.risk != 'high'
+        lowered = objective.lower()
+        # Role stack supplied in Enoy's recommended model matrix. These explicit
+        # specialties take precedence over the generic small-edit optimization.
+        if re.search(r"\b(blender|geometry nodes|procedural model)\b", lowered) and re.search(r"\b(visual|inspect|look|screenshot|feedback|scene)\b", lowered):
+            model, effort = 'gpt-6.1-terra', 'medium'
+            reason = 'Visual inspection and Blender feedback use GPT-6.1 Terra at medium effort.'
+        elif re.search(r"\b(exceptional|unresolved|still failing|still broken|same error again)\b", lowered):
+            model, effort = 'gpt-6-astra', 'high'
+            reason = 'An unresolved technical problem uses GPT-6 Astra at high effort.'
+        elif re.search(r"\b(quick review|quick code review|triage|route this task)\b", lowered):
+            model, effort = 'gpt-6-luna', 'low'
+            reason = 'Quick review and routing use GPT-6 Luna at low effort.'
+        elif re.search(r"\b(difficult|complex|advanced)\b", lowered) and re.search(r"\b(procedural model|geometry nodes|procedural modeling)\b", lowered):
+            model, effort = settings.get('model', 'gpt-6.1-sol'), 'high'
+            reason = 'Difficult procedural modeling uses GPT-6.1 Sol at high effort.'
+        elif re.search(r"\b(luau|roblox|blender|geometry nodes|vfx|visual effects)\b", lowered):
+            model, effort = settings.get('model', 'gpt-6.1-sol'), 'medium'
+            reason = 'Specialty scripting and procedural work use GPT-6.1 Sol at medium effort.'
+        elif (task.kind == 'edit' and task.complexity == 'low' and task.risk != 'high'
                 and file_count <= 2 and task.scope != 'multiple modules' and not task.needs.get('multi_step')):
             model = settings.get('execution_model', 'gpt-6-luna')
-            effort = settings.get('execution_effort', 'high')
-            reason = 'Bounded implementation task: use the economical execution model.'
+            effort = settings.get('execution_effort', 'low')
+            reason = 'Simple, repetitive implementation uses GPT-6 Luna at low effort.'
         else:
             reason = 'Keep the planning model for analysis or work that is complex, broad, or risky.'
     elif repair:
-        reason = 'A repair or retry needs the planning model to investigate the failure.'
+        if re.search(r"\b(exceptional|unresolved|still failing|still broken|same error again)\b", str(objective).lower()):
+            model, effort = 'gpt-6-astra', 'high'
+            reason = 'An unresolved technical repair uses GPT-6 Astra at high effort.'
+        else:
+            reason = 'A repair or retry needs the planning model to investigate the failure.'
     if not settings.get('adaptive_routing', True):
         reason = 'Automatic model routing is disabled; use the configured Codex model.'
+    return {'model': model, 'effort': effort, 'reason': reason}
+
+
+def claude_profile(cfg, objective='', purpose='', repair=False):
+    """Choose a Claude role profile from the supplied model stack."""
+    settings = cfg['claude']
+    text = (str(objective) + ' ' + str(purpose)).lower()
+    model = settings.get('model', 'claude-opus-5-5')
+    effort = settings.get('effort', 'medium')
+    reason = 'Claude Opus handles concept and complex design work at medium effort.'
+    if re.search(r"\b(vfx|visual effects|art direction|visual feedback)\b", text):
+        model, effort = 'sonnet', 'medium'
+        reason = 'VFX art direction uses Claude Code’s current Sonnet alias at medium effort.'
+    elif repair or 'review' in str(purpose).lower() or re.search(r"\b(debug|debugging|unresolved|still failing|same error)\b", text):
+        effort = 'high'
+        reason = 'Difficult debugging and final review use Claude Opus at high effort.'
+    elif re.search(r"\b(architect|architecture|system design|game concept|mechanics|progression|geometry nodes|procedural model)\b", text):
+        effort = 'high' if re.search(r"\b(complex|difficult|large|multiple systems)\b", text) else 'medium'
+        reason = 'Game design and architecture use Claude Opus at medium or high effort by scope.'
     return {'model': model, 'effort': effort, 'reason': reason}
 
 

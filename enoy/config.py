@@ -45,12 +45,12 @@ DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': T
  'blender': {'enabled': False, 'server_executable': '', 'host': '127.0.0.1', 'port': 9876},
  'agent': {'native_tools': True, 'access_mode': 'workspace'},
  'codex': {'enabled': True, 'executable': '', 'model': 'gpt-6.1-sol', 'effort': 'medium', 'timeout_s': 1800,
-           'adaptive_routing': True, 'execution_model': 'gpt-6-luna', 'execution_effort': 'high',
-           'chat_model': 'gpt-6-luna', 'chat_effort': 'low'},
+           'adaptive_routing': True, 'execution_model': 'gpt-6-luna', 'execution_effort': 'low',
+           'chat_model': 'gpt-6-luna', 'chat_effort': 'low', 'model_stack_revision': 2},
  'claude': {'enabled': True,
             'executable': '',
             'model': 'claude-opus-5-5',
-            'effort': 'high',
+            'effort': 'medium',
             'timeout_s': 600,
             'confirm_before_send': True,
             'safe_mode': True},
@@ -132,6 +132,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "execution_effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max", "ultra"))),
         "chat_model": (str, None),
         "chat_effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max"))),
+        "model_stack_revision": (int, _choice((2,))),
         "timeout_s": ((int, float), _range(10, 7200)),
     },
     "claude": {
@@ -238,6 +239,15 @@ def validate(raw: Any) -> tuple[dict, list[str]]:
                     warnings.append(f"'{section}.{key}' {problem}; using default.")
                     continue
             cfg[section][key] = item
+    # One-time migration of the previous shipped defaults. A missing stack
+    # revision distinguishes older configs; only replace the known defaults.
+    codex_raw = raw.get('codex', {}) if isinstance(raw.get('codex'), dict) else {}
+    if 'model_stack_revision' not in codex_raw:
+        if codex_raw.get('execution_model', 'gpt-6-luna') == 'gpt-6-luna' and codex_raw.get('execution_effort', 'high') == 'high':
+            cfg['codex']['execution_effort'] = 'low'
+        claude_raw = raw.get('claude', {}) if isinstance(raw.get('claude'), dict) else {}
+        if claude_raw.get('model', 'claude-opus-5-5') == 'claude-opus-5-5' and claude_raw.get('effort', 'high') == 'high':
+            cfg['claude']['effort'] = 'medium'
     return cfg, warnings
 
 
