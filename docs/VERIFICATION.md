@@ -74,6 +74,22 @@ Private file filters intentionally retain filtered context mode. Observed team
 diffs cover indexed readable text files up to 200 KB each and 16 MB per snapshot;
 native tool activity covers operations beyond that diff preview.
 
+## 0.5.2 workspace styling and preferences
+
+- The complete Windows regression suite passed **342 tests**.
+
+- Regression checks cover mode switching and New chat without opening a browser,
+  directional transitions, reduced motion, and error recovery.
+- All 12 palettes preserve readable foreground contrast on their default surfaces.
+  Custom colours reject non-hex CSS values and incompatible surface brightness.
+  Chat and Code choices persist independently; server-side appearance preferences
+  survive closing/reopening the database and changing the local server address.
+- Visually checked the warm Code home, palette gallery, custom colour controls,
+  live palette changes, and Chat staying inside Enoy. Screenshots are saved under
+  `docs/screenshots`.
+- Imported MSIX general-chat directories are recognized only in known app-data
+  layouts. Ordinary project folders named `general-chat` retain their Code identity.
+
 ## 0.5.1 ordinary ChatGPT default
 
 - The complete suite passed **332 tests**.

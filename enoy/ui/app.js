@@ -156,6 +156,49 @@ async function useDefaultProject() {
   await useProject(d.project.id);
 }
 
+async function switchWorkspace(want) {
+  if (!["chat", "code"].includes(want) || S.switchingMode) return;
+  if (want === mode() && (want === "chat" || S.project)) {
+    if (S.view && S.view !== "chat" && typeof setView === "function") { setView("chat"); renderAll(); }
+    return;
+  }
+  S.switchingMode = true;
+  const root = document.documentElement;
+  root.dataset.direction = want === "code" ? "to-code" : "to-chat";
+  $("mode-switch").setAttribute("aria-busy", "true");
+  const change = async () => {
+    S.chat = null; S.chatId = null; S.draft = "";
+    if (typeof setView === "function") setView("chat");
+    if (want === "chat") await useDefaultProject();
+    else {
+      const folders = codeProjects(), last = Number(lsGet("lastCodeProject"));
+      const pick = folders.find(p => p.id === last) || folders[0];
+      if (pick) await useProject(pick.id);
+      else { S.project = null; S.chats = []; }
+    }
+    renderAll();
+    if (typeof syncFrameTheme === "function") syncFrameTheme();
+  };
+  try {
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (document.startViewTransition && !reduce) {
+      const transition = document.startViewTransition(change);
+      transition.ready.catch(() => {});
+      await transition.updateCallbackDone;
+      await transition.finished.catch(() => {});
+    } else {
+      await change();
+      if (!reduce && $("main").animate) $("main").animate([
+        {opacity:0,transform:`translateX(${want === "code" ? 18 : -18}px)`},
+        {opacity:1,transform:"translateX(0)"}
+      ], {duration:320,easing:"cubic-bezier(.2,.8,.2,1)"});
+    }
+  } finally {
+    S.switchingMode = false;
+    $("mode-switch").removeAttribute("aria-busy");
+  }
+}
+
 async function loadChats() {
   if (!S.project) { S.chats = []; return; }
   S.chats = (await api("GET", `/api/tasks?project_id=${S.project.id}&limit=200`)).tasks;
@@ -175,6 +218,8 @@ function renderSidebar() {
   const p = S.project;
   const m = mode();
   document.documentElement.dataset.mode = m;
+  EnoyAppearance.apply(m);
+  if (typeof syncFrameTheme === "function") syncFrameTheme();
   document.documentElement.dataset.chatExperience = regularChat() ? "chatgpt" : "integrated";
   $("mode-caption").textContent = m === "chat" ? "A little space to think" : "Your development workspace";
   $("mode-indicator").textContent = m === "chat" ? "Chat" : "Code workspace";
@@ -403,20 +448,21 @@ function renderThread(forceBottom = false) {
     const greet = hour < 5 ? "Working late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
     const general = S.project && S.project.is_default;
     if (!S.project) {
-      $("thread").innerHTML = `<div class="hello">
-        <div class="home-eyebrow">ENOY / CODE</div>
-        <h1 class="serif">A clear space to build.</h1>
-        <p>Open a project, describe the work, and keep the files, changes and results together.</p>
-        <div class="suggest"><button data-action="pick-folder">Open folder…</button></div></div>`;
+      $("thread").innerHTML = `<div class="hello code-home">
+        <span class="code-spark" aria-hidden="true">✳</span>
+        <h1 class="serif">What shall we build?</h1>
+        <p>A focused place for your next project. Open a folder to begin.</p>
+        <div class="code-open"><button class="btn primary" data-action="pick-folder">${FOLDER_ICON} Open a project folder</button></div>
+        <div class="code-home-hint">Explore the code <span>·</span> Make a change <span>·</span> Review the results</div></div>`;
       return;
     }
     const chatting = mode() === "chat";
     const tips = chatting
       ? ["Help me put an idea into words", "Explain something simply", "Plan something with me"]
       : ["Give me an overview of this project", "Find and fix a bug in the main file", "Add tests for the most important function"];
-    $("thread").innerHTML = `<div class="hello">
-      <div class="home-eyebrow">${chatting ? "A MOMENT FOR YOUR IDEAS" : "ENOY / CODE"}</div>
-      <h1 class="serif">${chatting ? `${greet}.` : "What are we building?"}</h1>
+    $("thread").innerHTML = `<div class="hello ${chatting ? "" : "code-home"}">
+      ${chatting ? `<div class="home-eyebrow">A MOMENT FOR YOUR IDEAS</div>` : `<span class="code-spark" aria-hidden="true">✳</span><div class="code-project-label">${FOLDER_ICON} ${esc(S.project.name)}</div>`}
+      <h1 class="serif">${chatting ? `${greet}.` : "What shall we build?"}</h1>
       <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "A question, a rough idea, or something on your mind. Start wherever you are." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>. Describe a change or explore the code.`}</p>
       ${!codexOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">Codex is unavailable. Run codex login, then refresh status. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
       <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic" aria-hidden="true">${chatting ? ["✦", "◌", "↗"][i] : TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
@@ -805,7 +851,7 @@ function composerNote() {
 }
 
 async function send(textOverride) {
-  if (regularChat()) { await openRegularChatGPT(); return; }
+  if (regularChat()) { toast("Use Open ChatGPT to start a conversation in your browser."); return; }
   const ta = $("prompt");
   let text = (textOverride ?? (ta ? ta.value : "")).trim();
   if (S.uploading) { toast("Wait a moment: an image is still being added."); return; }
@@ -971,12 +1017,12 @@ async function openSettings(tab) {
 }
 
 function renderSettings() {
-  const tabs = [["general", "General"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
+  const tabs = [["general", "General"], ["appearance", "Colours"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
   openModal(`<div class="set-nav"><h2>Settings</h2>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
     <div class="set-body" id="set-body"><div class="muted">Loading…</div></div>`, true);
-  ({ general: settingsGeneral, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+  ({ general: settingsGeneral, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
 }
 
 function toggleRow(sec, key, label, desc) {
@@ -1038,10 +1084,10 @@ function settingsGeneral() {
       <div class="set-row"><div class="lbl"><span>Theme</span></div>
         <select id="theme-select">${["system", "light", "dark"].map(t => `<option value="${t}" ${t === theme ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select></div></div>
     <div class="set-section"><h3>Project</h3>
-      <div class="set-row"><div class="lbl"><span>${p && !p.is_default ? esc(p.name) : "No project open"}</span><span class="d">${p && !p.is_default ? esc(p.path) : "Plain chat. Open a folder to let the AI read and change code."}</span></div>
+      <div class="set-row"><div class="lbl"><span>${p && !p.is_default ? esc(p.name) : "No project open"}</span><span class="d">${p && !p.is_default ? esc(p.path) : (mode() === "code" ? "Choose a folder for your development workspace." : "Open a folder in Code to work on a project.")}</span></div>
         <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
     <div class="set-section"><h3>About</h3>
-      <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. ChatGPT uses your Codex sign-in; Claude uses your Claude Code sign-in.
+      <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. Code uses your Codex or Claude Code sign-in. Regular ChatGPT uses your browser sign-in.
       Native agents can edit the selected project directly. Delegated patch proposals follow your approval settings.</div></div>
     <div class="set-section"><h3>Accounts and setup</h3>
       <p class="small muted">Use your own ChatGPT and Claude accounts. Install missing tools, then open each provider to sign in.</p>
@@ -1053,11 +1099,42 @@ function settingsGeneral() {
       <div class="provider-actions"><button id="update-check" class="btn" data-action="check-updates">Check for updates</button>
       <a class="btn" href="https://github.com/anglerequip/Enoy/releases" target="_blank" rel="noopener noreferrer">Releases</a></div>
       <p id="update-state" class="small muted" role="status">Updates are checked when you click.</p></div>`;
-  $("theme-select").addEventListener("change", e => { applyTheme(e.target.value); lsSet("theme", e.target.value); });
+  $("theme-select").addEventListener("change", e => {
+    applyTheme(e.target.value); lsSet("theme", e.target.value);
+    api("POST", "/api/appearance", {theme:e.target.value}).catch(error=>toast(error.message,true));
+  });
   $("chat-experience").addEventListener("change", e => guarded(async () => {
     await setChatExperience(e.target.value);
   }));
   renderUpdateStatus(S.updates);
+}
+
+function settingsAppearance() {
+  const editing = S.appearanceMode || mode();
+  const pref = EnoyAppearance.preference(editing), colours = EnoyAppearance.colours(editing);
+  $("set-body").innerHTML = `<div class="set-section colour-settings"><div class="colour-heading"><div><h3>Make it your space</h3><p class="small muted">Separate colours for Chat and Code. Saved on this PC.</p></div><div class="colour-mode" role="group" aria-label="Workspace colours">${["chat","code"].map(m=>`<button class="btn ${editing===m?"primary":"ghost"}" data-action="colour-mode" data-mode="${m}" aria-pressed="${editing===m}">${m==="chat"?"Chat":"Code"}</button>`).join("")}</div></div>
+    <div class="palette-grid" role="group" aria-label="Colour presets">${EnoyAppearance.palettes.map(p=>`<button class="palette-choice ${pref.preset===p.id?"selected":""}" data-action="colour-preset" data-preset="${p.id}" aria-pressed="${pref.preset===p.id}"><span class="palette-swatches" aria-hidden="true"><i style="background:${p.light}"></i><i style="background:${p.dark}"></i><i style="background:${p.night}"></i></span><span>${p.name}</span>${pref.preset===p.id?`<span aria-hidden="true">✓</span>`:""}</button>`).join("")}</div>
+    <div class="colour-preview" style="--preview-bg:${colours.background};--preview-panel:${colours.panel};--preview-accent:${colours.accent};--preview-ink:${colours.ink}"><div class="preview-mini-sidebar"></div><div class="preview-mini-body"><span class="small">${editing==="chat"?"Your everyday ideas":"Your next great project"}</span><strong>${editing==="chat"?"Room to think.":"Let's build something."}</strong><div class="preview-mini-composer"><span>Message Enoy…</span><i aria-hidden="true">↑</i></div></div></div>
+    <h3>Fine-tune the colours</h3><div class="custom-colours">${[["accent","Accent"],["background","Background"],["sidebar","Sidebar"],["panel","Cards & composer"]].map(([key,label])=>`<label class="custom-colour"><span>${label}</span><span class="colour-value">${colours[key]}</span><input type="color" data-custom-colour="${key}" aria-label="${label} colour" value="${colours[key]}"></label>`).join("")}</div>
+    <p id="colour-error" class="small danger-text" role="status"></p><button class="btn ghost" data-action="colour-reset">Reset ${editing=== "chat"?"Chat":"Code"} colours</button></div>`;
+  document.querySelectorAll("[data-custom-colour]").forEach(input=>input.addEventListener("change",async()=>{
+    const current=EnoyAppearance.preference(editing);
+    const error=await saveWorkspaceColours(editing,{...current,custom:{...current.custom,[input.dataset.customColour]:input.value}});
+    if (error) { $("colour-error").textContent=error; return; }
+    settingsAppearance();
+    if (typeof syncFrameTheme === "function") syncFrameTheme();
+  }));
+}
+
+let colourSaveQueue=Promise.resolve();
+async function saveWorkspaceColours(editing,pref) {
+  const error=EnoyAppearance.save(editing,pref);
+  if (error) return error;
+  const save=()=>api("POST","/api/appearance",{mode:editing,...pref});
+  const pending=colourSaveQueue.then(save);
+  colourSaveQueue=pending.catch(()=>{});
+  try { await pending; return ""; }
+  catch (_) { return "The preview changed, but saving failed. Check the connection and try again."; }
 }
 
 async function setChatExperience(value) {
@@ -1220,6 +1297,7 @@ async function saveCfg(update) {
 function applyTheme(t) {
   if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
   else delete document.documentElement.dataset.theme;
+  EnoyAppearance.apply();
   if (typeof syncFrameTheme === "function") syncFrameTheme();  // Window border and background follow the theme.
 }
 
@@ -1316,8 +1394,8 @@ const actions = {
     closeModal(); renderComposer();
   },
   "toggle-sidebar": () => $("app").classList.toggle("no-sidebar"),
-  "new-chat": () => { if (regularChat()) { openRegularChatGPT(); return; } closeSidebarIfNarrow(); S.chat = null; S.chatId = null; S.draft = ""; S.localOnly = false;
-    S.team = !!(S.status && S.status.team_default); renderAll(); $("prompt").focus(); },
+  "new-chat": () => { closeSidebarIfNarrow(); S.chat = null; S.chatId = null; S.draft = ""; S.localOnly = false;
+    S.team = !!(S.status && S.status.team_default); if (typeof setView === "function") setView("chat"); renderAll(); $("prompt")?.focus(); },
   "team-toggle": () => guarded(async () => {
     if (!S.chat) { S.team = !S.team; renderAll(); return; }
     const on = !S.chat.task.state.team;
@@ -1357,21 +1435,19 @@ const actions = {
   "switch-project": el => { closeMenu(); guarded(() => openProject(Number(el.dataset.id))); },
   "switch-default": () => { closeMenu(); guarded(async () => { await useDefaultProject(); S.chat = null; S.chatId = null; await loadProjects(); renderAll(); }); },
   "pick-folder": () => pickFolder(),
-  "mode": el => guarded(async () => {
-    const want = el.dataset.mode;
-    if (want === mode() && (want === "chat" || S.project)) { if (regularChat()) await openRegularChatGPT(); return; }
-    S.chat = null; S.chatId = null; S.draft = "";
-    if (want === "chat") await useDefaultProject();
-    else {
-      const folders = codeProjects();
-      const last = Number(lsGet("lastCodeProject"));
-      const pick = folders.find(p => p.id === last) || folders[0];
-      if (pick) await useProject(pick.id);
-      else { S.project = null; S.chats = []; renderSidebar(); }
-    }
-    renderAll();
-    if (want === "chat" && regularChat()) await openRegularChatGPT();
-  }),
+  "mode": el => guarded(() => switchWorkspace(el.dataset.mode)),
+  "colour-mode": el => { S.appearanceMode=el.dataset.mode; settingsAppearance(); },
+  "colour-preset": async el => {
+    const error=await saveWorkspaceColours(S.appearanceMode||mode(),{preset:el.dataset.preset,custom:{}});
+    if (error) { $("colour-error").textContent=error; return; }
+    settingsAppearance(); if (typeof syncFrameTheme === "function") syncFrameTheme();
+  },
+  "colour-reset": async () => {
+    const editing=S.appearanceMode||mode();
+    const error=await saveWorkspaceColours(editing,{preset:EnoyAppearance.defaultId(editing),custom:{}});
+    if (error) { $("colour-error").textContent=error; return; }
+    settingsAppearance(); if (typeof syncFrameTheme === "function") syncFrameTheme();
+  },
   "open-chatgpt": () => openRegularChatGPT(),
   "integrated-chat": () => guarded(async () => { await setChatExperience("integrated"); toast("Integrated chat uses your Codex plan allowance."); }),
   "add-images": () => { closeMenu(); const i = $("img-input"); if (i) i.click(); },
@@ -1791,7 +1867,8 @@ async function start() {
   setInterval(loadStatus, 20000);
   setInterval(() => api("POST", "/api/heartbeat").catch(() => {}), 30000);
   api("POST", "/api/heartbeat").catch(() => {});
-  await Promise.allSettled([loadProjects(), api("GET", "/api/config").then(meta => { S.config = meta.config; })]);
+  await Promise.allSettled([loadProjects(), api("GET", "/api/config").then(meta => { S.config = meta.config; }),
+    api("GET", "/api/appearance").then(data=>{ if(data.theme) { lsSet("theme",data.theme); applyTheme(data.theme); } EnoyAppearance.restore(data.colours); })]);
   const last = Number(lsGet("lastProject"));
   const linked = Number((location.hash.match(/^#chat=(\d+)$/) || [])[1]);
   try {

@@ -113,6 +113,17 @@ def test_regular_chat_launch_never_calls_a_backend(server, monkeypatch):
     assert {name: len(backend.requests) for name, backend in server.app.orc.backends.items()} == before
 
 
+def test_appearance_api_is_authenticated_and_persistent(server):
+    assert call(server,'GET','/api/appearance',token=False)[0]==401
+    assert call(server,'POST','/api/appearance',{},token=False)[0]==401
+    value={'mode':'code','preset':'coffee','custom':{'accent':'#abcdef'}}
+    status,saved=call(server,'POST','/api/appearance',value)
+    assert status==200 and saved['colours']['code']['preset']=='coffee'
+    assert call(server,'GET','/api/appearance')[1]==saved
+    assert call(server,'POST','/api/appearance',{'mode':'code','preset':'coffee','custom':{'accent':'bad'}})[0]==400
+    assert call(server,'GET','/api/appearance')[1]==saved
+
+
 def test_api_requires_token_and_local_host(server):
     assert call(server, "GET", "/api/status", token=False)[0] == 401
     assert call(server, "GET", "/api/status", host="evil.example.com")[0] == 403

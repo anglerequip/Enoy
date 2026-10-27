@@ -11,6 +11,8 @@ vm.runInContext(source.slice(source.indexOf('function regularChat()'), source.in
 vm.runInContext(source.slice(source.indexOf('async function send('), source.indexOf('async function runSlashCommand(')), ctx);
 (async () => {
   await ctx.send('This must never go to a model');
+  assert.equal(requests.length, 0);
+  await ctx.openRegularChatGPT();
   assert.equal(requests.length, 1);
   assert.equal(requests[0][1], '/api/chatgpt/open');
   assert.deepEqual(Object.keys(requests[0][2]), []);

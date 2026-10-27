@@ -1,6 +1,6 @@
 # Enoy
 
-Enoy 0.5.1 is a Windows desktop app where ChatGPT evaluates your request,
+Enoy 0.5.2 is a Windows desktop app where ChatGPT evaluates your request,
 assigns development tasks to Codex or Claude, and reviews the real results.
 Both providers share recent conversation, attached images, task outputs, activity,
 and permitted project files through Enoy. Dark mode is the default.
@@ -22,7 +22,7 @@ The installer is currently unsigned, so Windows may display a publisher or Smart
 
 | Chat | Code |
 | --- | --- |
-| Softer buttons, warm green surfaces, and **regular ChatGPT** for creating, learning and exploring. | Compact blue-grey workspace, sharper controls, visible folder path and project tools. |
+| Softer buttons, warm green surfaces, and **regular ChatGPT** for creating, learning and exploring. | Warm, Claude-inspired workspace, serif heading, focused composer, visible folder path and project tools. |
 | **Open ChatGPT** opens the normal ChatGPT website in your browser. Enoy sends no prompt to Codex or the API. ChatGPT's own account/message limits still apply. Conversations stay in ChatGPT. | Keeps the configured planning model and automatic execution routing. |
 
 ![Chat workspace](docs/screenshots/chat.png)
@@ -30,7 +30,13 @@ The installer is currently unsigned, so Windows may display a publisher or Smart
 
 In **Settings → General → Chat experience**, you can explicitly opt into integrated Codex chat instead. That option defaults to GPT-6 Luna / low effort and uses your Codex allowance. Existing Enoy conversations remain available; continuing them inside Enoy requires selecting integrated chat. Normal ChatGPT conversations are not imported or copied automatically.
 
-Choose a custom **Start** model before any integrated message. Integrated Chat model defaults can also be changed in **Settings → Models**. Regular ChatGPT's model is selected on ChatGPT's own page.
+Choose a custom **Start** model before any integrated message. Integrated Chat model defaults can also be changed in **Settings → Models**. Regular ChatGPT's model is selected on ChatGPT's own page. Switching modes and pressing New chat stay inside Enoy. Only **Open ChatGPT** opens the browser.
+
+## Colours and motion
+
+**Settings → Colours** offers 12 presets (Clay, Sage, Graphite, Ocean, Lavender, Rose, Amber, Teal, Forest, Indigo, Coffee and High contrast), with separate choices for Chat and Code. Customize the accent, background, sidebar and cards/composer, or reset a workspace to its defaults. Preferences and the light/dark/system setting are saved in app data and survive restarts and updates.
+
+Chat/Code switching uses a sliding tab and a short directional transition. Windows reduced-motion preferences are respected. Imported general-chat data folders are recognized as Chat history instead of appearing among Code workspaces.
 
 ## Updates
 

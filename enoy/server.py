@@ -53,6 +53,7 @@ class App:
         self.last_seen = time.time()
         from .usage import UsageMonitor
         self.usage_monitor = UsageMonitor()
+        self.appearance_lock = threading.Lock()
         self.shutdown_requested = threading.Event()
         self.shutdown_callback = None
         from .updates import UpdateManager
@@ -79,6 +80,17 @@ class App:
         r = self.route
         orc = self.orc
         db = orc.db
+
+        @r("GET", "/api/appearance")
+        def appearance_read(q, body):
+            from .appearance import read
+            return read(db)
+
+        @r("POST", "/api/appearance")
+        def appearance_save(q, body):
+            from .appearance import save
+            with self.appearance_lock:
+                return save(db, body)
 
         @r("POST", "/api/chatgpt/open")
         def open_regular_chatgpt(q, body):

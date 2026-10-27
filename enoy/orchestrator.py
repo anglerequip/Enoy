@@ -1301,7 +1301,18 @@ class Orchestrator:
     # Projects (workspaces with instructions, documents and artifacts) ---------------------
 
     def is_default_project(self, project: dict) -> bool:
-        return project["path"] == str(Path(os.path.realpath(paths.general_chat_dir())))
+        candidate = Path(os.path.realpath(project["path"]))
+        if candidate == Path(os.path.realpath(paths.general_chat_dir())):
+            return True
+        # Imported chats can retain the MSIX app's earlier virtual data path.
+        # Recognize only known app-data layouts, not arbitrary folders with this name.
+        try:
+            parts = tuple(part.lower() for part in candidate.relative_to(Path.home() / "AppData" / "Local").parts)
+        except ValueError:
+            return False
+        return (parts in (("enoy", "general-chat"), ("fusionai", "general-chat")) or
+                len(parts) == 6 and parts[0] == "packages" and parts[2:4] == ("localcache", "local")
+                and parts[4] in ("enoy", "fusionai") and parts[5] == "general-chat")
 
     def create_space(self, name: str, description: str = "", instructions: str = "") -> dict:
         """A project without a code folder. It gets its own empty folder in the app data."""

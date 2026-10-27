@@ -1,0 +1,30 @@
+"use strict";
+const assert=require('assert'), fs=require('fs'), vm=require('vm');
+const storage=new Map(), css=new Map();
+const root={dataset:{theme:'dark',mode:'code'},style:{setProperty:(key,value)=>css.set(key,value)}};
+const ctx={document:{documentElement:root}, localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},matchMedia:()=>({matches:true,addEventListener(){}})};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync('enoy/ui/appearance.js','utf8')+'\nthis.appearance=EnoyAppearance;',ctx);
+const a=ctx.appearance;
+assert.equal(a.palettes.length,12);
+assert.equal(a.preference('code').preset,'clay');
+assert.equal(a.preference('chat').preset,'sage');
+for (const mode of ['chat','code']) for (const night of [true,false]) for (const palette of a.palettes) {
+  const c=a.colours(mode,night,{preset:palette.id,custom:{}});
+  for (const surface of [c.background,c.sidebar,c.panel]) assert(a.contrast(surface,c.ink)>=4.5,palette.id);
+}
+assert.equal(a.save('code',{preset:'ocean',custom:{accent:'#ffbb99'}}),'');
+assert.equal(a.preference('chat').preset,'sage');
+assert.equal(css.get('--accent'),'#ffbb99');
+assert(a.save('code',{preset:'ocean',custom:{panel:'#ffffff'}}).includes('readable'));
+assert.equal(a.preference('code').custom.panel,undefined);
+assert(a.save('chat',{preset:'sage',custom:{accent:'url(https://example.com)'}}).includes('valid'));
+assert.equal(a.preference('chat').preset,'sage');
+vm.runInContext(fs.readFileSync('enoy/ui/appearance.js','utf8').replace('const EnoyAppearance','const ReloadedAppearance')+'\nthis.reloaded=ReloadedAppearance;',ctx);
+assert.equal(ctx.reloaded.preference('code').custom.accent,'#ffbb99');
+root.dataset.mode='chat'; a.apply(); assert.notEqual(css.get('--accent'),'#ffbb99');
+storage.clear();
+a.restore({code:{preset:'lavender',custom:{accent:'#ccbbee'}},chat:{preset:'sage',custom:{}}});
+assert.equal(a.preference('code').custom.accent,'#ccbbee');
+assert.equal(a.preference('chat').preset,'sage');
+console.log('Workspace palettes persist independently, reject unsafe colours and preserve readable text');

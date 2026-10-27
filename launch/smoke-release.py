@@ -39,6 +39,13 @@ try:
     request = urllib.request.Request(info['url'] + 'api/config', headers={'X-Enoy-Token': token})
     with urllib.request.urlopen(request, timeout=5) as response:
         assert json.load(response)['config']['chat']['experience'] == 'chatgpt'
+    with urllib.request.urlopen(info['url'] + 'static/appearance.js', timeout=5) as response:
+        assert 'EnoyAppearance' in response.read().decode()
+    request=urllib.request.Request(info['url']+'api/appearance',
+        data=json.dumps({'mode':'code','preset':'clay','custom':{'accent':'#dc9c7e'}}).encode(),
+        headers={'X-Enoy-Token':token,'Content-Type':'application/json'})
+    with urllib.request.urlopen(request,timeout=5) as response:
+        assert json.load(response)['colours']['code']['custom']['accent']=='#dc9c7e'
     with urllib.request.urlopen(info['url'] + 'static/styles.css', timeout=5) as response:
         assert 'data-mode="chat"' in response.read().decode()
     print('Packaged app, UI assets and stdio MCP helper passed smoke checks.')
