@@ -48,12 +48,14 @@ class CodexBackend:
         except (BackendError, OSError, subprocess.TimeoutExpired) as exc:
             return BackendStatus(CODEX, False, str(exc))
 
-    def build_args(self) -> list[str]:
+    def build_args(self, image_paths: list[str] | None = None) -> list[str]:
         args = ["exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                 "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--color", "never",
                 "-c", "features.shell_tool=false"]
         if self.settings.get("model"):
             args += ["--model", self.settings["model"]]
+        for path in image_paths or []:
+            args += ["--image", path]
         return args + ["-"]
 
     def chat(self, request: ChatRequest) -> ChatResult:
@@ -61,13 +63,20 @@ class CodexBackend:
             raise BackendError("unavailable", "ChatGPT / Codex is disabled.")
         if request.cancel.is_set():
             raise BackendError("cancelled", "Codex request cancelled.")
-        if any(m.images for m in request.messages):
-            raise BackendError("failed", "The coordinator currently accepts text messages only.")
+        pictures = [picture for m in request.messages for picture in m.images]
         prompt = "\n\n".join(f"[{m.role}]\n{m.content}" for m in request.messages)
         started = time.monotonic()
         try:
             with tempfile.TemporaryDirectory(prefix="enoy-codex-") as workdir:
-                proc = subprocess.Popen(self._base_cmd() + self.build_args(), cwd=workdir,
+                image_paths = []
+                for index, picture in enumerate(pictures):
+                    extension = {"image/png": "png", "image/jpeg": "jpg"}.get(picture.media_type)
+                    if not extension:
+                        raise BackendError("failed", "Only PNG and JPEG image attachments are supported.")
+                    path = Path(workdir) / f"attachment-{index + 1}.{extension}"
+                    path.write_bytes(picture.data)
+                    image_paths.append(str(path))
+                proc = subprocess.Popen(self._base_cmd() + self.build_args(image_paths), cwd=workdir,
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, encoding="utf-8", errors="replace",
                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

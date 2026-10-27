@@ -1,7 +1,7 @@
 """Images attached to chat messages.
 
 Images are stored once in the app data folder, named by their SHA-256 hash, and
-messages refer to them by that id. Only PNG and JPEG are accepted: both Qwen
+messages refer to them by that id. Only PNG and JPEG are accepted: both Codex
 and Claude adapters can read them. The chat window converts other formats
 and shrinks large pictures before uploading.
 """

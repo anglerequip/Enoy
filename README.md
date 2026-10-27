@@ -1,9 +1,9 @@
 # Enoy
 
-Enoy 0.3.0 is a Windows desktop app where ChatGPT evaluates your request,
+Enoy 0.3.1 is a Windows desktop app where ChatGPT evaluates your request,
 assigns development tasks to Codex or Claude, and reviews the real results.
-Both providers share recent conversation, task outputs, activity, and permitted
-project files through Enoy. Dark mode is the default.
+Both providers share recent conversation, attached images, task outputs, activity,
+and permitted project files through Enoy. Dark mode is the default.
 
 ## Start
 

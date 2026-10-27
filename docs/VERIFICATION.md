@@ -1,6 +1,6 @@
-# Enoy 0.3.0 verification
+# Enoy 0.3.1 verification
 
-- The current regression suite passed 208 tests. Cloud-only provider contract and
+- The current regression suite passed 215 tests. Cloud-only provider contract and
   old-chat continuation checks passed separately with the coordinator tests.
 - A minimal live Codex request through `app.build()` completed with
   `ENOY_CLOUD_OK`, using only the registered Codex and Claude providers.
@@ -13,3 +13,7 @@
 
 Historical local-provider tests and verification reports are retained under
 `tests/retired/` and `docs/history/`; they do not describe the active runtime.
+
+- Image workflow checks cover Auto, manual Claude approval, worker handoffs,
+  follow-ups, retries, missing files and temporary attachment cleanup. A live
+  Auto-mode request described the supplied error screenshot correctly.

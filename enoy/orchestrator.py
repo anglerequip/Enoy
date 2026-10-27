@@ -398,7 +398,7 @@ class Orchestrator:
             return
         if not task['state'].get('pending_claude'):
             raise TaskError('No Claude request is waiting.')
-        self._spawn(self._guard, task_id, coordinator.send_direct)
+        self._spawn(self._guard, task_id, lambda tid: coordinator.send_direct(self, tid))
 
     def decline_claude(self, task_id: int) -> None:
         from . import coordinator
@@ -1442,7 +1442,7 @@ class Orchestrator:
         return project
 
     def _claude_direct(self, task_id: int, step_id: int | None, purpose: str, system: str, user: str,
-                       files_meta: list[dict], private: set[str]) -> ChatResult:
+                       files_meta: list[dict], private: set[str], images: list | None = None) -> ChatResult:
         """One Claude request outside the single-task flow (team runs), with the same privacy rules."""
         block = self._cloud_block(task_id)
         if block:
@@ -1463,7 +1463,7 @@ class Orchestrator:
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": purpose, "since": time.time()}
         try:
             result = self.backends[CLAUDE].chat(ChatRequest(
-                messages=[ChatMessage("system", system), ChatMessage("user", prompt)], purpose=purpose,
+                messages=[ChatMessage("system", system), ChatMessage("user", prompt, images=images or [])], purpose=purpose,
                 cancel=self._cancel.setdefault(task_id, threading.Event()), enoy_tools=files,
                 enoy_env=self._mcp_env(task_id) if files else {}))
         except BackendError as exc:

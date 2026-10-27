@@ -12,7 +12,7 @@ import pytest
 from conftest import FakeBackend
 from enoy import config as config_mod
 from enoy import images
-from enoy.backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ImageData
+from enoy.backends.base import CLAUDE, CODEX as LOCAL, BackendError, ChatMessage, ChatRequest, ImageData
 from enoy.backends.claude_code import ClaudeCodeBackend, _parse_json_output
 from enoy.orchestrator import EventBus, Orchestrator
 from enoy.server import App, Server
@@ -198,4 +198,5 @@ def test_upload_view_and_send_image_through_api(server):
     status, body, _ = call(server, "POST", "/api/tasks", {"project_id": pid, "objective": "What is this?", "images": [img]})
     assert status == 200
     status, detail, _ = call(server, "GET", f"/api/tasks/{body['task']['id']}")
-    assert detail["messages"][0]["images"] == [img] and detail["task"]["status"] == "failed"
+    assert detail["messages"][0]["images"] == [img] and detail["task"]["status"] == "completed"
+    assert server.app.orc.backends[LOCAL].requests[-1].messages[-1].images[0].data == png()

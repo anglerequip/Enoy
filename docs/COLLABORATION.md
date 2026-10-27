@@ -13,6 +13,9 @@ Sign in through `codex login` and Claude Code. Select Auto, ChatGPT / Codex, or
 Claude in Enoy. A chat with cloud access disabled cannot request a model.
 
 Snapshots refresh between provider requests. Cancel and send a follow-up to steer
-an in-flight task. Resolve pending changes before starting a new plan. Auto mode
-currently accepts text only. This workflow uses the local Git checkout; it does
-not synchronize GitHub issues/PRs or push changes automatically.
+an in-flight task. Resolve pending changes before starting a new plan.
+
+Image attachments are delivered to the coordinator, workers and final reviewer,
+including follow-ups that refer to earlier screenshots. This workflow uses the
+local Git checkout; it does not synchronize GitHub issues/PRs or push changes
+automatically.
