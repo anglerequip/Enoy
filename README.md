@@ -1,6 +1,6 @@
 # Enoy
 
-Enoy 0.5.2 is a Windows desktop app where ChatGPT evaluates your request,
+Enoy is a Windows desktop app where ChatGPT evaluates your request,
 assigns development tasks to Codex or Claude, and reviews the real results.
 Both providers share recent conversation, attached images, task outputs, activity,
 and permitted project files through Enoy. Dark mode is the default.
@@ -40,7 +40,7 @@ Chat/Code switching uses a sliding tab and a short directional transition. Windo
 
 ## Updates
 
-**Settings → General → Check for updates** checks stable GitHub Releases. If a newer version exists, Enoy downloads the installer, verifies its SHA-256 checksum, backs up the database and settings, then installs and restarts automatically. Finish running tasks first. Checks happen only when requested; there is no background polling of GitHub.
+Every successful push to `main` runs the Windows tests, build and installer smoke check, then publishes a stable GitHub release. Once that workflow finishes, **Settings → General → Check for updates** can find the new version. Enoy downloads the installer, verifies its SHA-256 checksum, backs up the database and settings, then installs and restarts automatically. Finish running tasks first. Checks happen only when requested; there is no background polling of GitHub.
 
 App files are installed under `%LOCALAPPDATA%\Programs\Enoy`. Chats, settings and attachments remain under `%LOCALAPPDATA%\Enoy`; update backups are in its `update-backups` folder. Provider CLIs manage their own updates. Optional Blender integration requires separate Blender/MCP setup and is not needed for ordinary Chat or Code.
 

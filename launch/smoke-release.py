@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from enoy import __version__
 
 root = Path(__file__).resolve().parent.parent
 app = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / 'dist' / 'Enoy'
@@ -39,6 +40,9 @@ try:
     request = urllib.request.Request(info['url'] + 'api/config', headers={'X-Enoy-Token': token})
     with urllib.request.urlopen(request, timeout=5) as response:
         assert json.load(response)['config']['chat']['experience'] == 'chatgpt'
+    request = urllib.request.Request(info['url'] + 'api/status', headers={'X-Enoy-Token': token})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert json.load(response)['version'] == __version__, 'Frozen app version does not match its release version.'
     with urllib.request.urlopen(info['url'] + 'static/appearance.js', timeout=5) as response:
         assert 'EnoyAppearance' in response.read().decode()
     request=urllib.request.Request(info['url']+'api/appearance',

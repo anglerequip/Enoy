@@ -12,6 +12,7 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+enoy/_release_version.py
 
 # App data never lives here (it is in %LOCALAPPDATA%\Enoy), but keep stray copies out
 *.db
