@@ -7,8 +7,9 @@ $failures = @()
 function Find-Provider([string]$Name) {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $candidates = @((Join-Path $env:USERPROFILE ".local\bin\$Name.exe"),
-        (Join-Path $env:APPDATA "npm\$Name.cmd"))
+    $candidates = @((Join-Path $env:USERPROFILE ".local\bin\$Name"),
+        (Join-Path $env:USERPROFILE ".local\bin\$Name.exe"))
+    if ($env:APPDATA) { $candidates += Join-Path $env:APPDATA "npm\$Name.cmd" }
     if ($Name -eq 'codex') {
         $candidates += Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin\codex.exe'
     }

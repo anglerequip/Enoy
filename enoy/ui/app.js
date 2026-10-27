@@ -352,6 +352,7 @@ function showProviderStatus(provider, message = "", bad = false) {
   if (!["codex", "claude"].includes(provider)) return;
   const st = S.status?.[provider];
   const enabled = S.config?.[provider]?.enabled !== false;
+  const cliMissing = !!st && !st.available && /not found|not installed/i.test(st.detail || "");
   openModal(`<div id="provider-dialog" data-provider="${provider}">
     <div class="provider-dialog-head"><span class="provider-mark" aria-hidden="true">${provider === "codex" ? CODEX_MARK : "✳"}</span><div><h2>${NAME[provider]}</h2><span class="provider-state"><span class="dot ${!st ? "" : st.available ? "ok" : "bad"}"></span>${!st ? "Status unknown" : st.available ? "Ready" : "Unavailable"}</span></div></div>
     <p class="provider-detail">${esc(st?.detail || "Check status to connect to Enoy.")}</p>
@@ -360,7 +361,7 @@ function showProviderStatus(provider, message = "", bad = false) {
     <p class="small muted">Enoy uses the signed-in ${provider === "codex" ? "Codex" : "Claude Code"} CLI. Checking status sends no model request.</p>
     <p id="provider-feedback" class="small ${bad ? "danger-text" : "muted"}" role="status">${esc(message)}</p>
     <div class="provider-actions"><button class="btn" data-action="provider-check" data-provider="${provider}">Check status</button>
-    ${enabled ? `<button class="btn primary" data-action="provider-launch" data-provider="${provider}" data-launch="${st?.available ? "launch" : "login"}">${st?.available ? "Launch CLI" : "Launch & sign in"}</button>` : `<button class="btn primary" data-action="open-settings" data-tab="models">Enable in Settings</button>`}
+    ${!enabled ? `<button class="btn primary" data-action="open-settings" data-tab="models">Enable in Settings</button>` : cliMissing ? `<button class="btn primary" data-action="install-providers" data-provider="${provider}">Install missing tools</button>` : `<button class="btn primary" data-action="provider-launch" data-provider="${provider}" data-launch="${st?.available ? "launch" : "login"}">${st?.available ? "Launch CLI" : "Launch & sign in"}</button>`}
     <button class="btn ghost" data-action="close-modal">Close</button></div></div>`);
 }
 async function providerAction(el, check = false) {
@@ -1651,8 +1652,8 @@ const actions = {
   "token-savings": () => showTokenSavings(),
   "settings-tab": el => { S.settingsTab = el.dataset.tab; renderSettings(); },
   "check-updates": () => checkUpdates(),
-  "install-providers": async () => {
-    try { toast((await api("POST", "/api/providers/install", {})).message); }
+  "install-providers": async el => {
+    try { toast((await api("POST", "/api/providers/install", {})).message); launchedProvider = el?.dataset.provider || null; }
     catch (e) { toast(e.message, true); }
   },
   "tools-key": async el => {

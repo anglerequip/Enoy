@@ -36,11 +36,18 @@ def find_executable(configured: str = "") -> str | None:
     found = shutil.which("claude")
     if found:
         return found
-    for candidate in (
-        Path.home() / ".local" / "bin" / "claude.exe",
-        Path.home() / ".claude" / "local" / "claude.exe",
-        Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
-    ):
+    homes = {Path.home()}
+    if os.environ.get("USERPROFILE"):
+        homes.add(Path(os.environ["USERPROFILE"]))
+    candidates = []
+    for home in homes:
+        # Claude's native installer uses this extensionless path on Windows.
+        candidates.extend((home / ".local" / "bin" / "claude",
+                           home / ".local" / "bin" / "claude.exe",
+                           home / ".claude" / "local" / "claude.exe"))
+    if os.environ.get("APPDATA"):
+        candidates.append(Path(os.environ["APPDATA"]) / "npm" / "claude.cmd")
+    for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
     return None
