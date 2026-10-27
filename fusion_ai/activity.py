@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from . import privacy
-from .backends.base import CLAUDE, LOCAL
+from .backends.base import CLAUDE, LOCAL, CODEX
 from .storage import STEP_OPEN, TERMINAL_STATUSES
 
 # Canonical stage order. The workflow view shows stages in the order they
@@ -40,7 +40,7 @@ TASK_STATUS_LABEL = {
     "awaiting_claude": "Needs your OK for Claude", "completed": "Completed", "failed": "Failed",
     "cancelled": "Cancelled", "interrupted": "Interrupted",
 }
-AGENT_LABEL = {LOCAL: "Qwen", CLAUDE: "Claude", "system": "Enoy", "user": "You"}
+AGENT_LABEL = {LOCAL: "Qwen", CLAUDE: "Claude", CODEX: "ChatGPT / Codex", "system": "Enoy", "user": "You"}
 
 # Timeline filter groups.
 CATEGORY = {
@@ -61,7 +61,7 @@ def category(ev: dict) -> str:
         if kind.endswith("completed") and ev.get("outcome") in ("failed", "timeout", "error"):
             return "errors"
         return CATEGORY[kind]
-    if kind.startswith("step.") and ev.get("agent") in (LOCAL, CLAUDE):
+    if kind.startswith("step.") and ev.get("agent") in (LOCAL, CLAUDE, CODEX):
         return "model"
     return "status"
 
@@ -344,7 +344,8 @@ def _team_block(orc: Any, task: dict) -> dict:
     run = view["run"]
     open_ = ("planned", "ready", "paused", "blocked")
     return {
-        "lead": bool(run.get("lead")), "lead_state": _lead_state(run, tasks), "hold": bool(run.get("hold")),
+        "lead": bool(run.get("lead")), "lead_provider": run.get("lead_provider", CLAUDE),
+        "lead_state": _lead_state(run, tasks), "hold": bool(run.get("hold")),
         "git": run.get("git"),
         "status": run.get("status", ""), "acceptance": run.get("acceptance", []), "planned_by": run.get("planned_by", ""),
         "plan_note": run.get("plan_note", ""), "verification": run.get("verification"), "repairs": run.get("repairs", 0),
@@ -372,6 +373,15 @@ def _lead_state(run: dict, tasks: list[dict]) -> str:
     """One line on what Claude, as the lead, is doing in this run. Built from recorded state only."""
     if not run.get("lead"):
         return ""
+    if run.get("lead_provider") == CODEX:
+        status = run.get("status", "")
+        if status == "lead_review":
+            return "ChatGPT is checking the team's results."
+        if status in ("completed", "failed", "cancelled"):
+            return "ChatGPT handed the result to you."
+        if any(t["status"] == "awaiting_review" for t in tasks):
+            return "ChatGPT's plan is waiting for your review of a change."
+        return "ChatGPT planned the work; Codex and Claude share the task results."
     status = run.get("status", "")
     if status == "lead_review":
         return "Claude is checking the team's results."
@@ -452,10 +462,12 @@ def snapshot(orc: Any, focus_id: int | None = None, task_filter: int | None = No
             "cancelled": counts.get("cancelled", 0),
         },
         "routing": orc.routing_stats(),
-        "lead": {"enabled": bool(orc.cfg["lead"]["enabled"]), "final_review": bool(orc.cfg["lead"]["final_review"])},
+        "lead": {"enabled": bool(orc.cfg["lead"]["enabled"]), "final_review": bool(orc.cfg["lead"]["final_review"]),
+                 "coordinator": bool(orc.cfg["coordinator"]["enabled"])},
         "memory": _memory_info(orc),
         "agents": [agent_card(orc, LOCAL, statuses[LOCAL], open_steps),
-                   agent_card(orc, CLAUDE, statuses[CLAUDE], open_steps)],
+                   agent_card(orc, CLAUDE, statuses[CLAUDE], open_steps)]
+                  + ([agent_card(orc, CODEX, statuses[CODEX], open_steps)] if CODEX in statuses else []),
         "focus": focus_block,
         "tasks": [_task_row(orc, t, paused) for t in sorted(active, key=lambda t: -t["updated"])]
                  + [_task_row(orc, t, paused) for t in recent],

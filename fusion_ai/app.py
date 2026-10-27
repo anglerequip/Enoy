@@ -22,7 +22,8 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__, config as config_mod, paths, winshell
-from .backends.base import CLAUDE, LOCAL
+from .backends.base import CLAUDE, LOCAL, CODEX
+from .backends.codex import CodexBackend
 from .backends.claude_code import ClaudeCodeBackend
 from .backends.ollama import OllamaBackend
 from .orchestrator import EventBus, Orchestrator
@@ -60,6 +61,7 @@ def build(cfg: dict | None = None, cfg_warnings: list[str] | None = None, synchr
     if interrupted:
         log.info("Marked %d interrupted task(s) for resume: %s", len(interrupted), interrupted)
     backends = {LOCAL: OllamaBackend(cfg["ollama"]), CLAUDE: ClaudeCodeBackend(cfg["claude"])}
+    backends[CODEX] = CodexBackend(cfg["codex"])
     last = storage.kv_get("claude_last_verified")
     if last:
         backends[CLAUDE].last_verified = last

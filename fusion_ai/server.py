@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, activity, artifacts as art_mod, config as config_mod, diagnostics, hardware, images, knowledge, paths
 from . import memory_guard
 from . import pccontrol as pc
-from .backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest
+from .backends.base import CLAUDE, LOCAL, CODEX, BackendError, ChatMessage, ChatRequest
 from .orchestrator import Orchestrator, TaskError
 from .project import PathError
 from .redact import redact
@@ -77,7 +77,9 @@ class App:
                 "verified": orc.backends[CLAUDE].verified,
             }
             claude["model_setting"] = orc.cfg["claude"]["model"]
-            return {"version": __version__, "local": local, "claude": claude,
+            codex = orc.backends[CODEX].status().as_dict() if CODEX in orc.backends else {"available": False}
+            return {"version": __version__, "local": local, "claude": claude, "codex": codex,
+                    "coordinator": orc.cfg["coordinator"]["enabled"],
                     "routing": orc.cfg["routing"], "config_warnings": self.cfg_warnings,
                     "privacy_never": orc.cfg["privacy"]["cloud_policy"] == "never",
                     "team_default": orc.cfg["team"]["default_new_chats"],

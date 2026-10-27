@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 
 LOCAL = "qwen"
 CLAUDE = "claude"
+CODEX = "codex"
 
 
 class BackendError(RuntimeError):

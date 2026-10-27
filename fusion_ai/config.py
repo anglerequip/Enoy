@@ -48,6 +48,15 @@ DEFAULT_ALLOWLIST = [
 ]
 
 DEFAULTS: dict[str, Any] = {
+    "coordinator": {
+        "enabled": True,
+    },
+    "codex": {
+        "enabled": True,
+        "executable": "",
+        "model": "",
+        "timeout_s": 600,
+    },
     "ollama": {
         "endpoint": "http://127.0.0.1:11434",
         "model": "qwen3.5:9b",
@@ -177,6 +186,13 @@ def _url(v: str):
 
 
 SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
+    "coordinator": {"enabled": (bool, None)},
+    "codex": {
+        "enabled": (bool, None),
+        "executable": (str, None),
+        "model": (str, None),
+        "timeout_s": ((int, float), _range(10, 7200)),
+    },
     "ollama": {
         "endpoint": (str, _url),
         "model": (str, lambda v: None if v.strip() else "must not be empty"),

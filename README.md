@@ -2,17 +2,25 @@
 
 *(formerly Fusion AI Workspace. Internal names such as the `fusion_ai` package and the `%LOCALAPPDATA%\FusionAI` data folder are unchanged, so existing chats and settings carry over.)*
 
-A Windows desktop workspace for AI-assisted development. **Qwen 3.5 9B runs locally
-through Ollama and handles routine work by default.** Claude, through your existing
-Claude Code sign-in, is an optional specialist for hard problems. You approve every
-file change, and you see everything that is sent to Claude before it goes.
+A Windows desktop workspace for AI-assisted development. **Auto mode now starts
+with ChatGPT through your signed-in Codex CLI.** ChatGPT evaluates the request,
+breaks development work into tasks for Codex or Claude, and reviews the results.
+Both providers receive shared conversation, task outputs and activity, and work
+against the same local project through Enoy's file checks and change approval flow.
+
+Run `codex login`, sign in to Claude Code, restart Enoy, open your repository and
+choose **Auto**. Qwen through Ollama remains available for local-only work.
+See [ChatGPT + Claude collaboration](docs/COLLABORATION.md) for setup, behavior and
+current boundaries. The Qwen/Claude routing and Claude-lead sections below describe
+the older workflows, available when ChatGPT coordination is disabled or bypassed.
 
 ## Start it
 
 1. Double-click **`Setup Enoy.cmd`** (once). It creates a private Python
    environment in `.venv`, installs the pinned packages, and puts a
    **Enoy** shortcut on your Desktop and in the Start menu.
-2. Make sure **Ollama** is running (it normally starts with Windows).
+2. Run **`codex login`** to sign in for ChatGPT coordination and sign in to
+   **Claude Code** for Claude tasks. Ollama is only needed for the local workflows.
 3. Open **Enoy** from the Desktop or Start menu.
 
 Requirements: Windows 10/11, Python 3.11+, Ollama with `qwen3.5:9b`. Claude Code is

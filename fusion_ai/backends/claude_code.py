@@ -29,7 +29,8 @@ from pathlib import Path
 from .. import paths
 from .base import CLAUDE, BackendError, BackendStatus, ChatRequest, ChatResult
 
-LIMIT_MARKERS = ("usage limit", "limit reached", "rate limit", "out of extra usage", "limit will reset", "resets at")
+LIMIT_MARKERS = ("usage limit", "limit reached", "rate limit", "out of extra usage", "limit will reset", "resets at",
+                 "weekly limit", "daily limit", "session limit")
 AUTH_MARKERS = ("not logged in", "please run /login", "invalid api key", "authentication", "oauth token")
 
 

@@ -199,6 +199,7 @@ def test_restart_keeps_history_and_marks_interrupted(cfg, project, tmp_path):
 def test_dashboard_updates_while_a_task_runs(cfg, project, tmp_path):
     from conftest import FakeBackend
 
+    cfg["tools"]["online"] = False  # Streaming test: do not wait on Windows Credential Manager/search setup.
     release = threading.Event()
 
     def slow(request):

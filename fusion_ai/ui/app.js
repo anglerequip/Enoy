@@ -5,7 +5,7 @@
 // All model output is HTML-escaped: this page holds the API token.
 
 const TOKEN = document.querySelector('meta[name="fusion-token"]').content;
-const NAME = { qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
+const NAME = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
 const MODELS = {
   auto: { title: "Auto", desc: "The smart router picks per message: Qwen for everyday work, Claude for hard problems. Claude asks you first." },
   qwen: { title: "Qwen 3.5 9B", desc: "Runs on your PC. Free and private. This chat stays local unless you pick Claude." },
@@ -47,6 +47,7 @@ function clock(ts) { return new Date(ts * 1000).toLocaleTimeString([], { hour: "
 // Qwen's mark: a "Q" drawn as a ring with a tail, in the tile's ink color (the tile flips with the theme).
 const QWEN_MARK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="11.5" r="6.8"/><path d="M13.2 13.6 18.4 19.6"/></svg>`;
 function avatar(b) {
+  if (b === "codex") return `<span class="avatar team">◎</span>`;
   if (b === "team") return `<span class="avatar team">◆</span>`;
   if (b === "enoy") return `<img class="avatar enoy" src="/static/logo.svg" alt="">`;
   return b === "claude" ? `<span class="avatar claude">✳</span>` : `<span class="avatar qwen">${QWEN_MARK}</span>`;
@@ -116,6 +117,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try { S.status = await api("GET", "/api/status"); renderStatusLine(); } catch (e) { /* the next tick tries again */ }
 }, 15000);
+function coordinatorOn() { return !!(S.status && S.status.coordinator && S.model === "auto" && !localOnlyReason() && !S.status.routing.zero_paid_mode); }
 function qwenOk() { return !!(S.status && S.status.local.available); }
 function claudeOk() { return !!(S.status && S.status.claude.available); }
 
@@ -261,7 +263,7 @@ function renderThread(forceBottom = false) {
     $("thread").innerHTML = `<div class="hello">
       <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">${greet}</h1>
       <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code in the sidebar to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
-      ${!qwenOk() && S.status ? `<p style="margin-top:10px;color:var(--bad)">Qwen is offline. Start Ollama, then try again. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
+      ${!qwenOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">Qwen is offline. Start Ollama, then try again. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
       <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic">${TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
     return;
   }
@@ -334,7 +336,7 @@ function patchThread(container, items, animate = false) {
 }
 
 function handoffText(e) {
-  const who = e.backend === "claude" ? "Claude" : "Qwen";
+  const who = NAME[e.backend] || e.backend || "Enoy";
   let why = e.text.replace(/^Now handled by [^:]+:\s*/, "").replace(/^Escalated:\s*/, "");
   why = why.replace(/^The local model/, "Qwen");
   return `${who} took over · ${why}`;
@@ -434,7 +436,7 @@ function statusHtml(t) {
   const state = t.state || {};
   const run = state.team_run || {};
   if ((t.workflow === "team" || run.lead) && ["running", "queued"].includes(t.status)) {
-    const who = run.lead ? `${avatar("claude")}Claude<span class="where">· leading · team ${esc((run.status || "working").replace(/_/g, " "))}</span>`
+    const who = run.lead ? `${avatar(t.workflow === "chatgpt_leads" ? "codex" : "claude")}${t.workflow === "chatgpt_leads" ? "ChatGPT" : "Claude"}<span class="where">· leading · team ${esc((run.status || "working").replace(/_/g, " "))}</span>`
       : `${avatar("team")}Team<span class="where">· ${esc(run.status || "working")}</span>`;
     return `<div class="msg-ai live"><div class="ai-head">${who}</div>
       <div class="ai-body streaming" id="live-body"></div>
@@ -613,6 +615,7 @@ function composerNoteHtml() {
 function composerNote() {
   const lo = localOnlyReason();
   if (lo) return `🔒 Local only: ${esc(lo)}. Nothing here is sent to Claude.`;
+  if (coordinatorOn()) return "ChatGPT leads: evaluates your request, delegates to Codex or Claude, and reviews shared results.";
   if (S.model === "claude") return "Claude uses your Claude plan.";
   if (S.model === "auto" && S.status && S.status.lead && claudeOk()) {
     return S.status.lead_style === "balanced"
@@ -640,7 +643,8 @@ async function send(textOverride) {
   if (!S.status) await loadStatus();  // Sent before the first status check finished.
   if (backend === "claude" && !claudeOk()) { toast("Claude is not available right now. Pick Auto or Qwen.", true); return; }
   if (backend === "claude" && localOnlyReason()) { toast(`Claude is off here: ${localOnlyReason()}. Change that first.`, true); return; }
-  if (!qwenOk() && backend !== "claude") { toast("Qwen is offline. Start Ollama (it is in the Start menu), then try again.", true); return; }
+  if (coordinatorOn() && !S.status.codex?.available) { toast("ChatGPT coordinator is unavailable. Run codex login, then refresh status in Settings.", true); return; }
+  if (!qwenOk() && backend !== "claude" && !coordinatorOn()) { toast("Qwen is offline. Start Ollama (it is in the Start menu), then try again.", true); return; }
   const files = [...S.attached];
   S.sending = true;
   const ok = await guarded(async () => {
@@ -808,6 +812,15 @@ async function settingsModels() {
   let models = [];
   try { models = (await api("GET", "/api/ollama/models")).models.map(m => m.name); } catch (e) { /* offline */ }
   $("set-body").innerHTML = `
+    <div class="set-section"><h3>${avatar("codex")} ChatGPT coordinator</h3>
+      <p class="small muted">In Auto mode, ChatGPT evaluates each request, assigns tasks to Codex or Claude with a reason, and reviews results. Both receive recent shared chat, team messages and activity, and use the same project files through Enoy. Qwen is optional in this mode. Local-only chats keep their local workflow.</p>
+      ${toggleRow("coordinator", "enabled", "ChatGPT leads Enoy", "Uses your signed-in Codex CLI. Run codex login once. Overrides the older Claude lead in Auto mode.")}
+      ${toggleRow("codex", "enabled", "Enable ChatGPT / Codex", "Authentication is managed by the official Codex CLI.")}
+      <div class="small">${esc(S.status?.codex?.detail || "Refresh status to check Codex.")}</div>
+      <div class="grid2">${inputRow("codex", "executable", "Codex executable", "Empty: find codex on PATH")}
+      ${inputRow("codex", "model", "Codex model", "Empty: Codex default")}
+      ${inputRow("codex", "timeout_s", "Codex timeout (seconds)", "", "number")}</div>
+    </div>
     <div class="set-section"><h3>Who answers</h3>
       ${Object.entries(PRESETS).map(([k, p]) => `<label class="radio-card ${preset && preset[0] === k ? "sel" : ""}">
         <input type="radio" name="preset" value="${k}" ${preset && preset[0] === k ? "checked" : ""}>
@@ -932,10 +945,10 @@ function settingsSafety() {
         <textarea class="field mono" rows="4" data-cfg="permissions.extra_excluded_globs" data-list="1">${esc(c.permissions.extra_excluded_globs.join("\n"))}</textarea></label>
       <div class="small muted">Always hidden: .env files, keys, certificates, password and cookie files. Secrets in other files are replaced with [REDACTED] before any model sees them.</div></div>
     <div class="set-section"><h3>What may go to Claude</h3>
-      <label class="field">Cloud privacy<select data-cfg="privacy.cloud_policy">
+      <label class="field">Cloud privacy (ChatGPT and Claude)<select data-cfg="privacy.cloud_policy">
         <option value="auto" ${c.privacy.cloud_policy === "auto" ? "selected" : ""}>Send the relevant, permitted files when Claude is needed</option>
-        <option value="never" ${c.privacy.cloud_policy === "never" ? "selected" : ""}>Never send code to Claude (everything stays on this PC)</option></select></label>
-      <label class="field">Files Qwen may read but Claude never receives (one pattern per line, e.g. src/secret/** or *.private.lua)
+        <option value="never" ${c.privacy.cloud_policy === "never" ? "selected" : ""}>Never send code to cloud models (everything stays on this PC)</option></select></label>
+      <label class="field">Files Qwen may read but ChatGPT and Claude never receive (one pattern per line, e.g. src/secret/** or *.private.lua)
         <textarea class="field mono" rows="4" data-cfg="privacy.cloud_excluded_globs" data-list="1">${esc(c.privacy.cloud_excluded_globs.join("\n"))}</textarea></label>
       <div class="small muted">Claude only gets the few files relevant to the task, never the whole project. Before each request Enoy removes private files, any lines quoting them (from Qwen's answers, diffs or test output), and secrets, and logs a privacy check in Activity.
         You can also keep a whole project or a single chat on this PC from the project menu or the ＋ menu.</div></div>`;

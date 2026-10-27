@@ -36,7 +36,7 @@ from . import privacy
 from . import team as team_mod
 from . import tools as tools_mod
 from .tools import folders as folders_mod
-from .backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ChatResult
+from .backends.base import CLAUDE, LOCAL, CODEX, BackendError, ChatMessage, ChatRequest, ChatResult
 from .project import PathError, Workspace, sha256_text
 from .redact import redact
 from .routing import AttemptSignals, classify, decide, should_escalate, sounds_uncertain
@@ -44,12 +44,13 @@ from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
 
 log = logging.getLogger("fusion.orchestrator")
 
-BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude"}
+BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
 MAX_READ_ROUNDS = 3  # How many times Qwen may ask for more project files in one answer.
 CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review Qwen's change",
                      "edit": "Write the change", "ask": "Answer", "lead": "Read the request and decide (lead)",
                      "lead_review": "Check the team's results (lead)"}
 CANCEL_NOTE = {
+    CODEX: "Cancel requested. Enoy stops the Codex process at the current request.",
     LOCAL: "Cancel requested. Enoy closes its connection to Ollama; Ollama stops generating when the connection closes.",
     CLAUDE: "Cancel requested. Enoy stops the local Claude Code process. If Anthropic already received the "
             "request, it may still count toward your usage.",
@@ -117,6 +118,7 @@ class Orchestrator:
         self._busy: dict[str, dict] = {}
         self._backend_seen: dict[str, bool] = {}
         self._local_status: tuple[float, dict] | None = None
+        self._codex_status: tuple[float, dict] | None = None
         self._dispatch_lock = threading.Lock()
         self._claude_version = ""
 
@@ -250,9 +252,10 @@ class Orchestrator:
     def update_config(self, cfg: dict) -> None:
         self.cfg = cfg
         for backend in self.backends.values():
-            section = "ollama" if backend.name == LOCAL else "claude"
+            section = "ollama" if backend.name == LOCAL else backend.name
             backend.settings = cfg[section]
         self._claude_status = None
+        self._codex_status = None
         self._workspaces.clear()
 
     # Backend availability -------------------------------------------------------------
@@ -296,7 +299,12 @@ class Orchestrator:
                 label = "Qwen (Ollama)" if name == LOCAL else "Claude (Claude Code)"
                 self._act(None, "backend.connected" if st["available"] else "backend.disconnected",
                           f"{label} {'is available' if st['available'] else 'is not available'}: {st['detail']}", name)
-        return {LOCAL: local, CLAUDE: claude}
+        statuses = {LOCAL: local, CLAUDE: claude}
+        if CODEX in self.backends:
+            if refresh or not self._codex_status or now - self._codex_status[0] > 60:
+                self._codex_status = (now, self.backends[CODEX].status().as_dict())
+            statuses[CODEX] = dict(self._codex_status[1])
+        return statuses
 
     # Dispatch pause --------------------------------------------------------------------
     # Pausing stops NEW work from starting. Work already running continues; use
@@ -524,6 +532,10 @@ class Orchestrator:
         return pack, step
 
     def _run_new(self, task_id: int) -> None:
+        from . import coordinator
+        if coordinator.enabled(self, task_id):
+            coordinator.start(self, task_id, self.db.get_task(task_id)["objective"])
+            return
         task = self.db.get_task(task_id)
         if self._pc_request(task_id, task["objective"]) or self._enoy_request(task_id, task["objective"]):
             return
@@ -600,6 +612,10 @@ class Orchestrator:
         self._local_loop(task_id, pack, reason=decision.reason)
 
     def _run_followup(self, task_id: int, text: str, backend: str | None) -> None:
+        from . import coordinator
+        if coordinator.enabled(self, task_id, backend):
+            coordinator.start(self, task_id, text)
+            return
         if self._pc_request(task_id, text) or self._enoy_request(task_id, text):
             return
         task = self.db.get_task(task_id)
@@ -657,6 +673,10 @@ class Orchestrator:
             self._act(task_id, "task.retry", "Resuming the team run from its saved task graph.", "user",
                       reason=f"You pressed Resume; the task was {task['status']}.")
             team_mod.TeamRunner(self, task_id).continue_run()
+            return
+        from . import coordinator
+        if task["workflow"] == "chatgpt_leads" and coordinator.enabled(self, task_id):
+            coordinator.start(self, task_id, task["state"].get("followup") or task["objective"])
             return
         pack, analysis = self._analyze(task_id, task["objective"], "Reload the saved task state")
         brief = self.continuation_brief(task_id)
@@ -852,12 +872,14 @@ class Orchestrator:
             self.db.update_team_task(team_task_id, status="cancelled", error="You cancelled it.")
             runner.msg("user", tt["role"], "cancellation", f"You cancelled {label}.", team_task_id)
         elif action == "model":
-            if provider not in (LOCAL, CLAUDE):
-                raise TaskError("Pick Qwen or Claude.")
+            if provider not in (LOCAL, CLAUDE, CODEX):
+                raise TaskError("Pick Qwen, Claude or Codex.")
+            if provider not in self.backends:
+                raise TaskError("That provider is not configured.")
             if tt["status"] not in ("planned", "ready", "paused", "blocked", "failed") or tt["role"] not in ("developer", "debugger"):
                 raise TaskError("The model can only be changed for a developer task that is not running or finished.")
-            if provider == CLAUDE and self._cloud_block(task_id):
-                raise TaskError(f"Not sent to Claude: {self._cloud_block(task_id)}.")
+            if provider in (CLAUDE, CODEX) and self._cloud_block(task_id):
+                raise TaskError(f"Not sent to {BACKEND_LABEL[provider]}: {self._cloud_block(task_id)}.")
             self.db.update_team_task(team_task_id, provider=provider, route_reason=f"You picked {BACKEND_LABEL[provider]}.")
             runner.msg("user", tt["role"], "assignment", f"You moved {label} to {BACKEND_LABEL[provider]}.", team_task_id)
         elif action == "retry":
@@ -2832,7 +2854,7 @@ class Orchestrator:
         """Actual vs. target model share over the last finished tasks. No model calls."""
         r = self.cfg["routing"]
         window, target = r["stats_window"], r["target_local_share"]
-        rows = self.db.finished_tasks(window)
+        rows = [t for t in self.db.finished_tasks(window) if t["workflow"] != "chatgpt_leads"]
         n = len(rows)
         claude_rows = [t for t in rows if t["claude_calls"] > 0]
         qwen = n - len(claude_rows)

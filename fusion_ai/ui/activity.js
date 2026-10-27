@@ -9,7 +9,7 @@ const AC = {
   agent: lsGet("acAgent") || "all", type: lsGet("acType") || "all", scope: lsGet("acScope") || "task",
   timer: null, loading: false, chunks: {}, openDetails: new Set(),
 };
-const AGENT = { qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" };
+const AGENT = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" };
 const STATE = {
   offline: ["Offline", "muted"], available: ["Available", "ok"], working: ["Working", "live"],
   waiting: ["Waiting", "warn"], blocked: ["Blocked", "bad"], failed: ["Failed", "bad"], completed: ["Completed", "ok"],
@@ -168,7 +168,8 @@ function overviewHtml(d) {
 // Who leads, and the memory mode, from Enoy's own state (no model is asked to draw this).
 function leadLine(d) {
   const bits = [];
-  if (d.lead && d.lead.enabled) bits.push(`${who("claude")} <b>leads</b>: reads each new message first, then answers, asks, or plans work for Qwen and the team.`);
+  if (d.lead && d.lead.coordinator) bits.push(`${who("codex")} <b>leads</b>: evaluates requests, delegates to Codex or Claude, and reviews shared results.`);
+  else if (d.lead && d.lead.enabled) bits.push(`${who("claude")} <b>leads</b>: reads each new message first, then answers, asks, or plans work for Qwen and the team.`);
   else bits.push(`<span class="muted">Claude does not lead (Settings → Claude leads). Messages go to the model the router picks.</span>`);
   const m = d.memory;
   if (m) bits.push(`<span class="muted">Memory:</span> ${esc(m.mode)} mode, limit ${m.ceiling_mib.toLocaleString()} MiB`
@@ -182,7 +183,7 @@ const TEAM_STATE = { planned: "Planned", ready: "Ready", running: "Running", wai
   paused: "Paused", completed: "Completed", failed: "Failed", blocked: "Blocked", cancelled: "Cancelled" };
 
 function teamHtml(t) {
-  const prov = p => p === "qwen" ? who("qwen") : p === "claude" ? who("claude") : who("system");
+  const prov = p => p === "qwen" ? who("qwen") : p === "claude" ? who("claude") : p === "codex" ? who("codex") : who("system");
   const board = t.tasks.map(x => {
     const open = AC.expanded.has("tt" + x.id);
     return `<div class="ac-tt-row ${esc(x.status)}">
@@ -211,7 +212,7 @@ function teamHtml(t) {
     ? `<button class="btn small" data-action="ac-hold" data-id="${AC.data.focus.task.id}" data-hold="${t.hold ? "" : "1"}"
         title="${t.hold ? "Hand out the remaining tasks again" : "Finish the current step, then start nothing new. Finished work is kept."}">${t.hold ? "▶ Resume delegation" : "⏸ Pause delegation"}</button>` : "";
   return `<section class="ac-sec"><h3>Team ${hold}</h3>
-    ${t.lead ? `<div class="small">${who("claude")} ${esc(t.lead_state)}</div>` : ""}
+    ${t.lead ? `<div class="small">${who(t.lead_provider || "claude")} ${esc(t.lead_state)}</div>` : ""}
     ${t.git && t.git.user_changes && t.git.user_changes.length ? `<div class="small muted">Git: ${t.git.user_changes.length} file(s) had uncommitted changes of yours; changes to them wait for your review.</div>` : ""}
     <div class="small">Run: <b>${esc((t.status || "").replace(/_/g, " "))}</b> · ${esc(verif)} · ${t.model_calls} model request(s), ${t.claude_calls} to Claude${t.repairs ? ` · ${t.repairs} repair round(s)` : ""}</div>
     <div class="small muted">Roles used: ${t.roles_used.map(r => esc(ROLE[r] || r)).join(", ") || "none yet"}${t.running_now.length > 1 ? ` · running at the same time: ${t.running_now.map(esc).join(", ")}` : ""}
@@ -227,8 +228,9 @@ function ttControls(x) {
   if (x.can.retry) b.push(`<button class="btn small" data-action="ac-tt-do" data-do="retry" data-id="${x.id}">Retry</button>`);
   if (x.can.cancel) b.push(`<button class="btn small" data-action="ac-tt-do" data-do="cancel" data-id="${x.id}">Cancel task</button>`);
   if (x.can.model) {
-    const other = x.provider === "claude" ? "qwen" : "claude";
-    b.push(`<button class="btn small ghost" data-action="ac-tt-do" data-do="model" data-provider="${other}" data-id="${x.id}">Use ${other === "claude" ? "Claude" : "Qwen"} instead</button>`);
+    const cooperative = AC.data?.focus?.task?.workflow === "chatgpt_leads";
+    const other = x.provider === "claude" ? (cooperative ? "codex" : "qwen") : "claude";
+    b.push(`<button class="btn small ghost" data-action="ac-tt-do" data-do="model" data-provider="${other}" data-id="${x.id}">Use ${AGENT[other]} instead</button>`);
   }
   return b.length ? `<div class="row ac-tt-ctl">${b.join("")}</div>` : "";
 }
@@ -363,7 +365,7 @@ function timelineHtml(d) {
   return `<section class="ac-sec"><h3>Timeline</h3>
     <div class="row ac-filters">
       <select id="ac-scope" aria-label="Which tasks">${opt({ task: "This task", all: "All tasks" }, AC.scope)}</select>
-      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
+      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
       <select id="ac-type" aria-label="Event type">${opt(TYPES, AC.type)}</select>
     </div>
     <div class="ac-timeline">${evs.length ? evs.map(e => {

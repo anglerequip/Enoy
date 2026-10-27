@@ -71,6 +71,7 @@ def cfg():
     c, _ = config_mod.validate({})
     c["claude"]["confirm_before_send"] = False
     c["lead"]["enabled"] = False
+    c["coordinator"]["enabled"] = False  # Legacy workflows; coordinator has dedicated end-to-end tests.
     c["permissions"]["test_after_apply"] = False  # Tests that want it turn it on.
     c["tools"]["agent"] = False  # Agent mode has its own tests (test_agent.py); the rest script edit blocks.  # Tests of Claude as the lead turn it on themselves (test_lead.py).
     return c
