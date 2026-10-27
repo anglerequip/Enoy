@@ -45,9 +45,9 @@ def enoy_source() -> str:
 
 
 # A change asked of Enoy itself: a change word together with something only Enoy has.
-_ENOY = re.compile(r"\benoy'?s?\b|\bthis (app|application|program|window)\b|\b(codex|chatgpt|claude) (ready|offline)\b"
+_ENOY = re.compile(r"\benoy'?s?\b|\bthis (app|application|program|window|ui)\b|\b(codex|chatgpt|claude) (ready|offline)\b"
                    r"|\bstatus (dots?|lights?|indicators?)\b", re.I)
-_CHANGE = re.compile(r"\b(redesign|restyle|change|fix|add|make|improve|edit|update|remove|move|rename|rebuild|"
+_CHANGE = re.compile(r"\b(redesign|remodel|restyle|change|fix|add|make|improve|edit|update|remove|move|rename|rebuild|"
                      r"modify|tweak|style|ändra|fixa|lägg till|gör|förbättra|ta bort|byt)\b", re.I)
 
 

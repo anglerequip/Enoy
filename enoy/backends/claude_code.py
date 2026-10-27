@@ -6,13 +6,9 @@ reports sign-in without spending usage. Enoy never reads Claude's tokens
 or cookies and never calls the API directly, so there are no separate API
 charges.
 
-Each call runs with all Claude Code tools disabled (`--tools ""`) from an empty
-working directory: Claude only sees what Enoy puts in the prompt, and it
-cannot edit files or run commands. Changes it proposes go through the same
-validation and approval as Qwen's. The one exception is a request marked
-`web_tools`: then only Claude Code's own WebSearch and WebFetch are enabled
-(nothing that touches this PC), and the searches and pages it used are read
-from the stream-json output so Enoy can show them.
+Native requests preserve Claude's built-in system prompt, tools, customizations
+and automatic permission review. Filtered context and delegated patch requests
+use the narrower Enoy MCP tool set. Streamed tool activity appears in Enoy.
 """
 
 from __future__ import annotations
@@ -122,10 +118,13 @@ class ClaudeCodeBackend:
 
     def build_args(self, system_prompt: str, resume: str | None, images: bool = False, web: bool = False,
                    mcp_config: str | None = None, enoy_tools: list[str] | None = None,
-                   effort: str | None = None) -> list[str]:
+                   effort: str | None = None, native_tools: bool = False) -> list[str]:
         builtin = "WebSearch,WebFetch" if web else ""
         allowed = (["WebSearch", "WebFetch"] if web else []) + [f"mcp__enoy__{n}" for n in enoy_tools or []]
         tools = ["--tools", builtin] + (["--allowedTools", ",".join(allowed)] if allowed else [])
+        if native_tools:
+            tools = ["--tools", "default", "--permission-mode", "auto", "--system-prompt-snapshot", "off"]
+            web = True  # Stream native file and command tools too.
         if mcp_config:
             # Only Enoy's server, never the user's own MCP servers. --safe-mode would also drop Enoy's
             # server, so it is replaced by narrower switches: no user settings (hooks, plugins), no skills.
@@ -141,13 +140,13 @@ class ClaudeCodeBackend:
             args = ["-p", "--output-format", "stream-json", "--verbose"] + tools
         else:
             args = ["-p", "--output-format", "json"] + tools
-        if self.settings.get("safe_mode", True) and not mcp_config:
+        if self.settings.get("safe_mode", True) and not mcp_config and not native_tools:
             # Skip the user's own Claude Code customizations (CLAUDE.md, memory,
             # plugins, skills, MCP servers). They are not needed here because
             # Enoy sends its own context, and they add tokens to every request.
             args.append("--safe-mode")
         if system_prompt:
-            args += ["--system-prompt", system_prompt]
+            args += ["--append-system-prompt" if native_tools else "--system-prompt", system_prompt]
         if self.settings.get("model"):
             args += ["--model", self.settings["model"]]
         level = self.settings.get("effort") if effort is None else effort  # "" = Claude Code's own default.
@@ -178,9 +177,38 @@ class ClaudeCodeBackend:
                                                              "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
         mcp_config = _write_mcp_config(request.enoy_tools, request.enoy_env) if request.enoy_tools else None
         cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools,
-                                                 mcp_config, request.enoy_tools, request.effort)
+                                                 mcp_config, request.enoy_tools, request.effort, request.native_tools)
         timeout = float(self.settings.get("timeout_s", 600))
         start = time.monotonic()
+        if request.native_tools:
+            if not request.workspace or not Path(request.workspace).is_dir():
+                raise BackendError("failed", "Select an existing project folder before using native tools.")
+            from .process import run
+            tool_names = {}
+            def on_line(line):
+                if request.on_event:
+                    try:
+                        item = json.loads(line)
+                    except ValueError:
+                        return
+                    for block in (item.get("message") or {}).get("content") or []:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "tool_use":
+                            tool_names[block.get("id")] = block.get("name", "tool")
+                        elif block.get("type") == "tool_result":
+                            content = block.get("content", "")
+                            request.on_event({"tool": tool_names.get(block.get("tool_use_id"), "tool"),
+                                              "status": "completed", "summary": "Tool result",
+                                              "output": content if isinstance(content, str) else json.dumps(content),
+                                              "result_status": "failed" if block.get("is_error") else "success"})
+                    for event in _tool_events(line):
+                        request.on_event({**event, "status": "started"})
+            try:
+                out, err, returncode = run(cmd, prompt, request.workspace, request, timeout, on_line)
+            except OSError as exc:
+                raise BackendError("unavailable", f"Could not start Claude Code: {exc}") from exc
+            return self._result(out, err, returncode, start)
         try:
             proc = subprocess.Popen(
                 cmd, cwd=str(paths.claude_workdir()), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -218,10 +246,13 @@ class ClaudeCodeBackend:
         if "exc" in result:
             raise BackendError("failed", f"Claude Code failed: {result['exc']}")
         out, err = result.get("out", ""), result.get("err", "")
+        return self._result(out, err, proc.returncode, start)
+
+    def _result(self, out, err, returncode, start):
         data = _parse_json_output(out)
         if data is None:
             combined = (out + "\n" + err).strip()
-            raise _classify_failure(combined or f"Claude Code exited with code {proc.returncode} and no output.")
+            raise _classify_failure(combined or f"Claude Code exited with code {returncode} and no output.")
         text = data.get("result") or ""
         if data.get("is_error") or data.get("subtype") not in (None, "success"):
             raise _classify_failure(text or json.dumps(data)[:500])
@@ -280,7 +311,9 @@ def _tool_events(out: str) -> list[dict]:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 inp = block.get("input") or {}
                 events.append({"tool": block.get("name", ""), "query": str(inp.get("query", ""))[:300],
-                               "url": str(inp.get("url", ""))[:500]})
+                               "url": str(inp.get("url", ""))[:500],
+                               "summary": str(inp.get("command") or inp.get("file_path") or inp.get("path") or
+                                              inp.get("query") or inp.get("url") or "")[:400]})
     return events
 
 

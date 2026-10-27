@@ -1,14 +1,10 @@
-"""ChatGPT via the signed-in Codex CLI; Enoy owns context, edits and checks.
-
-Requests run in an empty directory, with the shell tool disabled. No personal
-Codex configuration or project instructions are loaded. Authentication remains
-owned by the official CLI. No credentials are read by Enoy.
-"""
+"""Signed-in Codex with native project tools and CLI approval review."""
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -48,14 +44,39 @@ class CodexBackend:
         except (BackendError, OSError, subprocess.TimeoutExpired) as exc:
             return BackendStatus(CODEX, False, str(exc))
 
-    def build_args(self, image_paths: list[str] | None = None) -> list[str]:
-        args = ["exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
-                "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--color", "never",
-                "-c", "features.shell_tool=false"]
+    def build_args(self, image_paths: list[str] | None = None, native_tools: bool = False,
+                   request: ChatRequest | None = None) -> list[str]:
+        args = ["exec", "--skip-git-repo-check", "--json", "--color", "never"]
+        if not native_tools:
+            args += ["--ephemeral"]
+        if native_tools:
+            if request and request.access_mode == "full":
+                # Supported Full Access policy; preserve approval checks, never bypass them.
+                args += ["--sandbox", "danger-full-access", "-c", 'approval_policy="on-request"']
+            else:
+                args += ["--approve-for-me"]
+            args += ["-c", "features.shell_tool=true"]
+        else:
+            args += ["--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
+                     "-c", "features.shell_tool=false"]
+        if self.settings.get("effort"):
+            args += ["-c", "model_reasoning_effort=" + json.dumps(self.settings["effort"])]
         if self.settings.get("model"):
             args += ["--model", self.settings["model"]]
+        if request and request.enoy_tools:
+            values = {"command": sys.executable, "args": ["-m", "enoy.tools.mcp_server"],
+                      "startup_timeout_sec": 30}
+            values.update({"env." + k: v if isinstance(v, str) else json.dumps(v)
+                           for k, v in request.enoy_env.items()})
+            values["env.PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+            values["env.PYTHONIOENCODING"] = "utf-8"
+            values["env.ENOY_MCP_TOOLS"] = ",".join(request.enoy_tools)
+            for key, value in values.items():
+                args += ["-c", "mcp_servers.enoy." + key + "=" + json.dumps(value)]
         for path in image_paths or []:
             args += ["--image", path]
+        if native_tools and request and request.resume_session:
+            args += ["resume", request.resume_session]
         return args + ["-"]
 
     def chat(self, request: ChatRequest) -> ChatResult:
@@ -63,6 +84,8 @@ class CodexBackend:
             raise BackendError("unavailable", "ChatGPT / Codex is disabled.")
         if request.cancel.is_set():
             raise BackendError("cancelled", "Codex request cancelled.")
+        if request.native_tools and (not request.workspace or not Path(request.workspace).is_dir()):
+            raise BackendError("failed", "Select an existing project folder before using native tools.")
         pictures = [picture for m in request.messages for picture in m.images]
         prompt = "\n\n".join(f"[{m.role}]\n{m.content}" for m in request.messages)
         started = time.monotonic()
@@ -76,42 +99,43 @@ class CodexBackend:
                     path = Path(workdir) / f"attachment-{index + 1}.{extension}"
                     path.write_bytes(picture.data)
                     image_paths.append(str(path))
-                proc = subprocess.Popen(self._base_cmd() + self.build_args(image_paths), cwd=workdir,
-                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                        text=True, encoding="utf-8", errors="replace",
-                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                try:
-                    first = True
-                    while True:
-                        if request.cancel.is_set():
-                            raise BackendError("cancelled", "Codex request cancelled.")
-                        if time.monotonic() - started > self.settings.get("timeout_s", 600):
-                            raise BackendError("timeout", "Codex request timed out.")
-                        try:
-                            stdout, stderr = proc.communicate(prompt if first else None, timeout=0.2)
-                            break
-                        except subprocess.TimeoutExpired:
-                            first = False
-                finally:
-                    if proc.poll() is None:
-                        proc.kill()
-                        proc.communicate()
+                from .process import run
+                def on_line(line):
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        return
+                    item = event.get("item") or {}
+                    if request.on_event and event.get("type") in ("item.started", "item.completed"):
+                        kind = item.get("type", "")
+                        if kind in ("command_execution", "file_change", "mcp_tool_call", "web_search"):
+                            request.on_event({"tool": kind, "status": event["type"].split(".")[-1],
+                                "summary": item.get("command") or item.get("query") or item.get("tool") or
+                                    ", ".join(c.get("path", "") for c in item.get("changes", [])),
+                                "exit_code": item.get("exit_code"), "result_status": item.get("status", ""),
+                                "output": item.get("aggregated_output", "")})
+                stdout, stderr, returncode = run(
+                    self._base_cmd() + self.build_args(image_paths, request.native_tools, request), prompt,
+                    request.workspace if request.native_tools and request.workspace else workdir,
+                    request, self.settings.get("timeout_s", 600), on_line)
         except OSError as exc:
             raise BackendError("unavailable", f"Could not start Codex: {exc}") from exc
-        answers, usage, error = [], {}, ""
+        answers, usage, error, session_id = [], {}, "", None
         for line in stdout.splitlines():
             try:
                 event = json.loads(line)
             except ValueError:
                 continue
             item = event.get("item") or {}
+            if event.get("type") == "thread.started":
+                session_id = event.get("thread_id")
             if event.get("type") == "item.completed" and item.get("type") == "agent_message":
                 answers.append(item.get("text", ""))
             if event.get("type") == "turn.completed":
                 usage = event.get("usage") or {}
             if event.get("type") in ("error", "turn.failed"):
                 error = str(event.get("message") or event.get("error") or "Codex failed")
-        if proc.returncode or error:
+        if returncode or error:
             raise BackendError("failed", (error or stderr.strip() or "Codex failed")[:800])
         if not answers:
             raise BackendError("malformed", "Codex returned no assistant message.")
@@ -120,4 +144,4 @@ class CodexBackend:
         if request.on_token:
             request.on_token(text)
         return ChatResult(text, CODEX, self.settings.get("model") or "Codex default", usage=usage,
-                          duration_s=time.monotonic() - started)
+                          duration_s=time.monotonic() - started, session_id=session_id)

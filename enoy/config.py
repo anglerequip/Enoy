@@ -41,7 +41,8 @@ DEFAULT_ALLOWLIST = [
 ]
 
 DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True},
- 'codex': {'enabled': True, 'executable': '', 'model': '', 'timeout_s': 600},
+ 'agent': {'native_tools': True, 'access_mode': 'workspace'},
+ 'codex': {'enabled': True, 'executable': '', 'model': 'gpt-6.1-sol', 'effort': 'high', 'timeout_s': 1800},
  'claude': {'enabled': True,
             'executable': '',
             'model': 'claude-opus-5-5',
@@ -111,11 +112,13 @@ def _url(v: str):
 
 
 SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
+    "agent": {"native_tools": (bool, None), "access_mode": (str, _choice(("workspace", "full")))},
     "coordinator": {"enabled": (bool, None)},
     "codex": {
         "enabled": (bool, None),
         "executable": (str, None),
         "model": (str, None),
+        "effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max", "ultra"))),
         "timeout_s": ((int, float), _range(10, 7200)),
     },
     "claude": {

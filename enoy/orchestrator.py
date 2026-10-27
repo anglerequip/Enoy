@@ -1,9 +1,8 @@
 """Task orchestrator: runs tasks, routes them, escalates, validates, records.
 
-This is ordinary code, not a prompt. It owns every decision about which model
-runs, what each model is sent, when to retry, when to escalate, and what needs
-the user's approval. Models only produce text; the orchestrator turns that text
-into validated proposals.
+Owns task scheduling, shared state, native-provider access policies, retries,
+activity and approval of proposals in filtered context mode. Native providers
+can inspect and edit actual files and run commands directly.
 """
 
 from __future__ import annotations
@@ -690,6 +689,8 @@ class Orchestrator:
         env = {"ENOY_MCP_CFG": {"tools": self.cfg.get("tools", {}), "pc": self.cfg.get("pc", {})},
                "ENOY_MCP_RUNTIME": runtime}
         if files_task:
+            svc = self._folder_service(self.db.get_task(files_task))
+            env["ENOY_MCP_FOLDERS"] = {"current": svc.current, "known": svc.known}
             env["ENOY_MCP_WORKSPACE"] = str(self.workspace(self.db.get_task(files_task)["project_id"]).root)
             env["ENOY_MCP_PRIVATE"] = {"cloud_excluded_globs": self.cfg["privacy"]["cloud_excluded_globs"],
                                        "extra_excluded_globs": self.cfg["permissions"]["extra_excluded_globs"]}
@@ -1167,6 +1168,9 @@ class Orchestrator:
 
         Small models guess here (ChatGPT once started a new tkinter app in an empty folder), and asking Claude
         costs a request, so Enoy recognises these itself. True when it offered the move."""
+        from . import native
+        if native.mode(self) == "full" and native.allowed(self, task_id, "ask"):
+            return False  # Full Access explicitly authorizes discovery and work outside this chat's folder.
         source = folders_mod.enoy_source()
         task = self.db.get_task(task_id)
         if task["state"].get("skip_enoy_check"):  # You chose "Stay here" for this message.
@@ -1452,7 +1456,11 @@ class Orchestrator:
         check = privacy.CloudCheck(sent_files=[f["path"] for f in allowed],
                                    excluded_files=[f["path"] for f in files_meta if f not in allowed])
         prompt = privacy.finalize(user, private, check)
-        files = self._claude_file_tools(task_id)
+        from . import native
+        native_options = native.options(self, task_id, CLAUDE, purpose)
+        files = [] if native_options else self._claude_file_tools(task_id)
+        if not native_options and self.cfg.get("tools", {}).get("enabled", True):
+            files = files + ["find_folders"]
         if files:
             system += "\n\n" + tools_mod.CLAUDE_FILES_NOTE
         system = redact(system)
@@ -1461,17 +1469,19 @@ class Orchestrator:
         self._act(task_id, "backend.request", f"Sent {len(prompt) + len(system):,} characters and {len(allowed)} file(s) "
                   "to Claude.", CLAUDE, step_id=step_id)
         self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": purpose, "since": time.time()}
+        result = None
         try:
             result = self.backends[CLAUDE].chat(ChatRequest(
                 messages=[ChatMessage("system", system), ChatMessage("user", prompt, images=images or [])], purpose=purpose,
                 cancel=self._cancel.setdefault(task_id, threading.Event()), enoy_tools=files,
-                enoy_env=self._mcp_env(task_id) if files else {}))
+                enoy_env=self._mcp_env(task_id) if files else {}, **native_options))
         except BackendError as exc:
             if exc.kind in ("limit", "unavailable"):
                 self._mark_claude_unavailable(str(exc))
             raise
         finally:
             self._busy.pop(CLAUDE, None)
+            native.remember(self, task_id, CLAUDE, native_options, result)
         task = self.db.get_task(task_id)
         self._set(task_id, claude_calls=task["claude_calls"] + 1)
         self._count_work(task_id, CLAUDE, result)

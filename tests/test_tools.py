@@ -214,8 +214,8 @@ def test_claude_web_mode_enables_only_web_tools():
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebSearch", "input": {"query": "q"}}]}},
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "WebFetch", "input": {"url": "https://a"}}]}},
         {"type": "result", "result": "done"}])
-    assert _tool_events(out) == [{"tool": "WebSearch", "query": "q", "url": ""},
-                                 {"tool": "WebFetch", "query": "", "url": "https://a"}]
+    assert _tool_events(out) == [{"tool": "WebSearch", "query": "q", "url": "", "summary": "q"},
+                                 {"tool": "WebFetch", "query": "", "url": "https://a", "summary": "https://a"}]
 
 
 # ---------------------------------------------------------------- the Qwen tool loop

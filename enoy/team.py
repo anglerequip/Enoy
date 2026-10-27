@@ -14,6 +14,7 @@ counts as done when the required checks passed and no review blocker is open.
 from __future__ import annotations
 
 import json
+import difflib
 import re
 import threading
 import time
@@ -25,6 +26,7 @@ from . import context as ctx
 from . import gitinfo
 from . import patches
 from . import privacy
+from . import native
 from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage
 from .redact import contains_secret
 from .routing import classify
@@ -463,6 +465,7 @@ class TeamRunner:
         """Developer tasks for a plan, each with its task specification. Returns plan key -> team task id."""
         key_to_id: dict[str, int] = {}
         memory = self.orc.memory
+        native_tasks = native.allowed(self.orc, self.task_id, "native_edit")
         for p in tasks:
             spec = p.specialty or next((k for k in specialties if SPECIALISTS[k][1].search(p.title + " " + p.description)), "")
             if lead:
@@ -477,13 +480,15 @@ class TeamRunner:
                 acceptance=acceptance, files=p.files, depends_on=[key_to_id[d] for d in p.depends_on if d in key_to_id],
                 provider=prov, route_reason=why_route, activation_reason=act_reason,
                 spec={"parent": self.task_id, "project": self.task["project_id"], "why": p.extra.get("why", ""),
-                      "expected_output": p.extra.get("expected_output")
-                      or "Change blocks that Enoy validates and applies, plus a one-line summary.",
+                      "expected_output": ("Implement directly with native tools; report actual edits and checks."
+                                          if native_tasks else p.extra.get("expected_output")
+                                          or "Change blocks that Enoy validates and applies, plus a one-line summary."),
                       "constraints": list(p.extra.get("constraints") or []) + [
                           "Change only the files this task owns unless required.",
-                          "Do not claim to have run tests or changed files: Enoy applies the change and runs the checks."],
+                          ("Run relevant checks and report actual tool results." if native_tasks else
+                           "Propose changes; Enoy applies the change and runs the checks.")],
                       "model_requested": p.extra.get("model", ""),
-                      "privacy": "stays on this PC" if prov == CODEX else f"sent to {PROVIDER_LABEL.get(prov, prov)} without private files",
+                      "privacy": f"sent to {PROVIDER_LABEL.get(prov, prov)}; configured private files are excluded",
                       "memory_mode": f"{memory.mode} ({memory.ceiling_mib:,} MiB)" if memory is not None else "",
                       "tests": "QA runs the project's checks after all tasks are applied.",
                       "verification": "not verified yet"})
@@ -659,6 +664,8 @@ class TeamRunner:
         ChatGPT runs one request at a time anyway, so two ChatGPT tasks in parallel would
         only queue. Different providers can genuinely work at the same time.
         """
+        if native.allowed(self.orc, self.task_id, "native_edit"):
+            return ready[:1]  # Direct native edits share a worktree; attribute each observed diff to one task.
         batch: list[dict] = []
         used_files: set[str] = set()
         used_providers: set[str] = set()
@@ -716,22 +723,44 @@ class TeamRunner:
             if extra:
                 pack = ctx.gather(ws, tt["title"] + "\n" + tt["description"], orc.cfg["context"], extra)
         brief = self._brief(tt)
+        native_task = native.allowed(orc, self.task_id, "native_edit")
         if role == "debugger":
             system = ("You are an engineer working through Enoy. Propose precise changes against the supplied files; Enoy applies them and runs checks. Follow the required change-block format.") + "\n\n" + DEBUG_PROMPT
         else:
             system = "You are an engineer working through Enoy. Propose precise changes against the supplied files; Enoy applies them and runs checks. Follow the required change-block format."
         if tt["specialty"]:
             system += "\n\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2]
+        before = {}
+        snapshot_bytes = 0
+        if native_task:
+            system = ("You are an assigned development agent in Enoy. Use your native file and command tools to "
+                      "implement this assigned task directly and run its relevant checks. Inspect existing code first. "
+                      "Preserve unrelated user changes. Coordinate through the shared task and activity snapshot. "
+                      "Do not delegate, return patch proposals, commit, or publish. Report real commands and results.")
+            if tt["specialty"]:
+                system += "\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2]
+            brief = (tt["title"] + "\n" + tt["description"] + "\nAssigned files: " + ", ".join(tt["files"]) +
+                     "\nAcceptance: " + "; ".join(tt.get("acceptance") or []))
+            for path, info in ws.index.items():
+                if info.size <= 200000 and snapshot_bytes + info.size <= 16000000:
+                    try:
+                        before[path] = ws.read_text(path)[0]
+                        snapshot_bytes += info.size
+                    except (OSError, ValueError):
+                        pass
         # Claude sees only the files it may receive; ChatGPT sees the whole pack.
         view, private = orc._cloud_view(pack)
         user = ctx.task_message(brief, view, feedback)
         if provider in (CLAUDE, CODEX):
-            user = ctx.project_header(ws, view) + "\n\n" + user + "\n\n" + patches.FORMAT_INSTRUCTIONS
+            user = ctx.project_header(ws, view) + "\n\n" + user
+            if not native_task:
+                user += "\n\n" + patches.FORMAT_INSTRUCTIONS
         files_meta = [{"path": f.path, "sha": f.sha, "chars": len(f.content)} for f in view.files]
         versions = {f.path: f.sha for f in pack.files}
         agent = False
         try:
-            text = self.call(self.db.get_team_task(tt["id"]), provider, system, user, "edit", files_meta, private)
+            text = self.call(self.db.get_team_task(tt["id"]), provider, system, user,
+                             "native_edit" if native_task else "edit", files_meta, private)
         except BackendError as exc:
             if exc.kind == "cancelled":
                 raise
@@ -745,6 +774,28 @@ class TeamRunner:
                 return
             who = "" if exc.kind == "budget" else f"{PROVIDER_LABEL.get(provider, provider)} failed: "
             self._task_failed(tt, f"{who}{exc}", step_done=True)
+            return
+        if native_task:
+            current = orc.workspace(self.task["project_id"])
+            observed = []
+            for path in sorted(set(before) | set(current.index)):
+                if path not in before and path in ws.index:
+                    continue  # An existing unreadable or large file has no trustworthy before snapshot.
+                try:
+                    after = current.read_text(path)[0] if path in current.index else ""
+                except (OSError, ValueError):
+                    continue
+                old = before.get(path, "")
+                if old != after:
+                    observed.append({"path": path, "diff": "".join(difflib.unified_diff(
+                        old.splitlines(keepends=True), after.splitlines(keepends=True),
+                        fromfile="a/" + path, tofile="b/" + path))})
+            result.update({"native": True, "native_files": observed,
+                           "changed": [f["path"] for f in observed], "output": text, "summary": _first_line(text),
+                           "diff_scope": "Readable indexed text files up to 200 KB each and 16 MB total; other edits remain in native tool activity."})
+            self.db.update_team_task(tt["id"], status="completed", result=result)
+            orc._step_end(step, "completed", f"Native agent finished; {len(observed)} file change(s) observed on disk.")
+            self.msg(role, "orchestrator", "completed", text, tt["id"])
             return
         if self.run.get("lead"):  # Claude answers the user at the end; the work stays in the team panel.
             result["output"] = text[:4000]
@@ -884,6 +935,8 @@ class TeamRunner:
         self._save_run(status="verifying")
         # Integrate: every finished task's change must actually be on disk.
         applied = [orc.db.get_changeset(t["changeset_id"]) for t in devs if t["changeset_id"]]
+        applied += [{"id": "native-" + str(t["id"]), "status": "applied", "files": t["result"]["native_files"]}
+                    for t in devs if t["status"] == "completed" and t["result"].get("native")]
         missing = [c["id"] for c in applied if c and c["status"] != "applied"]
         integ = orc._step(self.task_id, "Integrate: confirm every change is applied", "system", "integrate",
                           "Enoy checks that the team's changes are all in the project before testing.")

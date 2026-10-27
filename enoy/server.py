@@ -74,6 +74,7 @@ class App:
                     'coordinator':True,'routing':orc.cfg['routing'],'config_warnings':self.cfg_warnings,
                     'privacy_never':orc.cfg['privacy']['cloud_policy']=='never',
                     'team_default':orc.cfg['team']['default_new_chats'], 'lead':True,
+                    'agent':orc.cfg['agent'],
                     'claude_last_verified':db.kv_get('claude_last_verified')}
 
         @r("GET", "/api/config")
@@ -84,6 +85,7 @@ class App:
 
         @r("POST", "/api/config")
         def set_config(q, body):
+            previous_access = orc.cfg["agent"]["access_mode"]
             merged = config_mod.merge_update(orc.cfg, body.get("config", {}))
             # Permission profile and memory mode change only through their own endpoints,
             # which ask for confirmation and log the change in Activity.
@@ -96,6 +98,8 @@ class App:
             if self.save_config:
                 config_mod.save(cfg)
             orc.update_config(cfg)
+            if cfg["agent"]["access_mode"] != previous_access:
+                orc._act(None, "agent.permissions", "Agent permission mode: " + cfg["agent"]["access_mode"], "user")
             self.cfg_warnings = []
             return {"config": cfg}
 

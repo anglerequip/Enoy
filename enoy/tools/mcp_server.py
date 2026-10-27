@@ -1,8 +1,8 @@
-"""Enoy's tools for Claude, as a minimal MCP server over stdio (no dependencies).
+"""Enoy's tools for native providers over stdio (no dependencies).
 
 Claude Code starts this process for one request when Enoy passes --mcp-config.
 It offers only the tools Enoy chose for that request (ENOY_MCP_TOOLS) and runs
-them through the same ToolRunner as Qwen, so permissions, validation, timeouts
+them through Enoy's ToolRunner, so permissions, validation, timeouts
 and result framing are identical. The settings it enforces come from Enoy
 (ENOY_MCP_CFG: the tools and pc sections, no secrets). With ENOY_MCP_WORKSPACE
 it also serves that project's files read-only, without secrets files or the
@@ -41,9 +41,15 @@ def _runtime() -> dict:
 
 def _services() -> dict:
     """The project folder Claude may read (ENOY_MCP_WORKSPACE), filtered by the user's privacy settings."""
+    from .folders import FolderService, enoy_source
+    try:
+        folders = json.loads(os.environ.get("ENOY_MCP_FOLDERS") or "{}")
+    except ValueError:
+        folders = {}
+    services = {"folders": FolderService(folders.get("current", ""), folders.get("known", []), enoy_source())}
     root = os.environ.get("ENOY_MCP_WORKSPACE")
     if not root:
-        return {}
+        return services
     from .. import privacy
     from ..project import Workspace
     from .agent import CloudFiles
@@ -53,7 +59,8 @@ def _services() -> dict:
         private = {}
     globs = private.get("cloud_excluded_globs") or []
     ws = Workspace(root, private.get("extra_excluded_globs") or [])
-    return {"files": CloudFiles(ws, lambda rel: privacy.cloud_excluded(rel, globs))}
+    services["files"] = CloudFiles(ws, lambda rel: privacy.cloud_excluded(rel, globs))
+    return services
 
 
 def main() -> None:

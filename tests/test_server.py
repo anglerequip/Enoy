@@ -19,6 +19,7 @@ hello
 
 @pytest.fixture
 def server(cfg, tmp_path):
+    cfg["agent"]["native_tools"] = False  # Exercise Enoy's patch approval endpoints.
     backends = {LOCAL: FakeBackend(LOCAL, ["An answer.", ADD, "Done.\nNEXT: done"]), CLAUDE: FakeBackend(CLAUDE, available=False)}
     orc = Orchestrator(Storage(":memory:"), cfg, backends, EventBus(), backups_dir=tmp_path / "bk", synchronous=True)
     app = App(orc, [], save_config=False)
@@ -54,6 +55,15 @@ def test_api_requires_token_and_local_host(server):
     assert call(server, "GET", "/api/status", host="evil.example.com")[0] == 403
     status, data = call(server, "GET", "/api/status")
     assert status == 200 and data["codex"]["available"] is True and data["claude"]["available"] is False
+
+
+def test_agent_permission_modes_round_trip_through_api(server):
+    assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "workspace"
+    status, data = call(server, "POST", "/api/config", {"config": {"agent": {"native_tools": True, "access_mode": "full"}}})
+    assert status == 200 and data["config"]["agent"] == {"native_tools": True, "access_mode": "full"}
+    assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "full"
+    assert call(server, "POST", "/api/config", {"config": {"agent": {"access_mode": "invalid"}}})[0] == 400
+    assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "full"
 
 
 def test_static_path_traversal_blocked(server):

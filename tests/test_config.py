@@ -15,7 +15,7 @@ def test_defaults_are_valid():
 
 def test_invalid_values_fall_back_to_defaults_with_warnings():
     cfg,warnings=config_mod.validate({'codex':{'timeout_s':0,'enabled':'yes'},'routing':{'max_attempts':True}})
-    assert cfg['codex']['timeout_s']==600 and cfg['codex']['enabled']
+    assert cfg['codex']['timeout_s']==1800 and cfg['codex']['enabled']
     assert cfg['routing']['max_attempts']==2 and len(warnings)==3
 
 
@@ -43,7 +43,7 @@ def test_save_backs_up_previous_file():
     config_mod.save(cfg2)
     backups = list(paths.config_backups_dir().glob("*.json"))
     assert len(backups) == 1
-    assert json.loads(backups[0].read_text(encoding="utf-8"))["codex"]["model"] == ""
+    assert json.loads(backups[0].read_text(encoding="utf-8"))["codex"]["model"] == cfg["codex"]["model"]
     loaded, warnings = config_mod.load()
     assert loaded["codex"]["model"] == "test-model" and not warnings
 

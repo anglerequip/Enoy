@@ -776,7 +776,7 @@ function settingsGeneral() {
         <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
     <div class="set-section"><h3>About</h3>
       <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. ChatGPT uses your Codex sign-in; Claude uses your Claude Code sign-in.
-      Every change to your files waits for your approval.</div></div>`;
+      Native agents can edit the selected project directly. Delegated patch proposals follow your approval settings.</div></div>`;
   $("theme-select").addEventListener("change", e => { applyTheme(e.target.value); lsSet("theme", e.target.value); });
 }
 
@@ -787,9 +787,16 @@ async function settingsModels() {
     ${toggleRow("codex","enabled","Enable ChatGPT / Codex","Uses the official Codex CLI. Run codex login to sign in.")}
     ${inputRow("codex","executable","Codex executable","Empty: find codex on PATH")}
     ${inputRow("codex","model","Codex model","Empty: Codex default")}
+    ${inputRow("codex","effort","ChatGPT reasoning effort","low, medium, high, xhigh, max, or ultra; higher effort takes longer")}
+    ${toggleRow("agent","native_tools","Native tools for ChatGPT and Claude","Inspect files, edit code, and run commands. Native edits are direct and are not Enoy undoable patches. Private file filters keep requests in filtered context mode.")}
+    <label class="field">Agent permission mode<select data-cfg="agent.access_mode">
+      <option value="workspace" ${c.agent.access_mode === "workspace" ? "selected" : ""}>Workspace Access</option>
+      <option value="full" ${c.agent.access_mode === "full" ? "selected" : ""}>Full Access</option>
+    </select><span class="small">Workspace: work in the selected project. Full Access: explicitly authorize work across your PC using Enoy's Windows account, including from a general chat. Provider approval checks and Windows permissions still apply. This setting does not grant administrator privileges.</span></label>
     ${toggleRow("claude","enabled","Enable Claude","Uses your Claude Code sign-in.")}
     ${toggleRow("claude","confirm_before_send","Ask before sending to Claude","Approve Claude once per delegated run.")}
     ${inputRow("claude","model","Claude model","Empty: Claude Code default")}
+    ${inputRow("claude","effort","Claude reasoning effort","Uses the supported Claude Code effort setting")}
     ${inputRow("routing","max_attempts","Attempts per task","","number")}
     ${inputRow("team","max_tasks","Maximum tasks per plan","","number")}
     ${inputRow("team","max_model_calls","Requests per run","","number")}
@@ -801,11 +808,12 @@ async function settingsModels() {
 function settingsSafety() {
   const c = S.config;
   $("set-body").innerHTML = `
-    <div class="set-section"><h3>Changes to your files</h3>
+    <div class="set-section"><h3>Patch proposals (filtered context mode)</h3>
       ${toggleRow("permissions", "auto_apply_patches", "Apply changes without asking", "Off is safer. Deleting a file always asks.")}
       ${toggleRow("permissions", "test_after_apply", "Run the tests after each applied change", "Only when the test command is on the allowed list below; anything else still asks.")}
       <div class="small muted">Before a change is applied, Enoy checks that the files have not changed since the AI read them, keeps a backup of each, and lets you undo it.</div></div>
-    <div class="set-section"><h3>Commands</h3>
+    <div class="set-section"><h3>Enoy verification commands</h3>
+      <p class="small muted">Native agent commands use the provider's permission policy and the access mode in Models. This list controls Enoy's separate verification runner.</p>
       <label class="field">Commands that run without asking (one per line)
         <textarea class="field mono" rows="7" data-cfg="permissions.command_allowlist" data-list="1">${esc(c.permissions.command_allowlist.join("\n"))}</textarea></label>
       ${inputRow("permissions", "command_timeout_s", "Stop a command after (seconds)", "", "number")}
@@ -814,7 +822,7 @@ function settingsSafety() {
     <div class="set-section"><h3>Private files</h3>
       <label class="field">Extra paths the AI must never see (one pattern per line, e.g. assets/**)
         <textarea class="field mono" rows="4" data-cfg="permissions.extra_excluded_globs" data-list="1">${esc(c.permissions.extra_excluded_globs.join("\n"))}</textarea></label>
-      <div class="small muted">Always hidden: .env files, keys, certificates, password and cookie files. Secrets in other files are replaced with [REDACTED] before any model sees them.</div></div>
+      <div class="small muted">Enoy's context packs exclude .env files, keys, certificates, password and cookie files and redact detected secrets. Native tools read files directly under the provider's policy. Configuring private file filters disables native tools so Enoy can enforce those filters.</div></div>
     <div class="set-section"><h3>What may go to Claude</h3>
       <label class="field">Cloud privacy (ChatGPT and Claude)<select data-cfg="privacy.cloud_policy">
         <option value="auto" ${c.privacy.cloud_policy === "auto" ? "selected" : ""}>Send the relevant, permitted files when Claude is needed</option>

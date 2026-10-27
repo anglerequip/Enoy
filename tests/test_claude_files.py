@@ -75,7 +75,7 @@ def test_claude_lead_and_team_requests_carry_the_file_tools(orc_factory, project
     orc.start_task(open_project(orc, project), "Add a multiply function")
     dev = orc.backends[CLAUDE].requests[0]
     for req in (dev,):
-        assert req.enoy_tools == ["list_files", "read_file", "search_code"]
+        assert req.enoy_tools == ["list_files", "read_file", "search_code", "find_folders"]
         assert req.enoy_env["ENOY_MCP_WORKSPACE"] == str(project.resolve())
         assert CLAUDE_FILES_NOTE in req.messages[0].content
     assert dev.enoy_env["ENOY_MCP_PRIVATE"]["cloud_excluded_globs"] == []
@@ -86,7 +86,7 @@ def test_no_file_tools_without_files_local_only_or_when_switched_off(orc_factory
     empty.mkdir()
     orc = orc_factory(claude=["MODE: answer\nOk."] * 3, )
     orc.start_task(open_project(orc, empty), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
-    assert orc.backends[CLAUDE].requests[-1].enoy_tools == []
+    assert orc.backends[CLAUDE].requests[-1].enoy_tools == ["find_folders"]
     t = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
     orc.set_task_local_only(t["id"], True)
     assert orc._claude_file_tools(t["id"]) == []
