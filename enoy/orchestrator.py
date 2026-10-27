@@ -30,28 +30,27 @@ from . import hardware
 from . import knowledge as kb
 from . import paths
 from . import pccontrol as pc
-from .memory_guard import RUNTIME, MemorySupervisor
 from . import patches
 from . import privacy
 from . import team as team_mod
 from . import tools as tools_mod
 from .tools import folders as folders_mod
-from .backends.base import CLAUDE, LOCAL, CODEX, BackendError, ChatMessage, ChatRequest, ChatResult
+from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage, ChatRequest, ChatResult
 from .project import PathError, Workspace, sha256_text
 from .redact import redact
-from .routing import AttemptSignals, classify, decide, should_escalate, sounds_uncertain
+from .routing import classify, sounds_uncertain
 from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
 
 log = logging.getLogger("enoy.orchestrator")
 
-BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
-MAX_READ_ROUNDS = 3  # How many times Qwen may ask for more project files in one answer.
-CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review Qwen's change",
+BACKEND_LABEL = {CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
+MAX_READ_ROUNDS = 3  # How many times ChatGPT may ask for more project files in one answer.
+CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review ChatGPT's change",
                      "edit": "Write the change", "ask": "Answer", "lead": "Read the request and decide (lead)",
                      "lead_review": "Check the team's results (lead)"}
 CANCEL_NOTE = {
     CODEX: "Cancel requested. Enoy stops the Codex process at the current request.",
-    LOCAL: "Cancel requested. Enoy closes its connection to Ollama; Ollama stops generating when the connection closes.",
+    CODEX: "Cancel requested. Enoy closes its connection to local model service; local model service stops generating when the connection closes.",
     CLAUDE: "Cancel requested. Enoy stops the local Claude Code process. If Anthropic already received the "
             "request, it may still count toward your usage.",
 }
@@ -105,10 +104,10 @@ class Orchestrator:
         self.backups_dir = backups_dir
         self.synchronous = synchronous
         self._workspaces: dict[int, Workspace] = {}
-        self.memory: MemorySupervisor | None = None  # Started by the app; tests run without it.
+        self.memory = None  # Started by the app; tests run without it.
         self._stop_reason: dict[int, str] = {}
         self._partial: dict[int, str] = {}  # Text streamed so far, kept if the user stops the answer.
-        self._work_lock = threading.Lock()  # Qwen and Claude can finish at once in a team run.
+        self._work_lock = threading.Lock()  # ChatGPT and Claude can finish at once in a team run.
         self._cancel: dict[int, threading.Event] = {}
         self._run_cancel: dict[int, threading.Event] = {}
         self._local_lock = threading.Lock()
@@ -174,21 +173,7 @@ class Orchestrator:
     # Every entry comes from what the code is doing at that moment. No model is
     # asked to describe its own work.
 
-    def _memory_notify(self, kind: str, text: str, reason: str = "", outcome: str = "", task_id: int | None = None) -> None:
-        self._act(task_id, kind, text, LOCAL, "local", reason=reason, outcome=outcome)
-        if task_id and kind == "memory.request_stopped":
-            self._stop_reason[task_id] = (text + " Try again in a higher memory mode, with a smaller context or "
-                                          "with a smaller model (Settings → Memory & PC).")
-        elif task_id:
-            self._event(task_id, "note", text, LOCAL)
 
-    def start_memory_supervisor(self) -> None:
-        """Called by the app (not by tests): watches the local model's memory in the background."""
-        local = self.backends.get(LOCAL)
-        if self.memory is None and local is not None and hasattr(local, "loaded_models") and hasattr(local, "unload"):
-            self.memory = MemorySupervisor(lambda: self.cfg, self.db, local, self._memory_notify)
-        if self.memory is not None:
-            self.memory.start()
 
     def _act(self, task_id: int | None, kind: str, text: str, agent: str = "system", stage: str = "",
              reason: str = "", outcome: str = "", step_id: int | None = None) -> dict:
@@ -252,8 +237,9 @@ class Orchestrator:
     def update_config(self, cfg: dict) -> None:
         self.cfg = cfg
         for backend in self.backends.values():
-            section = "ollama" if backend.name == LOCAL else backend.name
+            section = backend.name
             backend.settings = cfg[section]
+            setattr(self, "_status_" + backend.name, None)
         self._claude_status = None
         self._codex_status = None
         self._workspaces.clear()
@@ -275,35 +261,18 @@ class Orchestrator:
         self._claude_status = (time.time(), False, reason)
 
     def backend_status(self, refresh: bool = False) -> dict:
-        """Connection state for the activity panel. No model requests.
-
-        Ollama is asked over local HTTP (cached 15 s). Claude's state comes from
-        the Claude Code CLI's version and sign-in checks (cached 5 minutes).
-        """
         now = time.time()
-        if refresh or self._local_status is None or now - self._local_status[0] > 15:
-            self._local_status = (now, self.backends[LOCAL].status().as_dict())
-        local = dict(self._local_status[1])
-        available, detail = self.claude_available(refresh, max_age=300)
-        backend = self.backends.get(CLAUDE)
-        claude = {"backend": CLAUDE, "available": available, "detail": detail,
-                  "verified": bool(backend and backend.verified) or bool(self.db.kv_get("claude_last_verified")),
-                  "enabled": bool(self.cfg["claude"]["enabled"]), "version": self._claude_version,
-                  "model": self.cfg["claude"].get("model") or "Claude Code default",
-                  "checked": self._claude_status[0] if self._claude_status else None}
-        local["checked"] = self._local_status[0]
-        for name, st in ((LOCAL, local), (CLAUDE, claude)):
-            seen = self._backend_seen.get(name)
-            if seen is None or seen != st["available"]:
-                self._backend_seen[name] = st["available"]
-                label = "Qwen (Ollama)" if name == LOCAL else "Claude (Claude Code)"
-                self._act(None, "backend.connected" if st["available"] else "backend.disconnected",
-                          f"{label} {'is available' if st['available'] else 'is not available'}: {st['detail']}", name)
-        statuses = {LOCAL: local, CLAUDE: claude}
-        if CODEX in self.backends:
-            if refresh or not self._codex_status or now - self._codex_status[0] > 60:
-                self._codex_status = (now, self.backends[CODEX].status().as_dict())
-            statuses[CODEX] = dict(self._codex_status[1])
+        statuses = {}
+        for name in (CODEX, CLAUDE):
+            backend = self.backends.get(name)
+            if backend is None:
+                continue
+            attr = '_status_' + name
+            cache = getattr(self, attr, None)
+            if refresh or not cache or now-cache[0] > 60:
+                cache = (now, backend.status().as_dict())
+                setattr(self, attr, cache)
+            statuses[name] = dict(cache[1])
         return statuses
 
     # Dispatch pause --------------------------------------------------------------------
@@ -417,48 +386,32 @@ class Orchestrator:
         return self.db.get_task(task_id)
 
     def ask_claude(self, task_id: int) -> dict:
-        """The user asks Claude to take over or double-check a task."""
         task = self._require(task_id)
-        block = self._cloud_block(task_id)
-        if block:
-            raise TaskError(f"Nothing was sent: {block}. Change that setting first if you want Claude's help.")
-        available, why = self.claude_available(refresh=True)
-        if not available:
-            raise TaskError(f"Claude is not available: {why}")
-        self._cancel[task_id] = threading.Event()
-        self._spawn(self._guard, task_id, lambda tid: self._escalate(tid, "You asked for Claude.", user_requested=True))
-        return self.db.get_task(task_id)
+        return self.send_message(task_id, 'Review the latest request and results in this conversation.', backend=CLAUDE)
 
     def approve_claude(self, task_id: int) -> None:
+        from . import coordinator
         task = self._require(task_id)
-        if (task["state"].get("team_run") or {}).get("status") == "awaiting_claude":
+        if (task['state'].get('team_run') or {}).get('status') == 'awaiting_claude':
             team_mod.TeamRunner(self, task_id).answer_claude(True)
-            self._cancel[task_id] = threading.Event()
             self._spawn(self._guard, task_id, lambda tid: team_mod.TeamRunner(self, tid).continue_run())
             return
-        pending = task["state"].get("pending_claude")
-        if task["status"] != "awaiting_claude" or not pending:
-            raise TaskError("Nothing is waiting to be sent to Claude.")
-        self._cancel[task_id] = threading.Event()
-        self._spawn(self._guard, task_id, self._send_claude)
+        if not task['state'].get('pending_claude'):
+            raise TaskError('No Claude request is waiting.')
+        self._spawn(self._guard, task_id, coordinator.send_direct)
 
     def decline_claude(self, task_id: int) -> None:
+        from . import coordinator
         task = self._require(task_id)
-        if (task["state"].get("team_run") or {}).get("status") == "awaiting_claude":
+        if (task['state'].get('team_run') or {}).get('status') == 'awaiting_claude':
             team_mod.TeamRunner(self, task_id).answer_claude(False)
-            self._cancel[task_id] = threading.Event()
             self._spawn(self._guard, task_id, lambda tid: team_mod.TeamRunner(self, tid).continue_run())
             return
-        pending = task["state"].get("pending_claude")
+        pending = task['state'].get('pending_claude')
         if not pending:
-            raise TaskError("Nothing is waiting to be sent to Claude.")
+            raise TaskError('No Claude request is waiting.')
         self.db.update_task_state(task_id, pending_claude=None)
-        self._step_end(pending.get("step_id"), "skipped", "You kept this task with Qwen; nothing was sent to Claude.",
-                       outcome="declined", agent="user")
-        self._event(task_id, "claude", "You chose not to send this to Claude. Nothing was transmitted.")
-        self._cancel[task_id] = threading.Event()
-        self._spawn(self._guard, task_id, lambda tid: self._after_claude_skipped(tid, pending, "You kept this task local.",
-                                                                                 declined=True))
+        self._spawn(self._guard, task_id, lambda tid: coordinator.start(self, tid, pending['objective'], CODEX))
 
     # Guard ----------------------------------------------------------------------
 
@@ -474,10 +427,13 @@ class Orchestrator:
             self._check_cancel(task_id)
             fn(task_id)
         except _Cancelled:
+            partial = self._partial.pop(task_id, '')
+            if partial:
+                self.db.add_message(task_id, 'assistant', partial + '\n\n*Stopped before the answer was finished.*', CODEX)
             why = self._stop_reason.pop(task_id, None)
             if why:  # Stopped by the memory supervisor, not by the user.
                 self._set(task_id, status="failed", summary=why)
-                self._event(task_id, "error", why, LOCAL)
+                self._event(task_id, "error", why, CODEX)
             else:
                 self._set(task_id, status="cancelled", summary="Cancelled by you.")
                 self._event(task_id, "status", "Cancelled.")
@@ -533,330 +489,36 @@ class Orchestrator:
 
     def _run_new(self, task_id: int) -> None:
         from . import coordinator
-        if coordinator.enabled(self, task_id):
-            coordinator.start(self, task_id, self.db.get_task(task_id)["objective"])
-            return
         task = self.db.get_task(task_id)
-        if self._pc_request(task_id, task["objective"]) or self._enoy_request(task_id, task["objective"]):
+        if self._pc_request(task_id, task['objective']) or self._enoy_request(task_id, task['objective']):
             return
-        task = self.db.get_task(task_id)
-        state = task["state"]
-        pack, analysis = self._analyze(task_id, task["objective"], "Inspect the project and choose a model")
-        self.db.update_task_state(task_id, analysis_step=analysis)
-        kind_override = state.get("kind_override")
-        if ctx.is_general(self.workspace(task["project_id"])):
-            kind_override = "ask"  # No project folder: nothing to edit.
-        cls = classify(task["objective"], len(pack.files), kind_override, self._routing_history())
-        available, why = self.claude_available()
-        if self.cfg["routing"].get("zero_paid_mode") and state.get("override") != CLAUDE:
-            available = False  # Only a model you pick yourself may use Claude.
-        block = self._cloud_block(task_id)
-        decision = decide(cls, self.cfg["routing"], available, state.get("override"), local_only=block)
-        decision = self._research_route(decision, task["objective"], available, state.get("override"), block)
-        # The one authoritative routing decision for this task. Retries, resumes and
-        # follow-ups reuse it instead of routing again.
-        route = decision.as_dict() | {"task_id": task_id, "kind": cls.kind, "score": cls.score,
-                                      "context": [f.path for f in pack.files], "decided": time.time()}
-        self.db.update_task_state(task_id, route=route, initial_backend=decision.backend)
-        if self.cfg["routing"]["log_decisions"]:
-            log.info("Routing decision for task %s: %s -> %s (%s, %s complexity, confidence %s). %s", task_id,
-                     cls.category, decision.backend, cls.scope, cls.complexity, decision.confidence or "n/a", decision.reason)
-        self._act(task_id, "task.classified",
-                  f"Classified: {cls.category.replace('_', ' ')}, {cls.complexity} complexity, {cls.scope}, {cls.risk} risk"
-                  + (f", confidence {decision.confidence}" if decision.confidence else "") + ".",
-                  "system", "analysis", reason="; ".join(cls.signals) or "No special signals.")
-        if block:
-            self._act(task_id, "privacy.checked", f"Local only: {block}. Nothing from this task is sent to Claude.",
-                      "system", "analysis", outcome="local-only")
-        general = ctx.is_general(self.workspace(task["project_id"]))
-        lead, lead_why = self._lead_check(task_id, state, text=task["objective"], cls=cls)
-        if lead:
-            self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); Claude leads and decides.")
-            self._lead(task_id, pack, cls)
-            return
-        if lead_why and self._lead_unavailable(task_id, lead_why):
-            return
-        if (state.get("team") and team_mod.eligible(cls.kind, general) and decision.backend is not None
-                and not self._team_skips_images(task_id)):
-            self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); {cls.kind} task; handed to the team.")
-            self._set(task_id, kind=cls.kind, complexity=cls.complexity, workflow="team",
-                      routing_reason="TEAM ROLES is on: the orchestrator plans the work and routes each part to Qwen or Claude.")
-            team_mod.TeamRunner(self, task_id).start(task["objective"])
-            return
-        if not state.get("team") and cls.kind == "edit" and not general and (cls.needs.get("multi_step") or cls.complexity == "high"):
-            self._act(task_id, "team.suggested", "This looks like multi-step work; TEAM ROLES could plan, test and review it.",
-                      "system", "analysis", reason="; ".join(cls.signals[:3]) or "multi-step request")
-            self._event(task_id, "note", "This looks like multi-step work. Turning TEAM ROLES on for a chat lets Enoy "
-                                         "plan it, run the checks and review it as a team.")
-        self._set(task_id, kind=cls.kind, complexity=cls.complexity, workflow=decision.workflow,
-                  routing_reason=decision.reason)
-        self._event(task_id, "route",
-                    f"{cls.kind} task, {cls.complexity} complexity"
-                    + (f" ({'; '.join(cls.signals)})" if cls.signals else "")
-                    + f". {decision.reason}")
-        who = BACKEND_LABEL.get(decision.backend, "no model")
-        self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); {cls.kind} task, "
-                                              f"{cls.complexity} complexity; chose {who}.")
-        if decision.backend is None:
-            self._act(task_id, "task.assigned", "No model selected.", "system", "analysis", reason=decision.reason,
-                      outcome="blocked")
-            self._set(task_id, status="failed", summary=decision.reason)
-            self._event(task_id, "error", decision.reason)
-            return
-        if decision.backend == CLAUDE:
-            self._set_owner(task_id, CLAUDE, decision.reason)
-            purpose = "plan" if decision.workflow == "claude_plans" else cls.kind
-            self._request_claude(task_id, purpose, pack, reason=decision.reason)
-            return
-        self._set_owner(task_id, LOCAL, decision.reason)
-        self._local_loop(task_id, pack, reason=decision.reason)
+        coordinator.start(self, task_id, task['objective'], task['state'].get('override'))
 
     def _run_followup(self, task_id: int, text: str, backend: str | None) -> None:
         from . import coordinator
-        if coordinator.enabled(self, task_id, backend):
-            coordinator.start(self, task_id, text)
-            return
+        self.db.update_task_state(task_id, override=backend)
         if self._pc_request(task_id, text) or self._enoy_request(task_id, text):
             return
-        task = self.db.get_task(task_id)
-        general = ctx.is_general(self.workspace(task["project_id"]))
-        lead, lead_why = self._lead_check(task_id, task["state"], backend, text=text)
-        if lead:
-            for tt in self.db.team_tasks(task_id):
-                if tt["status"] in team_mod.open_statuses():
-                    self.db.update_team_task(tt["id"], status="cancelled", error="Replaced by your new message.")
-            self.db.update_task_state(task_id, team_run={})
-            pack, analysis = self._analyze(task_id, task["objective"] + "\n" + text, "Inspect the project for the follow-up")
-            self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); Claude leads and decides.")
-            self._lead(task_id, pack, classify(text, len(pack.files)), followup=text)
-            return
-        if lead_why and task["workflow"] == "claude_leads" and self._lead_unavailable(task_id, lead_why):
-            return
-        if (task["state"].get("team") and team_mod.eligible(classify(text).kind, general)
-                and not self._team_skips_images(task_id, latest_only=True)):
-            # A new piece of development work in a team chat: a fresh team run for it.
-            for tt in self.db.team_tasks(task_id):
-                if tt["status"] in team_mod.open_statuses():
-                    self.db.update_team_task(tt["id"], status="cancelled", error="Replaced by your new request.")
-            self.db.update_task_state(task_id, team_run={})
-            team_mod.TeamRunner(self, task_id).start(f"{task['objective']}\n\nFollow-up: {text}")
-            return
-        pack, analysis = self._analyze(task_id, task["objective"] + "\n" + text, "Inspect the project for the follow-up")
-        chosen = backend or task["owner"] or LOCAL
-        if backend:
-            why = f"You picked {BACKEND_LABEL[backend]} for this message."
-        else:
-            why = f"Follow-ups stay with the model that handled the chat ({BACKEND_LABEL[chosen]})."
-        self._step_end(analysis, "completed", f"{len(pack.files)} relevant file(s); chose {BACKEND_LABEL[chosen]}.")
-        block = self._cloud_block(task_id)
-        if chosen == CLAUDE and block:
-            if backend == CLAUDE:
-                self._fail(task_id, f"Not sent to Claude: {block}. Pick Qwen, or change that setting.")
-                return
-            chosen, why = LOCAL, f"Claude handled this chat before, but now {block}; continuing with Qwen."
-        if chosen == CLAUDE:
-            available, detail = self.claude_available()
-            if not available:
-                self._set(task_id, status="failed", summary=f"Claude is not available: {detail}")
-                self._event(task_id, "error", f"Claude is not available: {detail}")
-                return
-            self._set_owner(task_id, CLAUDE, why)
-            self._request_claude(task_id, task["kind"], pack, extra=f"Follow-up from the user:\n{text}", reason=why)
-            return
-        self._set_owner(task_id, LOCAL, why)
-        self._local_loop(task_id, pack, followup=text, reason=why)
+        coordinator.start(self, task_id, text, backend)
 
     def _run_resume(self, task_id: int) -> None:
-        task = self.db.get_task(task_id)
-        run = task["state"].get("team_run") or {}
-        if run and run.get("status") not in ("completed", "failed", "cancelled", None):
-            self._act(task_id, "task.retry", "Resuming the team run from its saved task graph.", "user",
-                      reason=f"You pressed Resume; the task was {task['status']}.")
+        task = self._require(task_id)
+        run = task['state'].get('team_run') or {}
+        if run and run.get('status') not in ('completed','failed','cancelled'):
             team_mod.TeamRunner(self, task_id).continue_run()
-            return
-        from . import coordinator
-        if task["workflow"] == "chatgpt_leads" and coordinator.enabled(self, task_id):
-            coordinator.start(self, task_id, task["state"].get("followup") or task["objective"])
-            return
-        pack, analysis = self._analyze(task_id, task["objective"], "Reload the saved task state")
-        brief = self.continuation_brief(task_id)
-        backend = task["owner"] or LOCAL
-        self._event(task_id, "status", f"Resuming with {BACKEND_LABEL[backend]} from the continuation brief.")
-        self._act(task_id, "task.retry", f"Retrying with {BACKEND_LABEL[backend]} from the saved state.", "user",
-                  reason=f"You pressed Retry/Resume; the task was {task['status']}.")
-        if (backend == CLAUDE and task["workflow"] == "claude_leads" and self.cfg["lead"]["enabled"]
-                and self.claude_available()[0] and not self._cloud_block(task_id)):
-            # The lead decides again on the user's latest message. The continuation brief is built around
-            # the chat's first message, which made Claude "write the change" for an old or answered request.
-            users = [m["content"] for m in self.db.messages(task_id) if m["role"] == "user"]
-            latest = users[-1] if users else task["objective"]
-            followup = latest if len(users) > 1 else ""
-            self._step_end(analysis, "completed", "Claude (lead) decides again on your latest message.")
-            self._lead(task_id, pack, classify(latest, len(pack.files)), followup=followup)
-            return
-        if backend == CLAUDE and self.claude_available()[0] and not self._cloud_block(task_id):
-            self._step_end(analysis, "completed", "Loaded the continuation brief; Claude owned this task.")
-            self._request_claude(task_id, task["kind"], pack, extra=brief,
-                                 reason="Retry: Claude was handling this task when it stopped.")
         else:
-            self._step_end(analysis, "completed", "Loaded the continuation brief; continuing with Qwen.")
-            self._set_owner(task_id, LOCAL, "Retry: continuing locally from the saved state.")
-            self._local_loop(task_id, pack, feedback=f"You are resuming an interrupted task. Saved state:\n{brief}")
+            self._run_followup(task_id, task['state'].get('followup') or task['objective'], None)
 
     # Claude as the lead -------------------------------------------------------------------
 
-    def _lead_check(self, task_id: int, state: dict, backend: str | None = None,
-                    text: str = "", cls: Any = None) -> tuple[bool, str]:
-        """(True, "") when Claude leads this message; (False, why) when it should but cannot; (False, "") when
-        the lead is off, you picked a model yourself, or the message is casual enough for Qwen alone."""
-        if not self.cfg["lead"]["enabled"] or backend or state.get("override"):
-            return False, ""
-        if text and not self._claude_first() and self._casual(text, cls):
-            self._act(task_id, "lead.skipped", "Casual message: Qwen answers directly, Claude is not asked.",
-                      "system", "analysis", reason="Short chat or a simple question; no code changes, research or "
-                      "hard reasoning.", outcome="local")
-            return False, ""
-        if self._cloud_block(task_id):
-            return False, ""  # A local-only chat or project: your privacy choice, not a failure.
-        if self.cfg["routing"].get("zero_paid_mode"):
-            return False, "zero-paid mode is on, so Claude is never used automatically"
-        ok, why = self.claude_available()
-        return (True, "") if ok else (False, f"Claude is not available ({why})")
 
-    def _claude_first(self) -> bool:
-        """Claude-first lead: every message starts with Claude, and Claude hands most of the writing to Qwen."""
-        return self.cfg["lead"].get("style", "claude_first") == "claude_first"
 
-    def _lead_effort(self, purpose: str) -> str | None:
-        """--effort for the lead's own requests (lead.effort); None = the Claude setting, as for all other work."""
-        level = self.cfg["lead"].get("effort", "medium")
-        return None if purpose not in ("lead", "lead_review") or level == "inherit" else level
 
-    def _casual(self, text: str, cls: Any = None) -> bool:
-        """Small talk or a simple question that Qwen handles well on its own."""
-        cls = cls or classify(text, 0)
-        if cls.kind != "ask" or cls.score > 1 or len(text) > 500 or "```" in text:
-            return False
-        if cls.category not in ("question", "explain", "prose", "general"):
-            return False
-        names = tools_mod.select(text)
-        if names & {"web_search", "fetch_page"} and not tools_mod.weather_only(text):
-            return False  # Research: Claude can search the web.
-        return True
 
-    def _lead_unavailable(self, task_id: int, why: str) -> bool:
-        """Claude should lead but cannot. Say so, then follow Settings: continue with Qwen, or stop (True)."""
-        stop = self.cfg["routing"].get("claude_fallback", "local") == "stop"
-        self._act(task_id, "lead.unavailable", f"Claude cannot lead this message: {why}.", "system", "analysis",
-                  outcome="stopped" if stop else "qwen")
-        if stop:
-            self._fail(task_id, f"Claude cannot lead this message: {why}. Settings say to stop instead of continuing "
-                                "with Qwen. Pick Qwen in the chat to run it locally.")
-            return True
-        self._event(task_id, "note", f"Claude cannot lead this message: {why}. Qwen handles it instead, and its "
-                                     "replies are labeled Qwen.")
-        return False
 
-    def _lead(self, task_id: int, pack: ctx.ContextPack, cls: Any, followup: str = "") -> None:
-        self._set(task_id, kind=cls.kind, complexity=cls.complexity, workflow="claude_leads",
-                  routing_reason="Claude leads: it reads every new message first and decides whether to answer, ask, "
-                                 "or plan the work for Qwen and the team.")
-        self._act(task_id, "lead.started", "Claude (lead) is reading the request.", CLAUDE, "analysis",
-                  reason="Settings: Claude leads new messages.")
-        self._set_owner(task_id, CLAUDE, "Claude leads this chat.")
-        self._request_claude(task_id, "lead", pack, extra=f"Follow-up from the user:\n{followup}" if followup else "",
-                             reason="Claude leads: it decides how to handle each message.")
 
-    def _handle_lead(self, task_id: int, pending: dict, text: str) -> None:
-        task = self.db.get_task(task_id)
-        ws = self.workspace(task["project_id"])
-        step_id = pending.get("step_id")
-        mode, message, plan_text = ctx.parse_lead(text)
-        note = ""
-        plan = None
-        if mode == "handoff":
-            if plan_text:
-                self._lead_handoff(task_id, pending, message, plan_text)
-                return
-            mode = "answer"  # An empty handoff: Claude's words are the answer.
-        if mode == "folder":
-            if message:
-                self.db.add_message(task_id, "assistant", message, CLAUDE)
-                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
-            self._step_end(step_id, "completed", "Asked to work in another folder.")
-            self._complete(task_id, _first_line(message) or "Claude asked to work in another folder.")
-            if plan_text:
-                self._request_folder(task_id, plan_text, _first_line(message), CLAUDE)  # Says so if unusable.
-            else:
-                self._event(task_id, "note", "Claude asked for another folder but named none, so nothing was moved.",
-                            CLAUDE)
-            return
-        if mode == "delegate":
-            if ctx.is_general(ws) or not ws.index and not plan_text:
-                note = "Claude chose to delegate, but there is no project code to change here."
-            elif not plan_text:
-                note = "Claude chose to delegate but sent no plan, so nothing was changed."
-            else:
-                try:
-                    plan = team_mod.parse_plan(plan_text, self.cfg["team"]["max_tasks"])
-                except team_mod.PlanError as exc:
-                    note = f"Enoy could not use Claude's plan ({exc}), so nothing was changed."
-            if plan is None:
-                self._act(task_id, "lead.plan_rejected", note, "system", "plan")
-                mode = "answer"
-        if note:
-            message = (message + f"\n\n*{note}*").strip()
-        self.db.update_task_state(task_id, decisions=[f"Claude (lead) chose: {mode}."])
-        self.db.add_memory(task["project_id"], "decisions", f"Claude (lead) chose to {mode}: {_first_line(message)}",
-                           False, "Claude (lead)", task_id)
-        if message:
-            self.db.add_message(task_id, "assistant", message, CLAUDE)
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
-        if plan is None:
-            self._step_end(step_id, "completed", "Asked you a question." if mode == "clarify" else "Answered directly.")
-            self._act(task_id, f"lead.{mode}", "Claude asked you a question." if mode == "clarify"
-                      else "Claude answered directly; no team work was needed.", CLAUDE, "claude")
-            self._complete(task_id, _first_line(message))
-            return
-        self._step_end(step_id, "completed", f"Planned {len(plan[0])} task(s) for the team.")
-        self._set(task_id, kind="edit", workflow="claude_leads")
-        objective = task["objective"] + (f"\n\nFollow-up: {pending['followup']}" if pending.get("followup") else "")
-        team_mod.TeamRunner(self, task_id).start_from_lead(objective, plan)
 
-    def _lead_handoff(self, task_id: int, pending: dict, message: str, instructions: str) -> None:
-        """Claude planned the reply; Qwen writes it (agent mode, with its tools) and the user sees Qwen's text."""
-        task = self.db.get_task(task_id)
-        self._step_end(pending.get("step_id"), "completed", "Handed the reply to Qwen with instructions.")
-        self.db.update_task_state(task_id, decisions=["Claude (lead) chose: handoff."])
-        self._act(task_id, "lead.handoff", "Claude planned the reply; Qwen writes it.", CLAUDE, "plan",
-                  reason="Claude first: Claude decides, Qwen does the writing it can do from clear instructions.",
-                  outcome="qwen")
-        if message:
-            self.db.add_message(task_id, "assistant", message, CLAUDE)
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
-        users = [m["content"] for m in self.db.messages(task_id) if m["role"] == "user"]
-        latest = pending.get("followup") or (users[-1] if users else task["objective"])
-        brief = (f"{latest}\n\n---\nClaude, who leads this chat, read the message above and wrote these instructions "
-                 f"for your reply. Follow them; your reply is what the user sees:\n{instructions}")
-        ws = self.workspace(task["project_id"])
-        pack = ctx.gather(ws, latest + "\n" + instructions, self.cfg["context"]) if ws.index else ctx.ContextPack()
-        try:
-            self._local_loop(task_id, pack, followup=brief, reason="Claude handed this reply to Qwen.")
-        finally:
-            # The chat stays Claude-led: the next message starts with Claude again, and Retry asks Claude.
-            self._set(task_id, workflow="claude_leads")
 
-    def _handle_lead_review(self, task_id: int, pending: dict, text: str) -> None:
-        message, verdict, instruction = ctx.parse_lead_review(text)
-        self._step_end(pending.get("step_id"), "completed", "Checked the results"
-                       + (f" and asked for a fix: {instruction[:120]}" if verdict == "fix" else "."))
-        if message:
-            self.db.add_message(task_id, "assistant", message, CLAUDE)
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
-        self._act(task_id, "lead.reviewed", "Claude checked the team's results" + (" and ordered a fix." if verdict == "fix"
-                  else "."), CLAUDE, "review")
-        self._set(task_id, status="running")
-        team_mod.TeamRunner(self, task_id).finish_after_lead(verdict, instruction, bool(message))
 
     def team_task_action(self, team_task_id: int, action: str, provider: str | None = None) -> dict:
         """Your controls on one team task: cancel it, retry it, or pick its model."""
@@ -872,8 +534,8 @@ class Orchestrator:
             self.db.update_team_task(team_task_id, status="cancelled", error="You cancelled it.")
             runner.msg("user", tt["role"], "cancellation", f"You cancelled {label}.", team_task_id)
         elif action == "model":
-            if provider not in (LOCAL, CLAUDE, CODEX):
-                raise TaskError("Pick Qwen, Claude or Codex.")
+            if provider not in (CLAUDE, CODEX):
+                raise TaskError("Pick ChatGPT / Codex or Claude.")
             if provider not in self.backends:
                 raise TaskError("That provider is not configured.")
             if tt["status"] not in ("planned", "ready", "paused", "blocked", "failed") or tt["role"] not in ("developer", "debugger"):
@@ -928,221 +590,23 @@ class Orchestrator:
 
     # Local attempts ---------------------------------------------------------------------
 
-    def _signals(self, task_id: int) -> AttemptSignals:
-        task = self.db.get_task(task_id)
-        s = task["state"]
-        return AttemptSignals(
-            local_attempts=task["local_attempts"],
-            invalid_outputs=s.get("invalid_outputs", 0),
-            backend_errors=s.get("backend_errors", 0),
-            test_failures=task["test_fix_attempts"],
-            uncertain=s.get("uncertain", False),
-            escalations=s.get("escalations", 0),
-            repeated_error=s.get("repeated_error", False),
-            scope_grew=s.get("scope_grew", False),
-            handoffs=s.get("handoffs", 0),
-        )
 
-    def _chat_local(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None = None,
-                    tools: list[dict] | None = None) -> Any:
-        backend = self.backends[LOCAL]
-        cancel = self._cancel.setdefault(task_id, threading.Event())
-        if not self._local_lock.acquire(blocking=False):
-            self._event(task_id, "status", "Waiting for the local model to finish another task.", LOCAL)
-            other = self._busy.get(LOCAL, {}).get("task_id")
-            if step_id:
-                self.db.update_step(step_id, status="waiting")
-            self._act(task_id, "task.waiting", "Waiting for Qwen to finish another request.", LOCAL, "local",
-                      reason="Qwen runs one request at a time" + (f"; it is busy with task #{other}." if other else "."),
-                      step_id=step_id)
-            while not self._local_lock.acquire(timeout=0.5):
-                self._check_cancel(task_id)
-            if step_id:
-                self.db.update_step(step_id, status="working")
-        busy = {"task_id": task_id, "step_id": step_id, "purpose": purpose, "since": time.time(), "chunks": 0}
-        try:
-            limits = self._memory_plan(task_id, step_id)
-        except BackendError:
-            self._local_lock.release()
-            raise
-        self._busy[LOCAL] = busy
-        self._partial[task_id] = ""
-
-        def on_token(t: str) -> None:
-            busy["chunks"] += 1
-            self._partial[task_id] += t
-            self.bus.publish({"type": "token", "task_id": task_id, "backend": LOCAL, "text": t})
-
-        try:
-            self._event(task_id, "status", f"{BACKEND_LABEL[LOCAL]} is working ({backend.settings['model']}).", LOCAL)
-            req = ChatRequest(
-                messages=messages, purpose=purpose, cancel=cancel, on_token=on_token, tools=tools, **limits,
-                on_thinking=lambda t: self.bus.publish({"type": "thinking", "task_id": task_id, "backend": LOCAL, "text": t}),
-            )
-            if self.memory is not None:
-                self.memory.begin(task_id, cancel, backend.settings["model"], limits["num_ctx"] or backend.settings["num_ctx"])
-            sent = "\n\n".join(f"[{m.role}]\n{m.content}" for m in messages)
-            chars = len(sent)
-            n_img = sum(len(m.images) for m in messages)
-            pics = f" and {n_img} image(s)" if n_img else ""
-            self.db.add_transmission(task_id, LOCAL, purpose, [], sent + (f"\n\n[{n_img} image(s) attached]" if n_img else ""))
-            self._event(task_id, "send", f"Sent {chars:,} characters{pics} to the local model (stays on this PC).", LOCAL)
-            self._act(task_id, "backend.request", f"Sent {chars:,} characters{pics} to Qwen (stays on this PC).", LOCAL,
-                      "local", step_id=step_id)
-            result = backend.chat(req)
-            self._partial.pop(task_id, None)
-            self._count_work(task_id, LOCAL, result)
-            return result
-        finally:
-            if self.memory is not None:
-                self.memory.end()
-            self._busy.pop(LOCAL, None)
-            self._local_lock.release()
+    def _chat_codex(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None = None, tools=None):
+        from .coordinator import call
+        system = '\n\n'.join(m.content for m in messages if m.role == 'system')
+        user = '\n\n'.join(m.content for m in messages if m.role != 'system')
+        return call(self, task_id, CODEX, system, user, purpose, step=step_id)
 
     # ------------------------------------------------------------ tools
 
-    def _agent_loop(self, task_id: int, pack: ctx.ContextPack, followup: str = "", reason: str = "") -> None:
-        """Qwen as an agent: it looks, edits, runs and checks with tools until it can answer.
 
-        Edits are written at once with backups (tools.agent_apply) and become one applied change set with Undo,
-        or are staged and proposed at the end. Commands outside the allowlist are handed back for approval."""
-        task = self.db.get_task(task_id)
-        ws = self.workspace(task["project_id"])
-        general = ctx.is_general(ws)
-        text = followup or task["objective"]
-        image_ids = self._image_ids(task_id)
-        if image_ids and not self._local_sees_images():
-            why = f"Qwen's model ({self.backends[LOCAL].settings['model']}) cannot read images."
-            if self._maybe_escalate(task_id, pack, why, force_reason=True):
-                return
-            self._fail(task_id, why + " Pick a model with vision in Settings, or ask Claude.")
-            return
-        s = self.cfg.get("tools", {})
-        files = None
-        if not general:
-            backup_dir = (self.backups_dir or Path(ws.root) / ".enoy" / "backups") / f"task-{task_id}"
-
-            def run(command: str) -> dict:
-                started = self.run_command(task["project_id"], command, task_id=task_id, wait=True)
-                r = self.db.get_command_run(started["run_id"]) or {}
-                return {"status": r.get("status"), "exit_code": r.get("exit_code"),
-                        "output": ((r.get("stdout") or "") + "\n" + (r.get("stderr") or "")).strip()}
-            files = tools_mod.AgentFiles(ws, bool(s.get("agent_apply", True)), backup_dir, run)
-        num_ctx, _ = self._local_window()
-        offer = None
-        if num_ctx < 8192:  # A small window cannot hold every tool definition plus real work.
-            offer = (tools_mod.CORE_AGENT_TOOLS if files else set()) | tools_mod.select(text) | tools_mod.FOLDER_TOOL_NAMES
-        folders = self._folder_service(task)
-        services = {"folders": folders, **({"files": files} if files else {})}
-        runner = self._tool_runner(task_id, LOCAL, offer, services=services)
-        names = [t.name for t in runner.available()]
-        if not names:
-            runner = None
-        budget = ctx.prompt_budget(*self._local_window())
-        if general:
-            where = "There is no project folder in this chat (general chat)."
-        elif not ws.index:
-            where = (f"This chat's folder ({ws.root}) is empty. When the user talks about existing code (\"these "
-                     "buttons\", \"the sidebar\", their app, Enoy itself), that code is NOT here: find it with "
-                     "find_folders and ask to move with switch_folder. Never start a new program here unless the "
-                     "user clearly asks for something new.")
-        else:
-            listing = ctx.file_list(ws, min(2500, budget // 8)) if hasattr(ctx, "file_list") else ""
-            rules = "\n".join(f"{p}:\n{t[:1500]}" for p, t in ws.instructions()[:2])
-            where = (f"Project folder: {ws.name}. Paths are relative to it.\n" + (f"Files:\n{listing}\n" if listing else "")
-                     + (f"Project instructions:\n{rules}\n" if rules else "")
-                     + ("Edits are written to disk at once (with backups; the user can undo the whole turn)."
-                        if files and files.apply else "Edits are staged and shown to the user as one proposal at the end."))
-        where += "\n" + self._folder_context(folders)
-        system = tools_mod.AGENT_SYSTEM.format(names=", ".join(names) or "none", context=where) if runner else \
-            ctx.local_system_prompt(ws, pack, "ask")
-        convo = self._conversation(task_id, limit=8)
-        messages = [ChatMessage("system", system)] + convo + [ChatMessage("user", text, self._load_images(task_id, image_ids))]
-        step = self._step(task_id, "Qwen works on it (agent)", LOCAL, "local", reason or "Agent mode: Qwen uses tools.",
-                          files=[f.path for f in pack.files])
-        self._set(task_id, local_attempts=task["local_attempts"] + 1, workflow="agent")
-        try:
-            if runner:
-                result = self._chat_local_tools(task_id, messages, "agent", step, runner, budget,
-                                                rounds=int(s.get("agent_max_steps", 24)))
-            else:
-                result = self._chat_local(task_id, messages, "ask", step)
-        except BackendError as exc:
-            self._agent_finish_files(task_id, files, partial=True)
-            if exc.kind == "cancelled":
-                raise _Cancelled() from exc
-            self._step_end(step, "failed", error=str(exc))
-            self._event(task_id, "error", f"Local model failed: {exc}", LOCAL)
-            if exc.kind == "memory":
-                self._fail(task_id, str(exc))
-                return
-            if self._maybe_escalate(task_id, pack, f"Qwen (agent) failed: {exc}", force_reason=True):
-                return
-            self._fail(task_id, f"Qwen could not finish: {exc}")
-            return
-        except _Cancelled:
-            self._agent_finish_files(task_id, files, partial=True)
-            raise
-        answer = self._with_sources(result.text, runner) if runner and runner.calls else result.text
-        self.db.add_message(task_id, "assistant", answer, LOCAL)
-        self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
-        meta = self._usage_note(result)
-        if meta:
-            self._event(task_id, "usage", meta, LOCAL)
-        if files and files.suggested:
-            self.db.update_task_state(task_id, suggested_commands=files.suggested[:5])
-        changed = self._agent_finish_files(task_id, files)
-        used = len(runner.calls) if runner else 0
-        self._step_end(step, "completed", f"Done after {used} tool call(s)" + (f"; changed {changed}." if changed else "."))
-        if files and not files.apply and changed:
-            self._await_approval(task_id, ask=True)
-            return
-        self._complete(task_id, _first_line(result.text))
-        if folders.requested:
-            self._request_folder(task_id, folders.requested["path"], folders.requested["reason"], LOCAL)
-
-    def _agent_finish_files(self, task_id: int, files: Any, partial: bool = False) -> str:
-        """Record the agent's file changes as one change set (applied with Undo, or pending for review)."""
-        if files is None:
-            return ""
-        changes = files.changeset_files()
-        if not changes:
-            return ""
-        names = ", ".join(f["path"] for f in changes)
-        note = "Agent changes" + (" (stopped before it finished)" if partial else "")
-        cs_id = self.db.create_changeset(task_id, LOCAL, changes, {"ok": True, "errors": [], "warnings": []}, note)
-        if files.apply:
-            self.db.set_changeset_status(cs_id, "applied")
-            self.db.update_task_state(task_id, decisions=[f"Qwen (agent) changed {names}"])
-            self._event(task_id, "applied", f"Qwen changed: {names}. Backups kept; Undo restores them.", LOCAL)
-        else:
-            self._event(task_id, "proposal", f"Qwen proposes changes to {names}.", LOCAL)
-        self.bus.publish({"type": "changeset", "task_id": task_id, "changeset_id": cs_id})
-        return names
 
     def _tools_wanted(self, text: str) -> bool:
         s = self.cfg.get("tools", {})
         return bool(s.get("enabled", True) and tools_mod.wants_tools(text))
 
     def _tool_runtime(self) -> dict:
-        """Facts about the local model for check_local_model_fit (all read from Ollama and Enoy, not guessed)."""
-        rt = hardware.inventory(self).get("runtime", {})
-        local = self.backends.get(LOCAL)
-        model = local.settings.get("model") if local else None
-        try:
-            for m in local.list_models() if local else []:
-                if m.get("name") == model or m.get("model") == model:
-                    rt["configured_model_size_on_disk_mib"] = round((m.get("size") or 0) / 2**20)
-                    details = m.get("details") or {}
-                    rt["parameter_size"] = details.get("parameter_size")
-                    rt["quantization"] = details.get("quantization_level")
-        except Exception as exc:
-            rt["model_list_error"] = str(exc)
-        num_ctx, num_predict = self._local_window()
-        rt["context_window_tokens"] = num_ctx
-        rt["memory_mode_limit_note"] = ("Enoy caps the model runner's RAM to the memory mode's limit; a larger "
-                                        "context needs more memory.")
-        return rt
+        return {'providers': [CODEX, CLAUDE], 'local_models': False}
 
     def _tool_runner(self, task_id: int, agent: str, offer: set[str] | None = None,
                      services: dict | None = None) -> tools_mod.ToolRunner:
@@ -1178,46 +642,6 @@ class Orchestrator:
         return tools_mod.ToolRunner(self.cfg, tools_mod.registry(), cancel, on_event, runtime=self._tool_runtime,
                                     offer=offer, services=services)
 
-    def _chat_local_tools(self, task_id: int, messages: list[ChatMessage], purpose: str, step_id: int | None,
-                          runner: tools_mod.ToolRunner, budget: int, rounds: int | None = None) -> Any:
-        """Qwen with native tool calling: call, run the tools it asks for, return the real results, repeat.
-
-        Bounded by tools.max_rounds; after that Qwen must answer with what it has."""
-        msgs = list(messages)
-        specs = [t.spec() for t in runner.available()]
-        rounds = rounds or int(self.cfg.get("tools", {}).get("max_rounds", 5))
-        per_result = max(2500, min(8000, budget // 3))
-        spec_chars = len(json.dumps(specs))
-        nudged = False
-        for n in range(rounds + 1):
-            self._check_cancel(task_id)
-            last = n == rounds
-            if last:
-                msgs.append(ChatMessage("user", "Tool limit reached. Answer now with the information you have, "
-                                                "and say what you could not find out."))
-            _fit_window(msgs, budget - spec_chars)
-            result = self._chat_local(task_id, msgs, purpose, step_id, tools=None if last else specs)
-            if not result.tool_calls and not last and not nudged and _announces_more(result.text):
-                # "Now let me write the tests:" and then nothing: a small model stops when it means to go on.
-                nudged = True
-                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
-                msgs.append(ChatMessage("assistant", result.text))
-                msgs.append(ChatMessage("user", "Do that now with the tools; do not describe it. When everything "
-                                                "is done and checked, give your final answer."))
-                continue
-            if not result.tool_calls or last:
-                if not result.text.strip():
-                    raise BackendError("malformed", "Qwen called tools but gave no answer.")
-                return result
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
-            calls = result.tool_calls[:4]  # At most four calls per round.
-            msgs.append(ChatMessage("assistant", result.text, tool_calls=calls))
-            for call in calls:
-                res = runner.run(call["name"], call["arguments"])
-                msgs.append(ChatMessage("tool", res.for_model(per_result), tool_name=call["name"]))
-                if res.error_kind == "cancelled":
-                    raise _Cancelled()
-        raise BackendError("failed", "The tool loop ended without an answer.")
 
     def _claude_web(self, task_id: int, purpose: str) -> bool:
         """Give Claude Claude Code's own WebSearch/WebFetch when the latest message needs live information."""
@@ -1242,25 +666,6 @@ class Orchestrator:
         runner = tools_mod.ToolRunner(self.cfg, tools_mod.registry(), offer=wanted)
         return sorted(t.name for t in runner.available())
 
-    def _research_route(self, decision: Any, text: str, claude_ok: bool, override: str | None, block: str) -> Any:
-        """Questions that need web research go to Claude when Qwen's search can only reach Wikipedia.
-
-        Weather stays with Qwen (official weather data needs no search), and so does everything when the user
-        picked a model, the chat is local-only, zero-paid mode is on, or Claude may not search the web."""
-        s = self.cfg.get("tools", {})
-        if (decision.backend != LOCAL or override or block or not claude_ok or decision.source != "router"
-                or self.cfg["routing"].get("zero_paid_mode") or not s.get("enabled", True)
-                or not s.get("online", True) or not s.get("claude_web", True)):
-            return decision
-        if "wikipedia" not in tools_mod.search.configured(self.cfg)[:1]:
-            return decision  # Qwen has a real web search (Brave or SearXNG).
-        names = tools_mod.select(text)
-        if not names & {"web_search", "fetch_page"} or tools_mod.about_this_pc(text) or tools_mod.weather_only(text):
-            return decision
-        return dataclasses.replace(
-            decision, backend=CLAUDE, workflow="escalate", source="policy",
-            reason="This needs current information from the web. Claude can search it through Claude Code; Qwen's "
-                   "search only reaches Wikipedia until a Brave key or SearXNG is set in Settings → Tools.")
 
     def _prefetch_for_claude(self, task_id: int, wanted: list[str]) -> str:
         """Run the read-only PC tools Claude would need and return the results as prompt text."""
@@ -1337,22 +742,6 @@ class Orchestrator:
             lines.append("*No tools were used: this answer comes from the model's own knowledge, not live data.*")
         return text.rstrip() + ("\n\n---\n" + "\n\n".join(lines) if lines else "")
 
-    def _memory_plan(self, task_id: int | None, step_id: int | None = None) -> dict:
-        """Request settings the memory mode allows (ChatRequest fields), or BackendError("memory") if the model cannot fit."""
-        if self.memory is None:
-            return {"num_ctx": None}
-        local = self.backends[LOCAL]
-        predict = local.settings.get("num_predict")
-        plan = self.memory.plan(local.settings["model"], int(local.settings["num_ctx"]), int(predict) if predict else None)
-        if not plan["ok"]:
-            self._act(task_id, "memory.load_blocked", "Local model not loaded: it would exceed the memory limit.", LOCAL,
-                      "local", reason=plan["reason"], outcome="blocked", step_id=step_id)
-            raise BackendError("memory", plan["reason"])
-        if plan.get("note") and task_id:
-            self._act(task_id, "memory.context_reduced" if plan.get("ctx") != local.settings["num_ctx"] else "memory.note",
-                      plan["note"], LOCAL, "local", step_id=step_id)
-        return {"num_ctx": plan.get("ctx"), "num_predict": plan.get("num_predict"), "num_batch": plan.get("num_batch"),
-                "keep_alive": self.memory.keep_alive(local.settings.get("keep_alive"))}
 
     def _team_skips_images(self, task_id: int, latest_only: bool = False) -> bool:
         """The team works from text only, so a message with pictures is answered directly."""
@@ -1382,195 +771,11 @@ class Orchestrator:
                 self._event(task_id, "note", "An attached image is missing from disk and was left out.")
         return out
 
-    def _local_sees_images(self) -> bool:
-        backend = self.backends[LOCAL]
-        if not hasattr(backend, "capabilities"):
-            return True
-        try:
-            return "vision" in backend.capabilities(backend.settings["model"])
-        except BackendError:
-            return True  # Unknown: let the request show the real error.
 
     def _conversation(self, task_id: int, limit: int = 6) -> list[ChatMessage]:
         msgs = self.db.messages(task_id)[:-1]  # Latest user message is rebuilt with context.
         return [ChatMessage(m["role"], m["content"]) for m in msgs[-limit:] if m["role"] in ("user", "assistant")]
 
-    def _local_loop(self, task_id: int, pack: ctx.ContextPack, feedback: str = "", followup: str = "",
-                    plan: str = "", reason: str = "") -> None:
-        task = self.db.get_task(task_id)
-        ws = self.workspace(task["project_id"])
-        if self.cfg.get("tools", {}).get("agent", True) and self.cfg.get("tools", {}).get("enabled", True) \
-                and not plan and not feedback:
-            return self._agent_loop(task_id, pack, followup, reason)
-        kind = task["kind"]
-        max_attempts = self.cfg["routing"]["max_local_attempts"]
-        attempts_here = 0
-        step_reason = reason or task["state"].get("assign_reason", "")
-        title = "Write the change" if kind == "edit" else "Answer"
-        image_ids = self._image_ids(task_id)
-        if image_ids and not self._local_sees_images():
-            why = f"Qwen's model ({self.backends[LOCAL].settings['model']}) cannot read images."
-            self._event(task_id, "note", why, LOCAL)
-            if self._maybe_escalate(task_id, pack, why, force_reason=True):
-                return
-            self._fail(task_id, why + " Pick a model with vision in Settings, or ask Claude.")
-            return
-        pictures = self._load_images(task_id, image_ids)
-        budget = ctx.prompt_budget(*self._local_window())
-        read_rounds, read_note = 0, ""
-        runner = None
-        if kind != "edit" and self._tools_wanted(followup or task["objective"]):
-            runner = self._tool_runner(task_id, LOCAL, tools_mod.select(followup or task["objective"]))
-            if not runner.available():
-                runner = None
-            else:  # Tool definitions travel with every request and use part of Qwen's window.
-                budget -= len(json.dumps([t.spec() for t in runner.available()]))
-        while True:
-            self._check_cancel(task_id)
-            attempts_here += 1
-            task = self.db.get_task(task_id)
-            self._set(task_id, local_attempts=task["local_attempts"] + 1)
-            step = self._step(task_id, title if attempts_here == 1 else f"{title} (attempt {attempts_here} of {max_attempts})",
-                              LOCAL, "local", step_reason, attempt=attempts_here,
-                              files=[f.path for f in pack.files])
-            reads_left = MAX_READ_ROUNDS - read_rounds if ws.index else None
-            system = ctx.local_system_prompt(ws, pack, kind, list_chars=min(3000, budget // 8), reads_left=reads_left)
-            if runner:
-                system += "\n\n" + tools_mod.TOOL_SYSTEM.format(names=", ".join(t.name for t in runner.available()))
-            extra = []
-            if plan:
-                extra.append(f"Follow this implementation plan:\n{plan}")
-            if followup:
-                extra.append(f"Follow-up from the user:\n{followup}")
-            if read_note:
-                extra.append(read_note)
-            if feedback:
-                extra.append(feedback)
-            convo = self._conversation(task_id) if followup else []
-            # Only as much file content as fits Qwen's context window; the rest would be cut off by Ollama unseen.
-            fixed = (len(system) + sum(len(m.content) for m in convo)
-                     + len(ctx.task_message(task["objective"], dataclasses.replace(pack, files=[]), "\n\n".join(extra))))
-            shown = ctx.fit_files(pack, budget - fixed - 100)  # 100: headings around the files.
-            user = ctx.task_message(task["objective"], shown, "\n\n".join(extra))
-            messages = [ChatMessage("system", system)] + convo + [ChatMessage("user", user, pictures)]
-            try:
-                if runner:
-                    result = self._chat_local_tools(task_id, messages, kind, step, runner, budget)
-                else:
-                    result = self._chat_local(task_id, messages, kind, step)
-            except BackendError as exc:
-                if exc.kind == "cancelled":
-                    partial = self._partial.pop(task_id, "").strip()
-                    if partial and task_id not in self._stop_reason:  # Stopped by the user: keep what was written.
-                        self.db.add_message(task_id, "assistant", partial + "\n\n*Stopped before the answer was finished.*",
-                                            LOCAL)
-                    raise _Cancelled() from exc
-                self._step_end(step, "failed", error=str(exc))
-                step_reason = f"Retry after a local model error ({exc.kind})."
-                state = self.db.update_task_state(task_id, backend_errors=self.db.get_task(task_id)["state"].get("backend_errors", 0) + 1,
-                                                  failures=[f"Local model: {exc}"])
-                self._event(task_id, "error", f"Local model failed: {exc}", LOCAL)
-                if exc.kind == "memory":
-                    self._fail(task_id, str(exc))
-                    return
-                if exc.kind in ("unavailable", "model_missing"):
-                    # Retrying will not help; escalate if allowed, else stop with a clear message.
-                    if self._maybe_escalate(task_id, pack, f"Local model unavailable: {exc}", force_reason=True):
-                        return
-                    self._fail(task_id, f"{exc} See Diagnostics for help.")
-                    return
-                if attempts_here < max_attempts:
-                    self._event(task_id, "retry", f"Retrying locally (attempt {attempts_here + 1} of {max_attempts}).", LOCAL)
-                    continue
-                if self._maybe_escalate(task_id, pack, f"Local model failed: {exc}"):
-                    return
-                self._fail(task_id, f"The local model failed {attempts_here} time(s): {exc}")
-                return
-
-            asked = ctx.read_requests(result.text)
-            if asked and reads_left:
-                read_rounds += 1
-                attempts_here -= 1  # Looking up files is not a failed attempt.
-                self._set(task_id, local_attempts=self.db.get_task(task_id)["local_attempts"] - 1)
-                added, refused = ctx.add_files(ws, pack, asked, self.cfg["context"]["max_file_chars"])
-                self.db.update_task_state(task_id, relevant_files=[{"path": f.path, "sha": f.sha[:12]} for f in pack.files],
-                                          file_versions={f.path: f.sha for f in pack.files})
-                self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
-                got = ", ".join(added) or "none"
-                self._step_end(step, "completed", f"Read files: {got}.")
-                self._event(task_id, "context", f"Qwen asked to see {len(asked)} file(s). Added: {got}"
-                            + (". Not given: " + "; ".join(refused) if refused else "."), LOCAL)
-                self._act(task_id, "context.files_read", f"Qwen read {len(added)} more file(s): {got}.", LOCAL, "local",
-                          reason="Qwen asked for files it needed.", outcome="read", step_id=step)
-                read_note = ("Enoy added the files you asked for." if added else "")
-                if refused:
-                    read_note += " Files Enoy could not give you: " + "; ".join(refused) + "."
-                step_reason = "Continue with the files Qwen asked for."
-                continue
-            if asked:
-                result.text = ctx.strip_reads(result.text)
-                if not result.text:
-                    self._step_end(step, "failed", error="Asked for more files after the limit.")
-                    if attempts_here < max_attempts:
-                        feedback = ctx.NO_MORE_READS + " Give your answer now."
-                        continue
-                    self._fail(task_id, "Qwen kept asking for more files instead of answering. Name the files in your "
-                                        "message, or ask Claude.")
-                    return
-            if runner:
-                result.text = self._with_sources(result.text, runner)
-            self.db.add_message(task_id, "assistant", result.text, LOCAL)
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": LOCAL})
-            meta = self._usage_note(result)
-            if meta:
-                self._event(task_id, "usage", meta, LOCAL)
-            uncertain = sounds_uncertain(result.text)
-            if uncertain:
-                self.db.update_task_state(task_id, uncertain=True)
-                self._event(task_id, "note", "The local model said it is unsure. You can ask Claude to check.", LOCAL)
-            if result.usage.get("truncated"):
-                self._event(task_id, "note", "The answer hit the output length limit and may be cut off.", LOCAL)
-
-            if kind != "edit":
-                self._step_end(step, "completed", "Answered" + self._result_note(result) + ".")
-                self._complete(task_id, _first_line(result.text))
-                return
-
-            parsed = patches.parse(result.text)
-            if not ws.index and not parsed.changes and not parsed.errors:
-                # Empty folder and no new files: Qwen explained that there is nothing to change. That is the answer.
-                self._step_end(step, "completed", "Answered: the project folder is empty.")
-                self._complete(task_id, _first_line(result.text))
-                return
-            validation = patches.validate(ws, parsed.changes, task["state"].get("file_versions"))
-            problems = parsed.errors + validation.errors + self._unseen_rewrites(ws, parsed.changes, shown)
-            if parsed.commands:
-                self.db.update_task_state(task_id, suggested_commands=parsed.commands)
-            if not validation.files and not problems:
-                problems = ["No usable file changes were produced."]
-            self._note_scope(task_id, {c.path for c in parsed.changes})
-            if self._check_proposal(task_id, step, LOCAL, result, validation, problems, parsed.explanation):
-                self._after_local_proposal(task_id, pack)
-                return
-            invalid = self.db.get_task(task_id)["state"].get("invalid_outputs", 0) + 1
-            self.db.update_task_state(task_id, invalid_outputs=invalid, failures=["Invalid local proposal: " + "; ".join(problems[:4])])
-            self._event(task_id, "validation", "The local proposal could not be used:\n- " + "\n- ".join(problems[:8]), LOCAL)
-            if attempts_here < max_attempts:
-                step_reason = "Retry: the previous proposal failed Enoy's checks."
-                seen = {f.path for f in shown.files}
-                unseen = sorted({c.path for c in parsed.changes if c.action == "edit" and c.path not in seen})
-                feedback = ("Your previous answer could not be applied because:\n- " + "\n- ".join(problems[:8])
-                            + "\nSend corrected blocks for ALL intended changes, following the block format exactly.")
-                if unseen and MAX_READ_ROUNDS - read_rounds > 0:
-                    feedback += ("\nYou edited " + ", ".join(unseen) + " without seeing it, so the SEARCH lines were "
-                                 "guessed. First ask for the part you need, for example <<<READ " + unseen[0]
-                                 + " | text to find>>>, then copy the SEARCH lines exactly.")
-                self._event(task_id, "retry", f"Asking the local model to correct it (attempt {attempts_here + 1} of {max_attempts}).", LOCAL)
-                continue
-            if self._maybe_escalate(task_id, pack, "Local proposals failed validation:\n- " + "\n- ".join(problems[:8])):
-                return
-            self._fail(task_id, "The local model could not produce a valid change: " + "; ".join(problems[:3]))
-            return
 
     @staticmethod
     def _unseen_rewrites(ws: Workspace, changes: list, shown: ctx.ContextPack) -> list[str]:
@@ -1589,436 +794,19 @@ class Orchestrator:
                                 "you did not see. Change it with an EDIT block instead.")
         return problems
 
-    def _local_window(self) -> tuple[int, int | None]:
-        """Context window and answer length Qwen gets in the current memory mode."""
-        s = self.backends[LOCAL].settings
-        num_ctx = int(s.get("num_ctx") or DEFAULTS["ollama"]["num_ctx"])
-        predict = int(s["num_predict"]) if s.get("num_predict") else None
-        if self.memory is not None:
-            limits = RUNTIME[self.memory.mode]
-            num_ctx = min(num_ctx, limits["max_ctx"])
-            if predict and limits["max_predict"]:
-                predict = min(predict, limits["max_predict"])
-        return num_ctx, predict
 
-    def _after_local_proposal(self, task_id: int, pack: ctx.ContextPack) -> None:
-        task = self.db.get_task(task_id)
-        workflow = task["workflow"]
-        available, _ = self.claude_available()
-        available = available and not self._cloud_block(task_id)
-        if workflow == "local_then_review" and available:
-            reviews = task["state"].get("review_rounds", 0)
-            if reviews < self.cfg["routing"]["max_review_rounds"]:
-                cs = self.db.list_changesets(task_id, "pending")[0]
-                self._request_claude(task_id, "review", pack, changeset_id=cs["id"],
-                                     reason="The 'Qwen writes, Claude reviews' workflow asks Claude to check Qwen's change.")
-                return
-        if workflow == "compare" and available and not task["state"].get("compared"):
-            self.db.update_task_state(task_id, compared=True)
-            analysis = task["state"].get("analysis_step")
-            self._request_claude(task_id, "edit", pack, extra="Propose your own independent solution. Another model is also proposing one; the user will compare them.",
-                                 reason="The 'compare' workflow asks Claude for an independent solution.",
-                                 depends_on=[analysis] if analysis else None)
-            return
-        self._await_approval(task_id)
 
-    def _maybe_escalate(self, task_id: int, pack: ctx.ContextPack, report: str, force_reason: bool = False) -> bool:
-        task = self.db.get_task(task_id)
-        available, why = self.claude_available()
-        signals = self._signals(task_id)
-        if force_reason:
-            signals.invalid_outputs = max(signals.invalid_outputs, self.cfg["routing"]["max_local_attempts"])
-        block = self._cloud_block(task_id)
-        if block:
-            ok, reason = False, f"Claude might help, but {block}"
-        elif self.cfg["routing"].get("zero_paid_mode"):
-            ok, reason = False, "zero-paid mode is on, so Claude is never used automatically"
-        else:
-            ok, reason = should_escalate(signals, self.cfg["routing"], task["workflow"], available)
-        if not ok:
-            self._event(task_id, "route", f"Not escalating: {reason}")
-            self._act(task_id, "task.not_escalated", "Not escalating to Claude.", "system", reason=reason)
-            return False
-        self._escalate(task_id, reason, report=report, pack=pack)
-        return True
 
-    def _escalate(self, task_id: int, reason: str, report: str = "", pack: ctx.ContextPack | None = None,
-                  user_requested: bool = False) -> None:
-        task = self.db.get_task(task_id)
-        pack = pack or self._gather(task_id, task["objective"])
-        escalations = task["state"].get("escalations", 0) + 1
-        self.db.update_task_state(task_id, escalations=escalations)
-        self._set(task_id, escalation_reason=reason)
-        self._act(task_id, "task.escalated", "Escalated from Qwen to Claude." if not user_requested
-                  else "You asked Claude to take over.", CLAUDE, "claude", reason=reason)
-        self._set_owner(task_id, CLAUDE, f"Escalated: {reason}")
-        extra = self._handoff_package(task_id, reason, report, user_requested)
-        self.db.update_task_state(task_id, handoff_log=[{"at": time.time(), "from": LOCAL, "to": CLAUDE,
-                                                          "reason": reason, "chars": len(extra)}])
-        self._act(task_id, "task.handoff", f"Handed the task from Qwen to Claude with a {len(extra):,}-character "
-                  "summary of what happened so far (not the whole conversation).", CLAUDE, "claude", reason=reason)
-        self._request_claude(task_id, task["kind"] if task["kind"] in ("ask", "edit") else "ask", pack, extra=extra,
-                             reason=f"Escalated: {reason}")
 
     # Claude requests ---------------------------------------------------------------------
 
-    def _conversation_for_claude(self, task_id: int, objective: str, session: str | None,
-                                 limit: int = 8, chars: int = 1500) -> str:
-        """The chat Claude has not seen yet, without the latest user message (sent separately).
 
-        A resumed Claude session already holds Claude's own turns, so only what came after its last reply is
-        added; a new session gets the recent chat. Privacy redaction runs on the whole prompt afterwards.
-        """
-        msgs = [m for m in self.db.messages(task_id) if m["role"] in ("user", "assistant")]
-        if msgs and msgs[-1]["role"] == "user":
-            msgs = msgs[:-1]
-        if session:
-            last = max((i for i, m in enumerate(msgs) if m.get("backend") == CLAUDE), default=-1)
-            msgs = msgs[last + 1:]
-        if msgs and msgs[0]["role"] == "user" and msgs[0]["content"].strip() == objective.strip():
-            msgs = msgs[1:]  # Already sent as the first message.
-        msgs = msgs[-limit:]
-        if not msgs:
-            return ""
-        who = {LOCAL: "Qwen", CLAUDE: "Claude"}
-        lines = []
-        for m in msgs:
-            name = "User" if m["role"] == "user" else who.get(m.get("backend") or "", "Enoy")
-            text = m["content"].strip()
-            if len(text) > chars:
-                text = text[:chars].rstrip() + " […]"
-            lines.append(f"[{name}]\n{text}")
-        return ctx.CONVERSATION_NOTE + "\n\n" + "\n\n".join(lines)
 
-    def _request_claude(self, task_id: int, purpose: str, pack: ctx.ContextPack, extra: str = "",
-                        changeset_id: int | None = None, reason: str = "",
-                        depends_on: list[int] | None = None) -> None:
-        """Prepare a Claude request; send now or wait for the user's OK."""
-        task = self.db.get_task(task_id)
-        ws = self.workspace(task["project_id"])
-        state = task["state"]
-        block = self._cloud_block(task_id)
-        if block:  # Every caller checks first; this is the last line of defence.
-            raise TaskError(f"Not sent to Claude: {block}.")
-        globs = self.cfg["privacy"]["cloud_excluded_globs"]
-        cloud_knowledge, private_knowledge = self._cloud_knowledge(pack)
-        pack = dataclasses.replace(pack, knowledge=cloud_knowledge)
-        private_files = [f for f in pack.files if privacy.cloud_excluded(f.path, globs)]
-        private = privacy.private_lines([f.content for f in private_files]) | private_knowledge
-        check = privacy.CloudCheck(excluded_files=[f.path for f in private_files])
-        session = state.get("claude_session")
-        already = state.get("claude_sent", {}) if session else {}
-        allowed = [f for f in pack.files if f not in private_files]
-        new_files = {f.path for f in allowed if already.get(f.path) != f.sha}
-        skipped_same = [f.path for f in allowed if f.path not in new_files]
 
-        system = ctx.CLAUDE_LEAD_SYSTEM if purpose in ("lead", "lead_review") else ctx.CLAUDE_SYSTEM
-        header = ctx.project_header(ws, pack)
-        parts = []
-        if not session:
-            parts.append(header)
-        # A follow-up: Claude also needs the replies it did not write itself (Qwen's, the team's), or it
-        # answers the first message again as if nobody had.
-        is_followup = extra.startswith("Follow-up from the user:")
-        label = "First message of this chat" if is_followup else "Task"
-        talk = self._conversation_for_claude(task_id, task["objective"], session) if is_followup else ""
-        asked = "\n\n".join(x for x in (talk, extra) if x)
-        if purpose in ("lead", "edit") and not ctx.is_general(ws) and not ws.index:
-            parts.append(ctx.CLAUDE_EMPTY_FOLDER.format(path=ws.root))
-        if purpose == "lead":
-            parts.append(self._folder_context(self._folder_service(task)))
-            if not ctx.is_general(ws):
-                parts.append(ctx.memory_block(self.db.memory(task["project_id"], None, 30)))
-            parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
-            first = self._claude_first()
-            parts.append(ctx.LEAD_INSTRUCTIONS.format(
-                max_tasks=self.cfg["team"]["max_tasks"],
-                delegate_note=ctx.LEAD_NO_DELEGATE if ctx.is_general(ws) else "",
-                handoff_mode=ctx.LEAD_HANDOFF_MODE if first else "",
-                style_note=ctx.CLAUDE_FIRST_NOTE.format(share=self.cfg["routing"]["target_local_share"]) if first else ""))
-        elif purpose == "lead_review":
-            parts.append(f"The user's request:\n{task['objective'].strip()}")
-            parts.append(extra)
-            parts.append(ctx.LEAD_REVIEW_INSTRUCTIONS)
-        elif purpose == "review":
-            cs = self.db.get_changeset(changeset_id)
-            diff = "\n".join(f["diff"] for f in cs["files"] if not privacy.cloud_excluded(f["path"], globs))
-            parts.append(ctx.task_message(task["objective"], pack, only=new_files))
-            parts.append(ctx.REVIEW_INSTRUCTIONS + "\n\nProposed change (unified diff):\n" + diff)
-        elif purpose == "plan":
-            parts.append(ctx.task_message(task["objective"], pack, only=new_files))
-            parts.append(ctx.PLAN_INSTRUCTIONS)
-        else:
-            parts.append(ctx.task_message(task["objective"], pack, asked, only=new_files, label=label))
-            if purpose == "edit":
-                parts.append(patches.FORMAT_INSTRUCTIONS)
-        if skipped_same:
-            parts.append("Files you already have from earlier in this conversation (unchanged): " + ", ".join(skipped_same))
-        if purpose == "review" and extra:
-            parts.append(extra)
-        if purpose == "lead" and extra.startswith("Follow-up from the user:"):
-            followup = extra.split("\n", 1)[1] if "\n" in extra else ""
-        else:
-            followup = ""
-        prompt = privacy.finalize("\n\n".join(p for p in parts if p), private, check)
-        files_meta = [{"path": f.path, "sha": f.sha, "chars": len(f.content)} for f in allowed if f.path in new_files]
-        check.sent_files = [f["path"] for f in files_meta]
-        self._act(task_id, "privacy.checked", check.summary(), "system", "review" if purpose == "review" else "claude",
-                  outcome="passed")
-        pending = {
-            "purpose": purpose, "system": system, "prompt": prompt, "files": files_meta,
-            "chars": len(prompt) + len(system), "changeset_id": changeset_id, "session": session,
-            "skipped_unchanged": skipped_same, "privacy": check.summary(),
-            # A resumed Claude session already has earlier pictures; send only new ones.
-            "images": self._image_ids(task_id, latest_only=bool(session)),
-            "knowledge": sorted({k.name for k in cloud_knowledge}),
-            "followup": followup,
-        }
-        if pending["images"]:
-            pending["privacy"] += f" Includes {len(pending['images'])} image(s); images are not scanned for secrets."
-        reason = reason or state.get("assign_reason", "")
-        confirm = self.cfg["claude"]["confirm_before_send"]
-        names = [f["path"] for f in files_meta]
-        pending["reason"] = reason
-        pending["step_id"] = self._step(
-            task_id, CLAUDE_STEP_TITLE.get(purpose, "Answer"), CLAUDE, "review" if purpose == "review" else "claude",
-            reason, status="waiting" if confirm else "queued", files=names, needs_approval=confirm,
-            depends_on=depends_on,
-            text=(f"Waiting for your OK to send {pending['chars']:,} characters, {len(names)} file(s)"
-                  f"{' and ' + str(len(pending['images'])) + ' image(s)' if pending['images'] else ''} to Claude."
-                  if confirm else f"Prepared a {purpose} request for Claude."),
-        )
-        self.db.update_task_state(task_id, pending_claude=pending)
-        if confirm:
-            self._set(task_id, status="awaiting_claude")
-            self._event(task_id, "claude",
-                        f"Ready to send a {purpose} request to Claude: {len(files_meta)} file(s), "
-                        f"{pending['chars']:,} characters. Waiting for your OK.", CLAUDE)
-            return
-        self._send_claude(task_id)
 
-    def _send_claude(self, task_id: int) -> None:
-        task = self.db.get_task(task_id)
-        pending = task["state"].get("pending_claude")
-        if not pending:
-            raise TaskError("No Claude request is prepared.")
-        self._set(task_id, status="running")
-        self._set_owner(task_id, CLAUDE, pending.get("reason") or task["state"].get("assign_reason") or "Claude request.")
-        step_id = pending.get("step_id")
-        step = self.db.get_step(step_id) if step_id else None
-        if step and step["needs_approval"] and step["status"] == "waiting":
-            self._act(task_id, "approval.resolved", "You approved sending this request to Claude.", "user", step["stage"],
-                      outcome="approved", step_id=step_id)
-        if step:
-            self.db.update_step(step_id, status="working")
-        image_ids = pending.get("images") or []
-        pics = f" and {len(image_ids)} image(s)" if image_ids else ""
-        web = self._claude_web(task_id, pending["purpose"])
-        enoy = self._claude_enoy_tools(task_id, pending["purpose"])
-        if enoy and not self.cfg["tools"].get("claude_enoy_mcp"):
-            # Claude Code cannot call Enoy's tools in safe mode: Enoy reads the PC facts first instead.
-            facts = self._prefetch_for_claude(task_id, enoy)
-            if facts and facts not in pending["prompt"]:
-                pending["prompt"] += "\n\n" + facts
-                pending["chars"] = len(pending["system"]) + len(pending["prompt"])
-            enoy = []
-        if web and tools_mod.CLAUDE_WEB_NOTE not in pending["system"]:
-            pending["system"] += "\n\n" + tools_mod.CLAUDE_WEB_NOTE
-        if enoy and tools_mod.CLAUDE_ENOY_NOTE not in pending["system"]:
-            pending["system"] += "\n\n" + tools_mod.CLAUDE_ENOY_NOTE
-        files = self._claude_file_tools(task_id)
-        if files and tools_mod.CLAUDE_FILES_NOTE not in pending["system"]:
-            pending["system"] += "\n\n" + tools_mod.CLAUDE_FILES_NOTE
-        enoy = enoy + files
-        trans_id = self.db.add_transmission(task_id, CLAUDE, pending["purpose"], pending["files"],
-                                            f"[system]\n{pending['system']}\n\n[user]\n{pending['prompt']}"
-                                            + (f"\n\n[{len(image_ids)} image(s) attached]" if image_ids else ""))
-        self._event(task_id, "send", f"Sending {pending['chars']:,} characters, {len(pending['files'])} file(s){pics} to Claude.", CLAUDE)
-        names = ", ".join(f["path"] for f in pending["files"])
-        self._act(task_id, "backend.request", f"Sent {pending['chars']:,} characters and {len(pending['files'])} file(s) "
-                  f"to Claude{': ' + names if names else ''}.", CLAUDE, step["stage"] if step else "claude", step_id=step_id)
-        self._event(task_id, "status", "Claude is working (no live text; the answer appears when it is finished)."
-                    + (" It may search the web through Claude Code." if web else "")
-                    + (" It may use Enoy's tools: " + ", ".join(enoy) + "." if enoy else ""), CLAUDE)
-        if web or enoy:
-            offered = (["Claude Code's WebSearch and WebFetch"] if web else []) + (["Enoy's " + ", ".join(enoy)] if enoy else [])
-            self._act(task_id, "tool.offered", "Claude may use " + " and ".join(offered) + " for this answer.",
-                      CLAUDE, step["stage"] if step else "claude",
-                      reason="The message asks for current or outside information.", step_id=step_id)
-        req = ChatRequest(
-            messages=[ChatMessage("system", pending["system"]),
-                      ChatMessage("user", pending["prompt"], self._load_images(task_id, image_ids))],
-            purpose=pending["purpose"], cancel=self._cancel.setdefault(task_id, threading.Event()),
-            resume_session=pending.get("session"), web_tools=web, enoy_tools=enoy,
-            enoy_env=self._mcp_env(task_id if files else None) if enoy else {},
-            effort=self._lead_effort(pending["purpose"]),
-        )
-        self._set(task_id, claude_calls=task["claude_calls"] + 1)
-        self._busy[CLAUDE] = {"task_id": task_id, "step_id": step_id, "purpose": pending["purpose"], "since": time.time()}
-        try:
-            result = self.backends[CLAUDE].chat(req)
-        except BackendError as exc:
-            if exc.kind == "cancelled":
-                raise _Cancelled() from exc
-            self._step_end(step_id, "failed", error=str(exc))
-            if pending.get("session") and exc.kind == "failed":
-                # The saved Claude session may be gone; next request starts fresh.
-                self.db.update_task_state(task_id, claude_session=None, claude_sent={})
-            if exc.kind in ("limit", "unavailable"):
-                self._mark_claude_unavailable(str(exc))
-            self.db.update_task_state(task_id, pending_claude=None, failures=[f"Claude: {exc}"],
-                                      limitations=[str(exc)] if exc.kind in ("limit", "unavailable") else [])
-            self._event(task_id, "error", f"Claude request failed: {exc}", CLAUDE)
-            self._after_claude_skipped(task_id, pending, f"Claude failed: {exc}")
-            return
-        finally:
-            self._busy.pop(CLAUDE, None)
-        sent = dict(task["state"].get("claude_sent", {}) if pending.get("session") else {})
-        sent.update({f["path"]: f["sha"] for f in pending["files"]})
-        self.db.update_task_state(task_id, pending_claude=None, claude_session=result.session_id, claude_sent=sent)
-        self._count_work(task_id, CLAUDE, result)
-        if result.usage:
-            note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
-            self.db.set_transmission_usage(trans_id, note)
-            self._event(task_id, "usage", f"Reported by Claude Code: {note}", CLAUDE)
-        self.db.kv_set("claude_last_verified", time.time())
-        if web or enoy:
-            self._record_claude_tools(task_id, result.tool_events, step_id)
-        if pending["purpose"] not in ("lead", "lead_review"):  # The lead's reply is split into message and plan first.
-            self.db.add_message(task_id, "assistant", result.text, CLAUDE)
-            self.bus.publish({"type": "message_done", "task_id": task_id, "backend": CLAUDE})
-        self._handle_claude_result(task_id, pending, result.text)
-
-    def _handle_claude_result(self, task_id: int, pending: dict, text: str) -> None:
-        task = self.db.get_task(task_id)
-        ws = self.workspace(task["project_id"])
-        purpose = pending["purpose"]
-        step_id = pending.get("step_id")
-        if purpose == "lead":
-            self._handle_lead(task_id, pending, text)
-            return
-        if purpose == "lead_review":
-            self._handle_lead_review(task_id, pending, text)
-            return
-        if purpose == "plan":
-            self._step_end(step_id, "completed", "Wrote the implementation plan.")
-            self.db.update_task_state(task_id, plan=text, decisions=["Plan written by Claude."])
-            self._event(task_id, "plan", "Claude wrote the plan. The local model will implement it.", CLAUDE)
-            self._set_owner(task_id, LOCAL, "Implementing Claude's plan.")
-            pack = self._gather(task_id, task["objective"] + "\n" + text)
-            self._local_loop(task_id, pack, plan=text, reason="Implementing Claude's plan (workflow: Claude plans, Qwen writes).")
-            return
-        if purpose == "review":
-            cs_id = pending["changeset_id"]
-            self.db.set_changeset_review(cs_id, text)
-            rounds = task["state"].get("review_rounds", 0) + 1
-            self.db.update_task_state(task_id, review_rounds=rounds)
-            verdict = "CHANGES_NEEDED" if re.search(r"VERDICT:\s*CHANGES_NEEDED", text, re.I) else (
-                "APPROVE" if re.search(r"VERDICT:\s*APPROVE", text, re.I) else "UNCLEAR")
-            self._event(task_id, "review", f"Claude's review verdict: {verdict}.", CLAUDE)
-            self._step_end(step_id, "completed", f"Review verdict: {verdict}.")
-            if verdict == "CHANGES_NEEDED" and rounds <= self.cfg["routing"]["max_review_rounds"]:
-                self.db.set_changeset_status(cs_id, "superseded", "Replaced after Claude's review.")
-                self._set_owner(task_id, LOCAL, "Applying Claude's review feedback.")
-                pack = self._gather(task_id, task["objective"])
-                # review_rounds is checked in _after_local_proposal, so this cannot loop forever.
-                self._local_loop(task_id, pack, feedback=f"A reviewer found problems with your previous change:\n{text}\n"
-                                                         "Produce a corrected change addressing every point.",
-                                 reason="Claude's review asked for changes.")
-                return
-            self._await_approval(task_id)
-            return
-        if purpose == "edit":
-            parsed = patches.parse(text)
-            if not parsed.changes and not parsed.errors:
-                # No change blocks at all: Claude explained instead (the code is not here, the request is a
-                # question...). Its reply is the answer, not a broken proposal to retry.
-                if parsed.commands:
-                    self.db.update_task_state(task_id, suggested_commands=parsed.commands)
-                self._event(task_id, "note", "Claude replied without changing any files, so nothing in the project "
-                                             "changed.", CLAUDE)
-                self._step_end(step_id, "completed", "Answered without changing any files.")
-                self._complete(task_id, _first_line(text))
-                return
-            validation = patches.validate(ws, parsed.changes, task["state"].get("file_versions"))
-            problems = parsed.errors + validation.errors
-            if parsed.commands:
-                self.db.update_task_state(task_id, suggested_commands=parsed.commands)
-            if not validation.files and not problems:
-                problems = ["No usable file changes were produced."]
-            if self._check_proposal(task_id, step_id, CLAUDE, None, validation, problems, parsed.explanation):
-                self._await_approval(task_id)
-                return
-            self.db.update_task_state(task_id, failures=["Invalid Claude proposal: " + "; ".join(problems[:4])])
-            self._event(task_id, "validation", "Claude's proposal could not be applied:\n- " + "\n- ".join(problems[:8]), CLAUDE)
-            if self.db.list_changesets(task_id, "pending"):
-                self._await_approval(task_id)
-                return
-            self._fail(task_id, "Claude's proposal failed validation. Use 'Ask Claude' to retry or edit the request.")
-            return
-        self._step_end(step_id, "completed", "Answered.")
-        self._complete(task_id, _first_line(text))
-
-    def _after_claude_skipped(self, task_id: int, pending: dict, why: str, declined: bool = False) -> None:
-        """Claude was declined or failed: keep whatever local work exists."""
-        purpose = pending["purpose"]
-        if purpose == "lead_review":  # The team's work is done; Enoy's own summary is the answer.
-            self._set(task_id, status="running")
-            team_mod.TeamRunner(self, task_id).end_lead_run(False, why)
-            return
-        if purpose == "lead" and not declined and self.cfg["routing"].get("claude_fallback", "local") == "stop":
-            self._fail(task_id, f"{why} Settings say to stop instead of continuing with Qwen.")
-            return
-        self._set_owner(task_id, LOCAL, f"{why} Claude did not handle this request.")
-        task = self.db.get_task(task_id)
-        if self.db.list_changesets(task_id, "pending"):
-            self._event(task_id, "status", f"{why} The local proposal is still available for review.")
-            self._await_approval(task_id)
-            return
-        if purpose == "plan":
-            self._set_owner(task_id, LOCAL, f"{why} Implementing without a plan.")
-            self._set(task_id, status="running")
-            self._local_loop(task_id, self._gather(task_id, task["objective"]))
-            return
-        if self.db.list_changesets(task_id, "applied"):
-            self._complete(task_id, f"{why} The change already applied stays in place.")
-            return
-        has_local_answer = any(m["role"] == "assistant" and m["backend"] == LOCAL for m in self.db.messages(task_id))
-        if has_local_answer and task["kind"] != "edit":
-            self._complete(task_id, f"{why} The local answer stands.")
-            return
-        fallback = self.cfg["routing"].get("claude_fallback", "local") == "local"
-        if task["local_attempts"] == 0 and (declined or fallback):
-            # The task went to Claude first and nothing local exists yet. Qwen takes it
-            # over, once: the workflow becomes local-only so it cannot bounce back.
-            reason = ("You chose to keep this task with Qwen instead of sending it to Claude." if declined else
-                      f"{why} Continuing with Qwen (Settings: if Claude is unavailable, continue with Qwen).")
-            self._act(task_id, "task.fallback", "Continuing with Qwen.", LOCAL, reason=reason)
-            self._set(task_id, status="running", workflow="local_only")
-            self.db.update_task_state(task_id, assign_reason=reason)  # Owner is already Qwen; no second event.
-            self._local_loop(task_id, self._gather(task_id, task["objective"]), reason=reason)
-            return
-        self._fail(task_id, f"{why} You can run the task with Qwen instead.")
 
     # Results ---------------------------------------------------------------------------------
 
-    def _check_proposal(self, task_id: int, step_id: int | None, backend: str, result: Any,
-                        validation: patches.ValidationResult, problems: list[str], explanation: str) -> bool:
-        """Record the model's step outcome and Enoy's own check of the proposal."""
-        note = self._result_note(result) if result is not None else ""
-        if not problems and validation.files:
-            self._step_end(step_id, "completed", f"Proposed changes to {len(validation.files)} file(s){note}.")
-            check = self._step(task_id, "Check the proposed change", "system", "patch",
-                               "Every proposal is checked before you see it (paths, exact matches, syntax).")
-            cs_id = self._propose(task_id, backend, validation, explanation)
-            names = ", ".join(f"{f.action} {f.path}" for f in validation.files)
-            self._step_end(check, "completed", f"Change set #{cs_id} passed the checks: {names}", kind="patch.proposed")
-            return True
-        self._step_end(step_id, "failed", error=f"Its proposal could not be used{note}.")
-        check = self._step(task_id, "Check the proposed change", "system", "patch",
-                           "Every proposal is checked before you see it (paths, exact matches, syntax).")
-        self._step_end(check, "failed", error="; ".join(problems[:4]), kind="validation.failed")
-        return False
 
     def _propose(self, task_id: int, backend: str, validation: patches.ValidationResult, explanation: str) -> int:
         cs_id = self.db.create_changeset(task_id, backend, [f.as_dict() for f in validation.files],
@@ -2079,7 +867,7 @@ class Orchestrator:
             bits.append(f"{u['eval_count']} output tokens")
         if "eval_count" in u and result.duration_s:
             bits.append(f"{result.duration_s:.1f} s")
-        return "Reported by Ollama: " + ", ".join(bits) if bits else ""
+        return "Reported by local model service: " + ", ".join(bits) if bits else ""
 
     # Change sets ---------------------------------------------------------------------------
 
@@ -2260,50 +1048,10 @@ class Orchestrator:
             ev.set()
 
     def fix_failure(self, task_id: int, run_id: int) -> dict:
-        """Hand a failed check back to the AI, escalating after the configured limit."""
         run = self.db.get_command_run(run_id)
-        if not run or run["status"] == "passed":
-            raise TaskError("That check did not fail.")
-        missing = missing_tool((run["stdout"] or "") + "\n" + (run["stderr"] or ""))
-        if missing:  # Nothing in the code to fix: asking a model would only produce a pointless change.
-            raise TaskError(f"The check could not run because {missing} is not installed. Install it, then run the "
-                            "tests again.")
-        task = self._require(task_id)
-        attempts = task["test_fix_attempts"] + 1
-        self.db.update_task(task_id, test_fix_attempts=attempts, kind="edit")
-        lines = (run["stdout"] + "\n" + run["stderr"]).strip().splitlines()
-        tail = "\n".join(lines[-60:])
-        report = f"After applying the change, `{run['command']}` failed (exit code {run['exit_code']}):\n{tail}"
-        signature = _failure_signature(lines)
-        repeated =bool(signature) and signature == task["state"].get("last_failure_sig")
-        self.db.update_task_state(task_id, failures=[f"Check failed: {run['command']} (exit {run['exit_code']})"],
-                                  invalid_outputs=0, backend_errors=0, last_failure_sig=signature,
-                                  repeated_error=repeated)
-        if repeated:
-            self._act(task_id, "task.progress", "The same error came back after the previous fix.", "system", "testing",
-                      reason=signature[:200])
-        self._cancel[task_id] = threading.Event()
-        self._act(task_id, "task.retry", f"You asked for a fix for the failed check `{run['command']}`.", "user", "testing",
-                  reason=f"The check failed with exit code {run['exit_code']} (fix attempt {attempts}).")
-
-        def work(tid: int) -> None:
-            pack = self._gather(tid, task["objective"] + "\n" + tail)
-            signals = self._signals(tid)
-            available, _ = self.claude_available()
-            block = self._cloud_block(tid)
-            ok, reason = should_escalate(signals, self.cfg["routing"], task["workflow"] or "escalate", available)
-            if block and ok:
-                ok, reason = False, f"Claude might help, but {block}"
-                self._act(tid, "task.not_escalated", "Not escalating to Claude.", "system", "testing", reason=reason)
-            if ok:
-                self._escalate(tid, reason, report=report, pack=pack)
-                return
-            self._set_owner(tid, LOCAL, f"Fixing a failed check (attempt {attempts}).")
-            self._local_loop(tid, pack, feedback=report + "\nFix the cause. Change only what is needed.",
-                             reason=f"Fixing a failed check (attempt {attempts}); {reason}")
-
-        self._spawn(self._guard, task_id, work)
-        return self.db.get_task(task_id)
+        if not run or run['task_id'] != task_id or run['status'] == 'passed':
+            raise TaskError('That failed check does not belong to this chat.')
+        return self.send_message(task_id, 'Fix the failed check: '+run['command']+'\n'+run['stdout']+'\n'+run['stderr'])
 
     # Project summary ---------------------------------------------------------------------------
 
@@ -2317,27 +1065,27 @@ class Orchestrator:
         def work(tid: int) -> None:
             key = "summary:" + sha256_text(listing)
             cached = self.db.cache_get(key)
-            self._set_owner(tid, LOCAL, "Project summaries always run locally.")
+            self._set_owner(tid, CODEX, "Project summary using ChatGPT / Codex.")
             if cached:
                 step = self._step(tid, "Reuse the saved summary", "system", "analysis",
                                   "The file list has not changed since the last summary.")
-                self.db.set_project_summary(project_id, cached, LOCAL)
-                self.db.add_message(tid, "assistant", cached, LOCAL)
+                self.db.set_project_summary(project_id, cached, CODEX)
+                self.db.add_message(tid, "assistant", cached, CODEX)
                 self._step_end(step, "completed", "Used the saved summary; no model request.")
                 self._complete(tid, "Used the cached summary; the file list has not changed.")
                 return
-            step = self._step(tid, "Summarize the project", LOCAL, "local", "Project summaries always run locally.")
+            step = self._step(tid, "Summarize the project", CODEX, "local", "Project summary using ChatGPT / Codex.")
             pack = ctx.gather(ws, "readme main index init app server game config", self.cfg["context"])
             readme = [f for f in pack.files][:5]
             prompt = ("Write a concise summary of this project for another developer: purpose, main parts, "
                       "languages/frameworks, entry points, how to run tests. Max 250 words.\n\nFile list:\n"
                       + listing + "\n\n" + "\n\n".join(f"=== {f.path} ===\n{f.content[:3000]}" for f in readme))
-            result = self._chat_local(tid, [ChatMessage("system", ctx.BASE_SYSTEM.format(project=ws.name)),
+            result = self._chat_codex(tid, [ChatMessage("system", "Summarize the supplied project facts accurately."),
                                             ChatMessage("user", prompt)], "summary", step)
             self._step_end(step, "completed", "Wrote the summary" + self._result_note(result) + ".")
             self.db.cache_put(key, result.text)
-            self.db.set_project_summary(project_id, result.text, LOCAL)
-            self.db.add_message(tid, "assistant", result.text, LOCAL)
+            self.db.set_project_summary(project_id, result.text, CODEX)
+            self.db.add_message(tid, "assistant", result.text, CODEX)
             self._complete(tid, _first_line(result.text))
 
         self._spawn(self._guard, task["id"], work)
@@ -2417,7 +1165,7 @@ class Orchestrator:
     def _enoy_request(self, task_id: int, text: str) -> bool:
         """A change to Enoy itself asked from a chat without its code: offer to move there, without a model.
 
-        Small models guess here (Qwen once started a new tkinter app in an empty folder), and asking Claude
+        Small models guess here (ChatGPT once started a new tkinter app in an empty folder), and asking Claude
         costs a request, so Enoy recognises these itself. True when it offered the move."""
         source = folders_mod.enoy_source()
         task = self.db.get_task(task_id)
@@ -2442,7 +1190,7 @@ class Orchestrator:
         """Handle a direct PC request typed by the user. Returns True if handled here."""
         intent = pc.detect(text)
         if not intent and tools_mod.about_this_pc(text):
-            intent = ("hardware", "")  # Any question about this PC's parts goes to Qwen with the hardware tools.
+            intent = ("hardware", "")  # Any question about this PC's parts goes to ChatGPT with the hardware tools.
         if not intent:
             return False
         action, arg = intent
@@ -2450,19 +1198,13 @@ class Orchestrator:
         try:
             if action == "hardware":
                 pc.check(self.cfg, "hardware.read")
-                override = self.db.get_task(task_id)["state"].get("override") or LOCAL
-                if self.cfg.get("tools", {}).get("enabled", True):
-                    # Qwen gets the hardware tools and asks Windows for what it needs.
-                    self.db.update_task_state(task_id, override=override)
-                    self._act(task_id, "pc.hardware_tools", "Question about this PC: Qwen gets Enoy's read-only "
-                              "hardware tools.", "system", "analysis", reason=basis, outcome="routed")
-                    return False
+                override = self.db.get_task(task_id)["state"].get("override") or CODEX
                 inv = hardware.inventory(self)
                 facts = hardware.as_text(inv)
                 self.db.update_task_state(task_id, hardware_facts=facts, override=override)
                 self._act(task_id, "pc.hardware_read", "Read the hardware inventory from Windows (read-only).", "system",
                           "analysis", reason=basis, outcome="read")
-                return False  # Qwen answers, with the measured facts in its context.
+                return False  # ChatGPT answers, with the measured facts in its context.
             if action == "list_windows":
                 pc.check(self.cfg, "windows.observe")
                 wins = pc.list_windows()
@@ -2745,12 +1487,12 @@ class Orchestrator:
     def _count_work(self, task_id: int | None, backend: str, result: Any) -> None:
         """Tokens each model wrote for this chat: what the Claude-first share is measured on.
 
-        Uses the counts the backends report (Ollama's eval_count, Claude Code's output_tokens); without one, the
+        Uses the counts the backends report (local model service's eval_count, Claude Code's output_tokens); without one, the
         text length / 4 is the fallback, and the record says so."""
         if not task_id:
             return
         usage = getattr(result, "usage", None) or {}
-        n = usage.get("eval_count" if backend == LOCAL else "output_tokens")
+        n = usage.get("eval_count" if backend == CODEX else "output_tokens")
         estimated = not isinstance(n, int)
         if estimated:
             n = len(getattr(result, "text", "") or "") // 4
@@ -2790,161 +1532,22 @@ class Orchestrator:
                       f"({route.get('scope')}).", "system", "local",
                       reason="Routing assumed a smaller change; Claude takes over if this attempt fails.")
 
-    def _handoff_package(self, task_id: int, reason: str, report: str, user_requested: bool = False) -> str:
-        """What the receiving model needs to continue safely, without the whole conversation."""
-        task = self.db.get_task(task_id)
-        s = task["state"]
-        msgs = self.db.messages(task_id)
-        followups = [m["content"] for m in msgs if m["role"] == "user"][1:]
-        last_local = [m["content"] for m in msgs if m["role"] == "assistant" and m["backend"] == LOCAL][-1:]
-        applied = [f["path"] for cs in self.db.list_changesets(task_id, "applied") for f in cs["files"]]
-        pending = self.db.list_changesets(task_id, "pending")
-        runs = self.db.list_command_runs(task["project_id"], task_id, 3)
-        globs = self.cfg["privacy"]["cloud_excluded_globs"]
-        out = ["## Handoff from Qwen (local model) to you",
-               f"Original request:\n{task['objective'].strip()}"]
-        if followups:
-            out.append("Later messages from the user:\n" + "\n".join(f"- {t.strip()[:600]}" for t in followups[-3:]))
-        out.append(f"Why you are receiving it: {reason}")
-        out.append("Plan so far: " + (s.get("plan", "")[:3000] or "No written plan."))
-        if s.get("decisions"):
-            out.append("Decisions and findings:\n" + "\n".join(f"- {d}" for d in s["decisions"][-6:]))
-        files = [f["path"] for f in s.get("relevant_files", []) if not privacy.cloud_excluded(f["path"], globs)]
-        out.append("Files inspected: " + (", ".join(files) or "none"))
-        out.append("Files already changed (applied by the user): " + (", ".join(applied) or "none"))
-        if runs:
-            out.append("Checks that were run (actual results):\n" + "\n".join(
-                f"- `{r['command']}`: {r['status']} (exit code {r['exit_code']})\n"
-                + "\n".join("    " + ln for ln in (r["stdout"] + "\n" + r["stderr"]).strip().splitlines()[-15:])
-                for r in runs))
-        if s.get("failures"):
-            out.append("Errors so far:\n" + "\n".join(f"- {f}" for f in s["failures"][-6:]))
-        if report:
-            out.append(f"What failed in the last attempt:\n{report[:4000]}")
-        if last_local:
-            out.append("Qwen's last answer (excerpt):\n" + last_local[0][:5000])
-        if pending:
-            diffs = "\n".join(f["diff"] for f in pending[0]["files"] if not privacy.cloud_excluded(f["path"], globs))
-            if diffs:
-                out.append("Change proposed but not applied (unified diff):\n" + diffs[:6000])
-        if s.get("uncertain"):
-            out.append("Uncertainty: Qwen said it was not sure about its answer.")
-        if user_requested and task["kind"] != "edit":
-            out.append("Remaining: check the answer above for mistakes and give the correct, complete answer.")
-        else:
-            out.append("Remaining: produce a correct, complete result for the original request. Enoy will "
-                       "verify any change and the user approves it before files are written.")
-        return "\n\n".join(out)
 
-    def _routing_history(self, limit: int = 100) -> dict:
-        """Per category: tasks Qwen finished alone vs. tasks that needed Claude."""
-        hist: dict[str, dict] = {}
-        for t in self.db.finished_tasks(limit):
-            route = t["state"].get("route") or {}
-            if t["state"].get("initial_backend") != LOCAL or not route.get("category") or route.get("source") != "router":
-                continue
-            h = hist.setdefault(route["category"], {"local_ok": 0, "escalated": 0})
-            if t["state"].get("escalations", 0) > 0:
-                h["escalated"] += 1
-            elif t["status"] == "completed":
-                h["local_ok"] += 1
-        return hist
 
     def routing_stats(self) -> dict:
-        """Actual vs. target model share over the last finished tasks. No model calls."""
-        r = self.cfg["routing"]
-        window, target = r["stats_window"], r["target_local_share"]
-        rows = [t for t in self.db.finished_tasks(window) if t["workflow"] != "chatgpt_leads"]
-        n = len(rows)
-        claude_rows = [t for t in rows if t["claude_calls"] > 0]
-        qwen = n - len(claude_rows)
-        direct = [t for t in claude_rows if (t["state"].get("route") or {}).get("source") == "router"
-                  and t["state"].get("initial_backend") == CLAUDE]
-        manual = [t for t in claude_rows if (t["state"].get("route") or {}).get("source") == "manual"]
-        escalated = [t for t in claude_rows if t["state"].get("escalations", 0) > 0]
-        improved = [t for t in escalated if t["status"] == "completed"]
-        cats: dict[str, int] = {}
-        for t in direct:
-            c = (t["state"].get("route") or {}).get("category", "other").replace("_", " ")
-            cats[c] = cats.get(c, 0) + 1
-        qwen_pct = round(100 * qwen / n) if n else None
-        # Claude first touches every chat, so there the share of the writing is what counts, not tasks.
-        written = {b: sum(int((t["state"].get("work") or {}).get(b, 0)) for t in rows) for b in (LOCAL, CLAUDE)}
-        total = written[LOCAL] + written[CLAUDE]
-        work = {"qwen_tokens": written[LOCAL], "claude_tokens": written[CLAUDE],
-                "qwen_pct": round(100 * written[LOCAL] / total) if total else None,
-                "estimated": any((t["state"].get("work") or {}).get("estimated") for t in rows),
-                "rule": "Tokens each model wrote in these tasks, as Ollama and Claude Code report them."}
-        if self._claude_first() and self.cfg["lead"]["enabled"]:
-            if not total or n < 5:
-                note = "Claude first: too few finished chats to compare Qwen's share of the writing with the target yet."
-            elif work["qwen_pct"] >= target:
-                note = f"Claude first: Qwen wrote {work['qwen_pct']}% of the text, at or above the {target}% target."
-            else:
-                note = (f"Claude first: Qwen wrote {work['qwen_pct']}% of the text, below the {target}% target. "
-                        "Claude answered more itself (short or hard replies) than it handed over.")
-        elif n < 5:
-            note = "Too few finished tasks to compare with the target yet."
-        elif abs(qwen_pct - target) <= 5:
-            note = "On target."
-        elif qwen_pct < target:
-            parts = []
-            if direct:
-                parts.append(f"{len(direct)} went to Claude directly ({', '.join(f'{k} ×{v}' for k, v in cats.items())})")
-            if escalated:
-                parts.append(f"{len(escalated)} were escalated after Qwen's attempt failed")
-            if manual:
-                parts.append(f"you picked Claude {len(manual)} time(s)")
-            note = ("Claude's share is above target because " + ", ".join(parts) + "."
-                    if parts else "Claude's share is above target.")
-        else:
-            note = ("Claude's share is below target: recent tasks were routine. Enoy never calls Claude "
-                    "just to reach the target.")
-        return {
-            "window": window, "counted": n, "qwen": qwen, "claude": len(claude_rows), "qwen_pct": qwen_pct,
-            "target_qwen_pct": target, "direct": len(direct), "escalated": len(escalated),
-            "escalations_completed": len(improved), "manual": len(manual), "note": note, "work": work,
-            "rule": "Counts completed and failed tasks only. A task counts as Claude's if Claude handled any part of it.",
-        }
+        rows = self.db.finished_tasks(50)
+        counts = {p: sum(int((t['state'].get('work') or {}).get(p,0)) for t in rows) for p in (CODEX, CLAUDE)}
+        return {'window':50,'counted':len(rows),'providers':counts,'note':'Only ChatGPT / Codex and Claude are available.','work':{},'rule':'Recorded provider usage.'}
 
     # Activity --------------------------------------------------------------------------------------
 
     def explain_workflow(self, task_id: int) -> dict:
-        """Optional, on request only: one local Qwen request that explains a task's workflow.
-
-        It reads the structured step log (titles, agents, reasons, results), never chat
-        content or files, and it is not part of any task. Claude is never used here.
-        """
         from . import activity
-
+        from .coordinator import call
         task = self._require(task_id)
         log_text = activity.workflow_log(task, self.db.steps(task_id))
-        if not self._local_lock.acquire(blocking=False):
-            raise TaskError("Qwen is busy with a task right now. Try again when it is free.")
-        start = time.time()
-        self._busy[LOCAL] = {"task_id": None, "step_id": None, "purpose": "explain", "since": start, "chunks": 0,
-                             "explaining": task_id}
-        self._act(task_id, "explain.requested", "You asked Qwen to explain this workflow (one local request).", LOCAL,
-                  reason="Explain workflow button. Not part of the task.")
-        messages = [ChatMessage("system", EXPLAIN_SYSTEM), ChatMessage("user", log_text)]
-        try:
-            self.db.add_transmission(task_id, LOCAL, "explain", [], f"[system]\n{EXPLAIN_SYSTEM}\n\n[user]\n{log_text}")
-            limits = self._memory_plan(None)
-            if self.memory is not None:
-                self.memory.begin(None, None, self.backends[LOCAL].settings["model"],
-                                  limits["num_ctx"] or self.backends[LOCAL].settings["num_ctx"])
-            result = self.backends[LOCAL].chat(ChatRequest(messages=messages, purpose="explain", **limits))
-        except BackendError as exc:
-            self._act(task_id, "explain.failed", f"Qwen could not explain the workflow: {exc}", LOCAL, outcome="failed")
-            raise TaskError(f"Qwen could not explain the workflow: {exc}") from exc
-        finally:
-            if self.memory is not None:
-                self.memory.end()
-            self._busy.pop(LOCAL, None)
-            self._local_lock.release()
-        seconds = time.time() - start
-        self._act(task_id, "explain.completed", f"Qwen explained the workflow ({seconds:.0f} s).", LOCAL, outcome="completed")
-        return {"text": result.text.strip(), "seconds": round(seconds, 1), "log": log_text}
+        result = call(self, task_id, CODEX, EXPLAIN_SYSTEM, log_text, 'explain')
+        return {'text':result.text,'seconds':round(result.duration_s,1),'log':log_text}
 
     # Continuation ---------------------------------------------------------------------------------
 
@@ -3022,7 +1625,7 @@ def _announces_more(text: str) -> bool:
 def _fit_window(msgs: list[ChatMessage], budget: int) -> None:
     """Keep a tool conversation inside the model's window: shorten the oldest tool results first.
 
-    Ollama would otherwise cut the start of the prompt, instructions included, without saying so."""
+    local model service would otherwise cut the start of the prompt, instructions included, without saying so."""
     def total() -> int:
         return sum(len(m.content) for m in msgs)
     for m in msgs[1:-2]:

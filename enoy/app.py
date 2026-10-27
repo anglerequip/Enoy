@@ -22,10 +22,9 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__, config as config_mod, paths, winshell
-from .backends.base import CLAUDE, LOCAL, CODEX
+from .backends.base import CLAUDE, CODEX
 from .backends.codex import CodexBackend
 from .backends.claude_code import ClaudeCodeBackend
-from .backends.ollama import OllamaBackend
 from .orchestrator import EventBus, Orchestrator
 from .redact import redact
 from .server import App, Server
@@ -60,7 +59,7 @@ def build(cfg: dict | None = None, cfg_warnings: list[str] | None = None, synchr
     interrupted = storage.mark_interrupted()
     if interrupted:
         log.info("Marked %d interrupted task(s) for resume: %s", len(interrupted), interrupted)
-    backends = {LOCAL: OllamaBackend(cfg["ollama"]), CLAUDE: ClaudeCodeBackend(cfg["claude"])}
+    backends = {CLAUDE: ClaudeCodeBackend(cfg["claude"])}
     backends[CODEX] = CodexBackend(cfg["codex"])
     last = storage.kv_get("claude_last_verified")
     if last:
@@ -254,7 +253,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     app, orc = build()
-    orc.start_memory_supervisor()
     server = Server(app, args.port).start()
     _instance_file().write_text(json.dumps({"url": server.url, "pid": os.getpid(),
                                           "version": __version__, "source": str(Path(__file__).resolve())}),
@@ -287,9 +285,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         server.stop()
-        if orc.memory is not None:
-            orc.memory.stop()
-            orc.memory.unload_on_exit()  # Frees the model's RAM and VRAM; Ollama itself keeps running.
         try:
             _instance_file().unlink()
         except OSError:

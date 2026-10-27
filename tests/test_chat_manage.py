@@ -8,7 +8,7 @@ import pytest
 
 from conftest import FakeBackend
 from enoy import paths
-from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.backends.base import CLAUDE, CODEX as LOCAL, BackendError
 from enoy.orchestrator import EventBus, Orchestrator, TaskError
 from enoy.server import App, Server
 from enoy.storage import Storage

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from conftest import FakeBackend
-from enoy.backends.base import CLAUDE, LOCAL
+from enoy.backends.base import CLAUDE, CODEX as LOCAL
 from enoy.orchestrator import EventBus, Orchestrator
 from enoy.server import App, Server
 from enoy.storage import Storage
@@ -19,7 +19,7 @@ hello
 
 @pytest.fixture
 def server(cfg, tmp_path):
-    backends = {LOCAL: FakeBackend(LOCAL, ["An answer.", ADD]), CLAUDE: FakeBackend(CLAUDE, available=False)}
+    backends = {LOCAL: FakeBackend(LOCAL, ["An answer.", ADD, "Done.\nNEXT: done"]), CLAUDE: FakeBackend(CLAUDE, available=False)}
     orc = Orchestrator(Storage(":memory:"), cfg, backends, EventBus(), backups_dir=tmp_path / "bk", synchronous=True)
     app = App(orc, [], save_config=False)
     srv = Server(app).start()
@@ -53,7 +53,7 @@ def test_api_requires_token_and_local_host(server):
     assert call(server, "GET", "/api/status", token=False)[0] == 401
     assert call(server, "GET", "/api/status", host="evil.example.com")[0] == 403
     status, data = call(server, "GET", "/api/status")
-    assert status == 200 and data["local"]["available"] is True and data["claude"]["available"] is False
+    assert status == 200 and data["codex"]["available"] is True and data["claude"]["available"] is False
 
 
 def test_static_path_traversal_blocked(server):
@@ -75,7 +75,7 @@ def test_full_flow_over_http(server, project):
     status, detail = call(server, "GET", f"/api/tasks/{data['task']['id']}")
     assert detail["task"]["status"] == "completed" and detail["messages"][-1]["content"] == "An answer."
 
-    status, data = call(server, "POST", "/api/tasks", {"project_id": pid, "objective": "Create notes.txt", "kind": "edit"})
+    status, data = call(server, "POST", "/api/tasks", {"project_id": pid, "objective": "Create notes.txt", "kind": "edit", "backend": LOCAL})
     tid = data["task"]["id"]
     status, sets = call(server, "GET", f"/api/changesets?project_id={pid}&status=pending")
     assert len(sets["changesets"]) == 1
@@ -97,8 +97,8 @@ def test_command_endpoint_asks_before_unlisted_commands(server, project):
 def test_invalid_settings_rejected(server):
     status, data = call(server, "POST", "/api/config", {"config": {"routing": {"mode": "chaos"}}})
     assert status == 400
-    status, data = call(server, "POST", "/api/config", {"config": {"routing": {"mode": "manual"}}})
-    assert status == 200 and data["config"]["routing"]["mode"] == "manual"
+    status, data = call(server, "POST", "/api/config", {"config": {"routing": {"max_attempts": 3}}})
+    assert status == 200 and data["config"]["routing"]["max_attempts"] == 3
 
 
 def test_unknown_project_is_a_clean_error(server):
@@ -117,7 +117,7 @@ def test_plain_chat_without_project(server):
     task = call(server, "GET", f"/api/tasks/{data['task']['id']}")[1]
     assert task["task"]["kind"] == "ask" and task["task"]["status"] == "completed"
     system = server.app.orc.backends[LOCAL].requests[-1].messages[0].content
-    assert "No project folder is open" in system
+    assert "ChatGPT" in system
 
 
 def test_followup_can_attach_files(server, project):
@@ -165,7 +165,7 @@ def test_activity_endpoints(server, project):
     requests = len(orc.backends[LOCAL].requests)
     status, data = call(server, "POST", "/api/dispatch", {"paused": True})
     assert status == 200 and data["paused"] is True
-    status, data = call(server, "POST", "/api/tasks", {"project_id": pid, "objective": "Add notes.txt"})
+    status, data = call(server, "POST", "/api/tasks", {"project_id": pid, "objective": "Add notes.txt", "backend": LOCAL})
     assert data["task"]["status"] == "queued" and len(orc.backends[LOCAL].requests) == requests
     status, data = call(server, "POST", "/api/dispatch", {"paused": False})
     assert data["paused"] is False and data["queued"] == 1

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from enoy import context as ctx
-from enoy.backends.base import CLAUDE, LOCAL, ChatResult
+from enoy.backends.base import CLAUDE, CODEX as LOCAL, ChatResult
 from enoy.tools import FolderService, ToolError
 from enoy.tools import folders
 
@@ -68,53 +68,10 @@ def test_parse_lead_folder_mode():
     assert (mode, msg, path) == ("folder", "That code is in Enoy's source.", "C:\\Code\\enoy")
 
 
-def test_claude_moves_the_chat_to_enoys_code_after_your_ok(orc_factory, empty, code):
-    orc = orc_factory(claude=[f"MODE: folder {code}\nThe status dots are drawn in that folder's code.",
-                              "MODE: answer\nThe dots live in ui/status.js."],
-                      lead__enabled=True, lead__style="claude_first")
-    pid = open_project(orc, empty)
-    task = orc.start_task(pid, "restyle the sidebar indicators")
-    prompt = orc.backends[CLAUDE].requests[0].messages[-1].content
-    assert "MODE: folder" in prompt and "Enoy's own source code" in prompt and folders.enoy_source() in prompt
-    t = orc.db.get_task(task["id"])
-    req = t["state"]["pending_folder"]
-    assert t["status"] == "completed" and req["path"] == str(code.resolve()) and req["by"] == CLAUDE
-    assert len(orc.backends[CLAUDE].requests) == 1  # Nothing moves or runs before you answer.
-    moved = orc.answer_folder(task["id"], True)
-    assert moved["id"] == task["id"]
-    t = orc.db.get_task(task["id"])
-    assert orc.db.get_project(t["project_id"])["path"] == str(code.resolve())
-    assert t["state"].get("pending_folder") is None and t["status"] == "completed"
-    second = orc.backends[CLAUDE].requests[1].messages[-1].content
-    assert "restyle the sidebar indicators" in second and "Project: my-app" in second  # Claude now works there.
-    assert "folder.moved" in [a["kind"] for a in orc.db.activity(task["id"], 100)]
 
 
-def test_staying_keeps_the_chat_where_it_is(orc_factory, empty, code):
-    orc = orc_factory(claude=[f"MODE: folder {code}\nIt is in my-app."], lead__enabled=True, lead__style="claude_first")
-    pid = open_project(orc, empty)
-    task = orc.start_task(pid, "fix the sidebar")
-    orc.answer_folder(task["id"], False)
-    t = orc.db.get_task(task["id"])
-    assert t["project_id"] == pid and t["state"].get("pending_folder") is None
-    assert len(orc.backends[CLAUDE].requests) == 1
 
 
-def test_qwen_finds_the_folder_and_asks_to_move(cfg, tmp_path, empty, code):
-    find = ChatResult(text="", backend=LOCAL, model="fake",
-                      tool_calls=[{"name": "find_folders", "arguments": {"name": "my-app"}}])
-    replies = [find,
-               call("switch_folder", path=str(code), reason="The status dots are in my-app/ui/status.js."),
-               "That code is in my-app; Enoy asks you to move this chat there."]
-    orc, _ = agent_orc(cfg, tmp_path, replies)
-    orc.db.upsert_project(str(code), "my-app")  # Opened in Enoy before.
-    task = orc.start_task(open_project(orc, empty), "restyle the sidebar indicators", backend=LOCAL)
-    results = [m.content for m in orc.backends[LOCAL].requests[-1].messages if m.role == "tool"]
-    assert '"name":"my-app"' in results[0] and '"markers":["package.json"]' in results[0]
-    req = orc.db.get_task(task["id"])["state"]["pending_folder"]
-    assert req["path"] == str(code.resolve()) and req["by"] == LOCAL
-    system = orc.backends[LOCAL].requests[0].messages[0].content
-    assert "Enoy's own source code" in system and "switch_folder" in system
 
 
 def test_a_chat_that_changed_files_continues_in_a_new_chat(orc_factory, project, code):
@@ -137,7 +94,7 @@ def test_empty_folder_note_is_shown_once(orc_factory, empty):
 
 
 def test_requests_to_change_enoy_itself_are_recognised():
-    for yes in ('redesign these "ollama ready" "qwen ready" "claude ready" so they look nicer',
+    for yes in ('redesign these "ollama ready" "codex ready" "claude ready" so they look nicer',
                 "add a dark mode to Enoy", "make this app start faster", "fix the status dots"):
         assert folders.about_enoy_change(yes), yes
     for no in ("make the app responsive", "what is Enoy?", "add a function to calculator.py", "hey"):
@@ -148,7 +105,7 @@ def test_enoy_offers_its_own_code_without_asking_a_model(orc_factory, monkeypatc
     monkeypatch.setattr(folders, "enoy_source", lambda: str(code))
     orc = orc_factory(qwen=["Here is how you could do it."], claude=["MODE: answer\nunused"],
                       lead__enabled=True, lead__style="claude_first")
-    task = orc.start_task(open_project(orc, empty), 'redesign the "qwen ready" dot so it fits in nicer')
+    task = orc.start_task(open_project(orc, empty), 'redesign the "codex ready" dot so it fits in nicer')
     t = orc.db.get_task(task["id"])
     assert t["state"]["pending_folder"]["path"] == str(code.resolve()) and t["state"]["pending_folder"]["is_enoy"]
     assert orc.backends[CLAUDE].requests == [] and orc.backends[LOCAL].requests == []

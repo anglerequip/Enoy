@@ -2,7 +2,7 @@
 
 Used to find the local model's processes and measure their memory. Nothing here
 changes or ends a process except `terminate` and `cap_working_set`, which the memory
-supervisor calls only for a process it has identified as an Ollama model runner.
+controls use the measured process inventory.
 
 Memory metric: the **private working set**, the same number Task Manager shows in
 its "Memory" column: private memory that currently sits in RAM. Two other numbers

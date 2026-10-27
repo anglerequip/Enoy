@@ -39,11 +39,8 @@ If no code folder is open, answer or clarify instead. Never use MODE: folder or 
 """
 
 
-def enabled(orc, task_id: int, override: str | None = None) -> bool:
-    task = orc.db.get_task(task_id)
-    return bool(orc.cfg.get("coordinator", {}).get("enabled") and not override
-                and not task["state"].get("override") and not orc._cloud_block(task_id)
-                and not orc.cfg["routing"].get("zero_paid_mode"))
+def enabled(orc, task_id: int, override=None):
+    return not override and not orc._cloud_block(task_id)
 
 
 def snapshot(orc, task_id: int, private: set[str] | None = None) -> str:
@@ -108,10 +105,14 @@ def call(orc, task_id: int, provider: str, system: str, user: str, purpose: str,
     trans = orc.db.add_transmission(task_id, CODEX, purpose, files_meta or [], f"[system]\n{system}\n\n[user]\n{prompt}")
     orc._act(task_id, "backend.request", f"Sent {len(prompt):,} characters to ChatGPT / Codex.", CODEX, purpose, step_id=step)
     orc._busy[CODEX] = {"task_id": task_id, "step_id": step, "purpose": purpose, "since": time.time()}
+    orc._partial[task_id] = ''
+    def on_token(text):
+        orc._partial[task_id] += text
+        orc.bus.publish({'type':'token','task_id':task_id,'backend':CODEX,'text':text})
     try:
         result = orc.backends[CODEX].chat(ChatRequest(
             [ChatMessage("system", system), ChatMessage("user", prompt)], purpose=purpose,
-            cancel=orc._cancel.setdefault(task_id, threading.Event())))
+            cancel=orc._cancel.setdefault(task_id, threading.Event()), on_token=on_token))
     except BackendError:
         orc._check_cancel(task_id)
         raise
@@ -146,8 +147,16 @@ def reply(orc, task_id: int, text: str):
         orc.bus.publish({"type": "message_done", "task_id": task_id, "backend": CODEX})
 
 
-def start(orc, task_id: int, objective: str):
+def start(orc, task_id: int, objective: str, forced_provider: str | None = None):
     task = orc.db.get_task(task_id)
+    block = orc._cloud_block(task_id)
+    if block:
+        orc._fail(task_id, 'Cloud access is disabled: '+block+'. Enable cloud access to use ChatGPT or Claude.')
+        return
+    forced_provider = forced_provider or task['state'].get('override')
+    if forced_provider not in (None, CODEX, CLAUDE):
+        orc._fail(task_id, 'That provider has been removed. Choose Auto, ChatGPT or Claude.')
+        return
     if orc._image_ids(task_id, latest_only=True):
         orc._fail(task_id, "The ChatGPT coordinator currently accepts text only. Remove the image or pick Claude.")
         return
@@ -164,6 +173,26 @@ def start(orc, task_id: int, objective: str):
     view, private = orc._cloud_view(pack)
     ws = orc.workspace(task["project_id"])
     user = ctx.project_header(ws, view) + "\n\n" + ctx.task_message(objective, view)
+    if forced_provider:
+        from .routing import classify
+        if classify(objective).kind == 'edit' and not ctx.is_general(ws):
+            plan = team.parse_plan(json.dumps({'acceptance':['Implement the request and run available checks'],
+                'tasks':[{'id':'T1','title':objective[:100],'description':objective,
+                          'files':[f.path for f in view.files], 'model':forced_provider,
+                          'why':'Provider selected by the user'}]}), orc.cfg['team']['max_tasks'])
+            orc._step_end(step, 'completed', 'Provider selected by the user.')
+            orc._set(task_id, kind='edit')
+            team.TeamRunner(orc, task_id).start_from_lead(objective, plan)
+            return
+        pending = {'objective':objective, 'provider':forced_provider,'system':SYSTEM,'prompt':user,
+                   'files':[{'path':f.path,'sha':f.sha,'chars':len(f.content)} for f in view.files],
+                   'chars':len(user),'purpose':'ask','step_id':step}
+        orc.db.update_task_state(task_id, pending_claude=pending)
+        if forced_provider == CLAUDE and orc.cfg['claude']['confirm_before_send']:
+            orc._set(task_id,status='awaiting_claude')
+        else:
+            send_direct(orc, task_id)
+        return
     user += "\n\n" + PLAN.replace("MAX_TASKS", str(orc.cfg["team"]["max_tasks"]))
     user += "\nProvider availability: " + json.dumps({
         "claude": orc.claude_available()[0], "codex": CODEX in orc.backends})
@@ -206,3 +235,17 @@ def review(runner, status: str, note: str, summary: str, tasks: list[dict]) -> b
     reply(orc, task_id, message)
     runner.finish_after_lead(verdict, instruction, bool(message))
     return True
+
+
+def send_direct(orc, task_id: int):
+    pending = orc.db.get_task(task_id)['state'].get('pending_claude')
+    if not pending:
+        raise BackendError('failed','No provider request is prepared.')
+    provider = pending['provider']
+    result = call(orc,task_id,provider,pending['system'],pending['prompt'],'ask',pending['files'],step=pending['step_id'])
+    orc.db.update_task_state(task_id,pending_claude=None)
+    orc._set_owner(task_id,provider,'Provider selected by the user.')
+    orc.db.add_message(task_id,'assistant',result.text,provider)
+    orc.bus.publish({'type':'message_done','task_id':task_id,'backend':provider})
+    orc._step_end(pending['step_id'],'completed','Answered.')
+    orc._complete(task_id,result.text[:300])

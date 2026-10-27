@@ -1,3 +1,3 @@
-"""Enoy: ChatGPT-led collaboration with Codex, Claude and optional local Qwen."""
+"""Enoy: ChatGPT-led collaboration with Codex and Claude."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

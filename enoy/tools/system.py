@@ -187,17 +187,6 @@ def _summary(args: dict, ctx: ToolContext) -> dict:
     }, info["collected"])
 
 
-def _model_fit(args: dict, ctx: ToolContext) -> dict:
-    """Facts needed to judge whether the configured local model fits: hardware, model size, Enoy's memory mode."""
-    info = _collect(ctx.cancel)
-    raw = info["raw"]
-    rt = ctx.runtime or {}
-    out = {"memory": memory(raw), "gpus": gpus(raw), "cpu": cpu(raw), "local_model": rt or None}
-    if not rt:
-        out["note"] = "Local model details were not available to this tool."
-    return _with_meta(out, info["collected"])
-
-
 def _tool(name, desc, fn, output, params=None) -> Tool:
     return Tool(name=name, description=desc, run=fn, output=output,
                 parameters={"type": "object", "properties": params or {}, "required": []},
@@ -222,7 +211,4 @@ SYSTEM_TOOLS = [
           "system and motherboard manufacturer/model, bios vendor/version/date"),
     _tool("get_windows_info", "Windows edition, version, build, architecture, install date, last boot.",
           _section(windows), "edition, version, build, release, architecture"),
-    _tool("check_local_model_fit", "Facts for judging whether Enoy's configured local model (Qwen via Ollama) fits "
-          "this PC: RAM and VRAM free/total, the model and its size, loaded models and Enoy's memory mode limit.",
-          _model_fit, "memory, gpus, cpu, local_model (configured model, size, loaded models, memory mode)"),
 ]

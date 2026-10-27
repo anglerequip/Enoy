@@ -9,7 +9,7 @@ const AC = {
   agent: lsGet("acAgent") || "all", type: lsGet("acType") || "all", scope: lsGet("acScope") || "task",
   timer: null, loading: false, chunks: {}, openDetails: new Set(),
 };
-const AGENT = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" };
+const AGENT = { codex: "ChatGPT / Codex", qwen: "Qwen (previous provider)", claude: "Claude", system: "Enoy", user: "You" };
 const STATE = {
   offline: ["Offline", "muted"], available: ["Available", "ok"], working: ["Working", "live"],
   waiting: ["Waiting", "warn"], blocked: ["Blocked", "bad"], failed: ["Failed", "bad"], completed: ["Completed", "ok"],
@@ -79,7 +79,7 @@ function scheduleActivity() {
 
 // Called by app.js for every live event.
 function activityEvent(ev) {
-  if (ev.type === "token" && ev.backend === "qwen") {
+  if (ev.type === "token" && ev.backend === "codex") {
     AC.chunks[ev.task_id] = (AC.chunks[ev.task_id] || 0) + 1;
     const el = document.getElementById("qwen-chunks");
     if (el && Number(el.dataset.task) === ev.task_id) el.textContent = `${(Number(el.dataset.base) || 0) + AC.chunks[ev.task_id]} pieces of text received`;
@@ -169,11 +169,11 @@ function overviewHtml(d) {
 function leadLine(d) {
   const bits = [];
   if (d.lead && d.lead.coordinator) bits.push(`${who("codex")} <b>leads</b>: evaluates requests, delegates to Codex or Claude, and reviews shared results.`);
-  else if (d.lead && d.lead.enabled) bits.push(`${who("claude")} <b>leads</b>: reads each new message first, then answers, asks, or plans work for Qwen and the team.`);
+  else if (d.lead && d.lead.enabled) bits.push(`${who("claude")} <b>leads</b>: reads each new message first, then answers, asks, or plans work for ChatGPT and the team.`);
   else bits.push(`<span class="muted">Claude does not lead (Settings → Claude leads). Messages go to the model the router picks.</span>`);
   const m = d.memory;
   if (m) bits.push(`<span class="muted">Memory:</span> ${esc(m.mode)} mode, limit ${m.ceiling_mib.toLocaleString()} MiB`
-    + (m.used_mib ? ` · Qwen uses ${Math.round(m.used_mib).toLocaleString()} MiB` : " · Qwen not loaded")
+    + (m.used_mib ? ` · ChatGPT uses ${Math.round(m.used_mib).toLocaleString()} MiB` : " · ChatGPT not loaded")
     + (m.state && !["idle", "within"].includes(m.state) ? ` · <b>${esc(m.state.replace(/_/g, " "))}</b>` : ""));
   return `<div class="small ac-lead">${bits.map(b => `<div>${b}</div>`).join("")}</div>`;
 }
@@ -229,19 +229,16 @@ function ttControls(x) {
   if (x.can.cancel) b.push(`<button class="btn small" data-action="ac-tt-do" data-do="cancel" data-id="${x.id}">Cancel task</button>`);
   if (x.can.model) {
     const cooperative = AC.data?.focus?.task?.workflow === "chatgpt_leads";
-    const other = x.provider === "claude" ? (cooperative ? "codex" : "qwen") : "claude";
+    const other = x.provider === "claude" ? "codex" : "claude";
     b.push(`<button class="btn small ghost" data-action="ac-tt-do" data-do="model" data-provider="${other}" data-id="${x.id}">Use ${AGENT[other]} instead</button>`);
   }
   return b.length ? `<div class="row ac-tt-ctl">${b.join("")}</div>` : "";
 }
 
 function routeRows(r) {
-  if (!r || !r.category) return "";
-  const bits = [r.category.replace(/_/g, " "), `${r.complexity} complexity`, r.scope, `${r.risk} risk`];
-  if (r.confidence) bits.push(`confidence ${r.confidence}`);
-  return `<div>Routing</div><div>${esc(bits.join(" · "))}${r.preferred && r.preferred !== r.backend ? `<div class="muted small">Would have picked ${esc(AGENT[r.preferred])} without restrictions.</div>` : ""}
-    ${r.escalation && r.escalation.length ? `<details class="small"><summary class="muted">When it escalates</summary>${r.escalation.map(x => `<div>• ${esc(x)}</div>`).join("")}</details>` : ""}</div>`;
+  return `<p class="small muted">${esc(r.note || "ChatGPT and Claude share recorded task results.")}</p>`;
 }
+
 function verificationRow(v) {
   if (!v) return "";
   if (v.status === "not_run") return `<div>Verified</div><div class="muted">Changes applied; no check run since.</div>`;
@@ -250,14 +247,7 @@ function verificationRow(v) {
 }
 function routingHtml(r) {
   if (!r) return "";
-  const pct = r.qwen_pct;
-  const bar = r.counted ? `<div class="ac-share" role="img" aria-label="Qwen ${pct}%, Claude ${100 - pct}%, target Qwen ${r.target_qwen_pct}%">
-      <div class="q" style="width:${pct}%"></div><div class="c" style="width:${100 - pct}%"></div><div class="tgt" style="left:${r.target_qwen_pct}%"></div></div>` : "";
-  return `<section class="ac-sec"><h3>Model share</h3>
-    ${r.counted ? `<div class="small">Last ${r.counted} finished: <span class="who qwen">Qwen ${r.qwen}</span> (${pct}%) · <span class="who claude">Claude ${r.claude}</span> (${100 - pct}%) · target Qwen ${r.target_qwen_pct}%</div>` : ""}
-    ${r.work && r.work.qwen_pct != null ? `<div class="small">Writing: <span class="who qwen">Qwen ${r.work.qwen_pct}%</span> · <span class="who claude">Claude ${100 - r.work.qwen_pct}%</span> (${(r.work.qwen_tokens + r.work.claude_tokens).toLocaleString()} tokens${r.work.estimated ? ", partly estimated" : ""})</div>` : ""}
-    ${bar}<div class="small muted">${esc(r.note)}</div>
-    ${r.claude ? `<div class="small muted">Claude: ${r.direct} routed directly · ${r.escalated} escalated after Qwen failed (${r.escalations_completed} then completed) · ${r.manual} picked by you</div>` : ""}</section>`;
+  return `<section class="ac-sec"><h3>Provider usage</h3>${Object.entries(r.providers || {}).map(([p,n])=>`<div>${esc(AGENT[p] || p)}: ${Number(n).toLocaleString()} output tokens</div>`).join("")}<p class="small muted">${esc(r.note || "")}</p></section>`;
 }
 
 function controlsHtml(t, full) {
@@ -265,7 +255,7 @@ function controlsHtml(t, full) {
   if (t.id !== S.chatId) b.push(`<button class="btn small" data-action="ac-open-chat" data-id="${t.id}" data-project="${t.project_id}">Open chat</button>`);
   if (t.can.approve_claude) {
     b.push(`<button class="btn small accent" data-action="ac-claude-approve" data-id="${t.id}">Send to Claude…</button>`);
-    b.push(`<button class="btn small" data-action="ac-claude-decline" data-id="${t.id}">Keep with Qwen</button>`);
+    b.push(`<button class="btn small" data-action="ac-claude-decline" data-id="${t.id}">Keep with ChatGPT</button>`);
   }
   if (t.can.review) b.push(`<button class="btn small accent" data-action="ac-review" data-id="${t.id}">Review changes</button>`);
   if (t.can.retry) b.push(`<button class="btn small" data-action="ac-retry" data-id="${t.id}">${t.status === "interrupted" ? "Resume" : "Retry"}</button>`);
@@ -273,10 +263,10 @@ function controlsHtml(t, full) {
   if (full) {
     b.push(`<button class="btn small ghost" data-action="ac-log" data-id="${t.id}">View log</button>`);
     if (t.relevant_files.length) b.push(`<button class="btn small ghost" data-action="ac-files" data-id="${t.id}">Files (${t.relevant_files.length})</button>`);
-    const qwen = AC.data && AC.data.agents.find(a => a.name === "qwen");
+    const qwen = AC.data && AC.data.agents.find(a => a.name === "codex");
     const qwenFree = qwen && qwen.state !== "offline" && qwen.state !== "blocked" && qwen.state !== "working";
     b.push(`<button class="btn small ghost" data-action="ac-explain" data-id="${t.id}" ${qwenFree ? "" : "disabled"}
-      title="${qwenFree ? "Sends one short request to Qwen on this PC. Claude is not used." : "Qwen is busy or not available"}">Explain workflow</button>`);
+      title="${qwenFree ? "Sends one short request to ChatGPT via Codex. Claude is not used." : "ChatGPT is busy or not available"}">Explain workflow</button>`);
   }
   return `<div class="row ac-ctl">${b.join("")}</div>`;
 }
@@ -286,8 +276,8 @@ function agentHtml(a) {
   const cur = a.current;
   const lines = [];
   if (cur) {
-    const chunks = a.name === "qwen" && cur.chunks !== undefined && cur.status === "working"
-      ? `<div class="small muted" id="qwen-chunks" data-task="${cur.task_id}" data-base="${cur.chunks}">${cur.chunks ? `${cur.chunks} pieces of text received` : "Request sent; waiting for the first words (the model may be loading)"}</div>` : "";
+    const chunks = a.name === "codex" && cur.chunks !== undefined && cur.status === "working"
+      ? `<div class="small muted" id="qwen-chunks" data-task="${cur.task_id}" data-base="${cur.chunks}">${cur.chunks ? `${cur.chunks} pieces of text received` : "Request sent; waiting for the first words (the provider is responding)"}</div>` : "";
     lines.push(`<div class="ac-cur">
       <div><b>${esc(cur.title)}</b> <span class="muted small">· ${esc(STEP_STATE[cur.status] || cur.status)}${cur.since ? ` since ${clock(cur.since)}` : ""}</span></div>
       ${cur.task_id ? `<div class="small">Task: <a href="#" data-action="ac-focus" data-id="${cur.task_id}">${esc(cur.task_title || `#${cur.task_id}`)}</a>${cur.stage_label ? ` · ${esc(cur.stage_label)}` : ""}</div>` : ""}
@@ -303,7 +293,7 @@ function agentHtml(a) {
   if (a.last_sent) {
     const x = a.last_sent;
     lines.push(`<div class="small"><span class="muted">Last sent:</span> ${esc(x.purpose)} request, ${x.chars.toLocaleString()} characters${x.files.length ? `, ${x.files.length} file(s): ${x.files.slice(0, 4).map(esc).join(", ")}${x.files.length > 4 ? "…" : ""}` : ""}
-      · ${ago(x.at)}${a.name === "qwen" ? " · stayed on this PC" : ""}${x.usage ? `<div class="muted">${esc(x.usage)}</div>` : ""}</div>`);
+      · ${ago(x.at)}${""}${x.usage ? `<div class="muted">${esc(x.usage)}</div>` : ""}</div>`);
   }
   if (a.error) {
     lines.push(`<div class="small ac-note bad"><b>${esc(a.error.title)}</b> failed ${ago(a.error.at)}: ${esc(a.error.error)}
@@ -313,7 +303,7 @@ function agentHtml(a) {
     lines.push(`<details class="ac-recent" data-key="recent-${a.name}" ${AC.openDetails.has(`recent-${a.name}`) ? "open" : ""}><summary>Recent completed work (${a.recent.length})</summary>${a.recent.map(r =>
       `<div class="small">✓ ${esc(r.title)} · <a href="#" data-action="ac-focus" data-id="${r.task_id}">${esc(r.task_title)}</a> <span class="muted">${ago(r.at)}</span>${r.result ? `<div class="muted">${esc(r.result)}</div>` : ""}</div>`).join("")}</details>`);
   }
-  const model = a.name === "qwen" ? (conn.model || "") : (conn.model || "");
+  const model = a.name === "codex" ? (conn.model || "") : (conn.model || "");
   return `<div class="ac-agent ${esc(a.state)}">
     <div class="ac-agent-head">${avatar(a.name)}<div class="grow"><div><b>${esc(a.label)}</b> <span class="muted small">${esc(model)}</span></div>
       <div class="small muted ac-conn" title="${esc(conn.detail || "")}">${esc(conn.detail || "")}</div></div>${stateBadge(a.state)}</div>
@@ -365,7 +355,7 @@ function timelineHtml(d) {
   return `<section class="ac-sec"><h3>Timeline</h3>
     <div class="row ac-filters">
       <select id="ac-scope" aria-label="Which tasks">${opt({ task: "This task", all: "All tasks" }, AC.scope)}</select>
-      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
+      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", codex: "ChatGPT / Codex", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
       <select id="ac-type" aria-label="Event type">${opt(TYPES, AC.type)}</select>
     </div>
     <div class="ac-timeline">${evs.length ? evs.map(e => {
@@ -451,13 +441,13 @@ Object.assign(actions, {
     loadActivity();
   }),
   "ac-cancel": async el => {
-    const ok = await confirmBox("Cancel this task?", `<p>Running work stops at the next safe point. For Qwen, Enoy closes the connection to Ollama.
+    const ok = await confirmBox("Cancel this task?", `<p>Running work stops at the next safe point. For ChatGPT, Enoy stops the Codex request.
       For Claude, it stops the local Claude Code process; a request Anthropic already received may still count toward your usage.</p>
       <p class="small muted">The panel shows “Cancelled” only after the task has actually stopped.</p>`, "Cancel task", true);
     if (ok) taskPost(el.dataset.id, "cancel", "Cancel requested.");
   },
   "ac-retry": el => taskPost(el.dataset.id, "resume", "Retrying from the saved task state."),
-  "ac-claude-decline": el => taskPost(el.dataset.id, "claude/decline", "Kept with Qwen. Nothing was sent to Claude."),
+  "ac-claude-decline": el => taskPost(el.dataset.id, "claude/decline", "Kept with ChatGPT. Nothing was sent to Claude."),
   "ac-claude-approve": el => guarded(async () => {
     const p = (await api("GET", `/api/tasks/${el.dataset.id}/claude-preview`)).pending;
     if (!p) { toast("Nothing is waiting to be sent."); return; }
@@ -507,13 +497,13 @@ Object.assign(actions, {
       <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
   }),
   "ac-explain": el => guarded(async () => {
-    openModal(`<h2>Explain workflow</h2><p>${avatar("qwen")} Asking Qwen on this PC… <span class="typing"><span></span><span></span><span></span></span></p>
-      <p class="small muted">This is one local request. Qwen reads only the step log (titles, models, reasons, results), not your chat or files. Claude is not used.</p>`);
+    openModal(`<h2>Explain workflow</h2><p>${avatar("qwen")} Asking ChatGPT via Codex… <span class="typing"><span></span><span></span><span></span></span></p>
+      <p class="small muted">This is one local request. ChatGPT reads only the step log (titles, models, reasons, results), not your chat or files. Claude is not used.</p>`);
     try {
       const r = await api("POST", "/api/activity/explain", { task_id: Number(el.dataset.id) });
       openModal(`<h2>Explain workflow</h2><div class="ai-body">${md(r.text)}</div>
-        <p class="small muted">Written by Qwen on this PC in ${r.seconds} s from the step log below. Check it against the timeline; the log is the source of truth.</p>
-        <details><summary class="small muted">Step log Qwen read</summary><pre class="log">${esc(r.log)}</pre></details>
+        <p class="small muted">Written by ChatGPT via Codex in ${r.seconds} s from the step log below. Check it against the timeline; the log is the source of truth.</p>
+        <details><summary class="small muted">Step log ChatGPT read</summary><pre class="log">${esc(r.log)}</pre></details>
         <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Close</button></div>`);
     } catch (e) { closeModal(); throw e; }
     loadActivity();

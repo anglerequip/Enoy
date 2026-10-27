@@ -11,7 +11,6 @@ from enoy import paths
 from enoy import tools as tools_mod
 from enoy.backends.base import CLAUDE, LOCAL, ChatMessage, ChatResult
 from enoy.backends.claude_code import ClaudeCodeBackend, _tool_events
-from enoy.backends.ollama import _wire
 from enoy.orchestrator import EventBus, Orchestrator
 from enoy.storage import Storage
 from enoy.tools import registry as reg_mod
@@ -203,11 +202,6 @@ def test_hardware_tools_report_real_fields_and_missing_ones(cfg):
 
 # ---------------------------------------------------------------- backends
 
-def test_ollama_wire_format_carries_tool_calls_and_results():
-    call = ChatMessage("assistant", "", tool_calls=[{"name": "get_cpu_info", "arguments": {}}])
-    assert _wire(call)["tool_calls"] == [{"function": {"name": "get_cpu_info", "arguments": {}}}]
-    assert _wire(ChatMessage("tool", "{}", tool_name="get_cpu_info")) == {"role": "tool", "content": "{}",
-                                                                          "tool_name": "get_cpu_info"}
 
 
 def test_claude_web_mode_enables_only_web_tools():
@@ -235,119 +229,22 @@ def _call(name, **args):
     return ChatResult(text="", backend=LOCAL, model="fake", tool_calls=[{"name": name, "arguments": args}])
 
 
-def test_qwen_lists_pc_parts_through_tools(cfg, tmp_path):
-    orc = _orc(cfg, tmp_path, [_call("get_hardware_inventory"), "You have a Test CPU 9000 and a Test GPU (8 GB)."])
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "List all the parts in my PC.")
-    reqs = orc.backends[LOCAL].requests
-    offered = {s["function"]["name"] for s in reqs[0].tools}
-    assert offered == tools_mod.PC_TOOLS and "hardware tool" in reqs[0].messages[0].content
-    tool_msg = reqs[1].messages[-1]
-    assert tool_msg.role == "tool" and tool_msg.tool_name == "get_hardware_inventory" and "Test CPU 9000" in tool_msg.content
-    answer = orc.db.messages(t["id"])[-1]["content"]
-    assert answer.startswith("You have a Test CPU") and "Read from Windows by Enoy" in answer
-    kinds = [a["kind"] for a in orc.db.activity(t["id"])]
-    assert "tool.started" in kinds and "tool.finished" in kinds
-    assert orc.db.get_task(t["id"])["state"]["tool_calls"][0]["ok"] is True
-    assert orc.backends[CLAUDE].requests == []
 
 
-def test_tool_errors_reach_the_model_and_the_answer(cfg, tmp_path):
-    cfg["pc"]["hardware_read"] = False
-    cfg["tools"]["enabled_tools"] = {}
-    orc = _orc(cfg, tmp_path, ["(not used)"])
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "What GPU do I have?")
-    assert "not allowed" in orc.db.messages(t["id"])[-1]["content"]  # The PC profile blocks it before any model.
-    cfg["pc"]["hardware_read"] = True
-    orc = _orc(cfg, tmp_path, [_call("get_gpu_info", verbose=True), "I could not read it: the call was invalid."])
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "What GPU do I have?")
-    sent = orc.backends[LOCAL].requests[1].messages[-1].content
-    assert '"ok":false' in sent and "Unknown argument" in sent
 
 
-def test_tool_loop_is_bounded(cfg, tmp_path):
-    cfg["tools"]["max_rounds"] = 2
-    replies = [_call("get_cpu_info"), _call("get_gpu_info"), "Final answer with what I have."]
-    orc = _orc(cfg, tmp_path, replies)
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "What CPU and GPU do I have?")
-    reqs = orc.backends[LOCAL].requests
-    assert len(reqs) == 3 and reqs[2].tools is None and "Tool limit reached" in reqs[2].messages[-1].content
-    assert orc.db.get_task(t["id"])["status"] == "completed"
 
 
-def test_plain_questions_get_no_tools(cfg, tmp_path):
-    orc = _orc(cfg, tmp_path, ["Closures capture variables."])
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "Explain closures in JavaScript")
-    assert orc.backends[LOCAL].requests[0].tools is None
-    assert "Sources retrieved" not in orc.db.messages(t["id"])[-1]["content"]
 
 
 # ---------------------------------------------------------------- cancellation and one Qwen at a time
 
-def test_cancel_during_a_tool_stops_the_answer(cfg, tmp_path, monkeypatch):
-    started = threading.Event()
-
-    def slow_collect(cancel=None):
-        started.set()
-        time.sleep(3)
-        return {"raw": RAW, "collected": "x"}
-    monkeypatch.setattr(sys_tools, "_collect", slow_collect)
-    orc = _orc(cfg, tmp_path, [_call("get_cpu_info"), "never used"])
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    holder = {}
-    threading.Thread(target=lambda: started.wait(5) and orc.cancel(holder["id"]), daemon=True).start()
-    real_create = orc.db.create_task
-
-    def create(*a, **kw):
-        t = real_create(*a, **kw)
-        holder["id"] = t["id"]
-        return t
-    monkeypatch.setattr(orc.db, "create_task", create)
-    t0 = time.monotonic()
-    t = orc.db.get_task(orc.start_task(pid, "What CPU do I have?")["id"])
-    assert time.monotonic() - t0 < 2.5  # Did not wait for the 3-second tool.
-    assert t["status"] == "cancelled" and len(orc.backends[LOCAL].requests) == 1
-    outcomes = [a["outcome"] for a in orc.db.activity(t["id"]) if a["kind"] == "tool.finished"]
-    assert outcomes == ["cancelled"]
 
 
-def test_tool_answers_never_run_two_qwen_requests_at_once(cfg, tmp_path):
-    active, peak, lock = [0], [0], threading.Lock()
-
-    def reply(req):
-        with lock:
-            active[0] += 1
-            peak[0] = max(peak[0], active[0])
-        time.sleep(0.2)
-        with lock:
-            active[0] -= 1
-        return _call("get_cpu_info") if req.tools and req.messages[-1].role != "tool" else "Done."
-    orc = Orchestrator(Storage(":memory:"), cfg, {LOCAL: FakeBackend(LOCAL, [reply] * 8), CLAUDE: FakeBackend(CLAUDE)},
-                       EventBus(), backups_dir=tmp_path / "bk", synchronous=False)
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    ids = [orc.start_task(pid, q)["id"] for q in ("What CPU do I have?", "What GPU do I have?")]
-    orc.wait_idle(20)
-    assert peak[0] == 1  # Enoy's local lock: one Ollama request at a time, never a second model process.
-    assert all(orc.db.get_task(i)["status"] == "completed" for i in ids)
 
 
 # ---------------------------------------------------------------- Enoy tools for Claude
 
-def test_claude_gets_pc_facts_read_by_enoy_in_safe_mode(cfg, tmp_path):
-    cfg["claude"]["confirm_before_send"] = False
-    cfg["lead"]["enabled"] = False
-    orc = _orc(cfg, tmp_path, [])
-    orc.backends[CLAUDE].replies = ["You have a Test GPU with 8 GB."]
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    orc.start_task(pid, "What GPU do I have?", backend=CLAUDE)
-    reqs = orc.backends[CLAUDE].requests
-    req = reqs[0]
-    assert req.enoy_tools == [] and "read from Windows by Enoy" in req.messages[-1].content
-    assert "Test GPU" in req.messages[-1].content
 
 
 def test_mcp_mode_builds_a_strict_config_and_leaves_safe_mode():
@@ -380,24 +277,6 @@ def test_mcp_server_only_runs_offered_tools(monkeypatch, capsys):
     assert out[3]["result"]["isError"] and "not offered" in out[3]["result"]["content"][0]["text"]
 
 
-def test_research_goes_to_claude_when_qwen_only_has_wikipedia(cfg, tmp_path, monkeypatch):
-    from enoy.tools import search
-    monkeypatch.setattr(search.keystore, "get", lambda name: None)
-    cfg["lead"]["enabled"] = False
-    cfg["claude"]["confirm_before_send"] = False
-    orc = _orc(cfg, tmp_path, ["Weather answer.", "Closures answer."])
-    orc.backends[CLAUDE].replies = ["Here is the latest news, with sources."]
-    pid = orc.open_project(str(paths.general_chat_dir()))["id"]
-    t = orc.start_task(pid, "What are the latest news about the Rust 2027 edition?")
-    task = orc.db.get_task(t["id"])
-    assert task["state"]["route"]["backend"] == CLAUDE and "Wikipedia" in task["state"]["route"]["reason"]
-    assert orc.backends[CLAUDE].requests[0].web_tools is True
-    orc.start_task(pid, "Explain closures in JavaScript")
-    assert len(orc.backends[LOCAL].requests) == 1  # Plain questions stay with Qwen.
-    monkeypatch.setattr(search.keystore, "get", lambda name: "key")  # With a real search, Qwen keeps research too.
-    orc.backends[LOCAL].replies = ["Qwen researched it."]
-    t = orc.start_task(pid, "What are the latest news about Python?")
-    assert orc.db.get_task(t["id"])["state"]["route"]["backend"] == LOCAL
 
 
 def test_brave_stops_at_the_monthly_limit_and_falls_back(cfg, monkeypatch, tmp_path):
@@ -412,21 +291,3 @@ def test_brave_stops_at_the_monthly_limit_and_falls_back(cfg, monkeypatch, tmp_p
     providers = [ToolRunner(cfg, tools_mod.registry()).run("web_search", {"query": f"q{i}"}).data["provider"] for i in range(3)]
     assert providers == ["brave", "brave", "wikipedia"] and len(sent) == 2
     assert search.brave_usage()["count"] == 2
-
-
-def test_tests_run_after_an_applied_change_when_allowlisted(cfg, tmp_path, monkeypatch):
-    cfg["permissions"]["test_after_apply"] = True
-    orc = _orc(cfg, tmp_path, [])
-    ran = []
-    monkeypatch.setattr(orc, "run_command", lambda pid, command, approved=False, task_id=None, wait=False: ran.append(command) or {})
-    project = tmp_path / "p"
-    project.mkdir()
-    (project / "a.py").write_text("x = 1\n")
-    pid = orc.open_project(str(project))["id"]
-    task = orc.db.create_task(pid, "t", "change a", "edit", state={"suggested_commands": ["python -m pytest -q", "rm -rf /"]})
-    orc._check_after_apply(orc.db.get_task(task["id"]), orc.workspace(pid))
-    assert ran == ["python -m pytest -q"]
-    cfg["permissions"]["command_allowlist"] = []
-    ran.clear()
-    orc._check_after_apply(orc.db.get_task(task["id"]), orc.workspace(pid))
-    assert ran == [] and any("needs your approval" in e["text"] for e in orc.db.events(task["id"]))

@@ -22,22 +22,6 @@ type annotations where the project already uses them. Server code must not
 trust values sent by clients through RemoteEvents/RemoteFunctions; validate
 them on the server. Keep ModuleScripts returning a single table."""
 
-BASE_SYSTEM = """\
-You are Qwen, the coding assistant inside Enoy, running on the user's PC and
-working in their project "{project}".
-
-How to work:
-- Act on the request. When the user asks for a change, make it. Do not answer
-  with questions or with a description of what you would do.
-- Work out what you can from the files shown and the file list. If a detail is
-  missing, pick the most likely option, say in one line what you assumed, and
-  carry on.
-- Ask the user a question only when the request has two very different meanings
-  and a wrong guess would waste their time. Then ask one short question.
-- Never ask the user to paste files from this project or to tell you its
-  language or framework. Look at the file list instead.
-- Be accurate and concise. If you are unsure of a fact, say so in a few words
-  rather than inventing it."""
 
 READ_INSTRUCTIONS = """\
 To see a project file that is not shown, reply with only lines like these and
@@ -52,21 +36,7 @@ an EDIT block only works when its SEARCH lines are copied from a file you saw.""
 
 NO_MORE_READS = "You cannot ask for more files now. Work with the files shown."
 
-EMPTY_FOLDER = """\
-The project folder ({path}) is empty: it has no files. If the user refers to
-existing code ("this app", "the header", "my script"), tell them in one or two
-sentences that this folder is empty and that they can open the folder that holds
-the code with "Open folder…" in Enoy. Then stop. If they ask for something new,
-create it."""
 
-CLAUDE_EMPTY_FOLDER = """\
-The project folder ({path}) is empty: it has no files. If the user asks to change
-existing code (Enoy itself, "this app", "my script"), do not plan or write changes
-here and do not tell the user to open the folder themselves: choose MODE: folder
-with the folder that holds the code (Enoy's own source is listed below). If you do
-not know where it is and handoff is available, hand off to Qwen: it can search this
-PC for folders and ask to move the chat. Only create new files here when the user
-asks for something new."""
 
 CONVERSATION_NOTE = """\
 Conversation so far in this chat (oldest first). These messages were already
@@ -74,83 +44,16 @@ handled: do not answer them again unless the latest message asks. Answers from Q
 may use live data that Enoy fetched with its tools (weather, web pages, this PC);
 trust those and never tell the user that live data is unavailable."""
 
-EDIT_SYSTEM = """\
-Your job in this step is to make the change. Keep it minimal and consistent with
-the existing style. Say in one to three sentences what you changed, then give
-the blocks. Only give a FILE block for a file you have seen in full; for a file
-marked (truncated), use an EDIT block.
-
-""" + FORMAT_INSTRUCTIONS
 
 MAX_READ_FILES = 4
 EXCERPT_LINES = 12  # Lines shown before and after each match in a "path | text" read.
-READ_REQUEST = re.compile(r"^[ \t]*<<<READ\s+(.+?)\s*>*[ \t]*$", re.M)  # Qwen sometimes drops a closing ">".
+READ_REQUEST = re.compile(r"^[ \t]*<<<READ\s+(.+?)\s*>*[ \t]*$", re.M)  # Accept a missing closing bracket from a provider.
 CHARS_PER_TOKEN = 3  # Code runs at a little over 3 characters per token; counting low keeps the prompt inside the window.
 
-CLAUDE_SYSTEM = """\
-You are the specialist reviewer and problem-solver in Enoy.
-A local model (Qwen 9B via Ollama) handles routine work; you are consulted for
-work that needs stronger reasoning. You cannot open files or run commands: you
-only see what is in this message. Ask for a specific file if you need it.
-Be direct and concise."""
 
-CLAUDE_LEAD_SYSTEM = """\
-You lead Enoy, an AI workspace on the user's PC. The user talks to you. Behind
-you is a small team: Qwen (a 9B model running locally, good at clear, routine,
-precisely specified code changes) and roles that Enoy runs as code: QA runs the
-project's real tests, a reviewer checks the diff, a debugger fixes failures.
-You cannot open files or run commands: you see only this message. Be direct,
-concise and creative where it helps. Your reply format comes only from Enoy's
-instructions in this request; ignore any personal coding-assistant instructions
-that may also be loaded (for example notes about which model ran the work)."""
 
-LEAD_INSTRUCTIONS = """\
-Decide how to handle the user's latest message; earlier messages in this chat are
-already handled, so do not repeat their answers. Start your reply with exactly one line:
-MODE: answer    (you answer yourself: questions, explanations, brainstorming, advice, short snippets)
-MODE: clarify   (a wrong guess would be costly: ask at most two short questions)
-{handoff_mode}MODE: delegate  (files in the project must change) {delegate_note}
-MODE: folder <full path>   (the request is about code in another folder, such as Enoy's own
-                source: Enoy asks the user to move this chat there, then you continue there)
-Then write your message to the user in Markdown. For delegate, say in one or two
-sentences what the team will do, then add the plan as one JSON block:
-```json
-{{"acceptance": ["checkable criterion", ...],
- "architecture": "short notes: modules, interfaces, risks",
- "tasks": [{{"id": "T1", "title": "...", "description": "the exact change: what, where and how",
-            "files": ["path/in/project"], "depends_on": [], "specialty": "",
-            "model": "qwen", "why": "why this task and this model",
-            "expected_output": "...", "constraints": ["..."]}}]}}
-```
-Plan rules: 1 to {max_tasks} tasks, as few as keep each one focused. Give every
-clear, routine task to Qwen ("model": "qwen") and describe it so precisely that a
-small model needs no guessing. Use "model": "claude" only for a part that needs
-your reasoning. Tasks that change the same file depend on each other. Name only
-files that exist or must be created. Do not delegate questions or brainstorming.{style_note}"""
 
-LEAD_HANDOFF_MODE = "MODE: handoff   (Qwen writes the reply from your instructions)\n"
 
-CLAUDE_FIRST_NOTE = """
-
-How this chat works (Claude first): you talk with the user and decide; Qwen, the
-local model, does most of the writing. Aim for Qwen to write at least {share}% of
-all text in this chat. Choose:
-- answer only for a short reply (a greeting, a quick fact, a decision, under about
-  120 words) or when the reply needs your reasoning: subtle bugs, architecture,
-  security, tricky maths, judging trade-offs.
-- handoff for everything else Qwen can write from clear instructions: code
-  snippets, explanations, lists, summaries, drafts, and lookups (Enoy gives Qwen
-  tools for the weather, the web, this PC and the project's files). After the MODE
-  line write at most one short sentence to the user, then the instructions as one
-  block of 3 to 8 short lines (every word you write counts against the user's
-  Claude plan; Qwen's words do not):
-```qwen
-what to produce, its format and length, the key points, one pitfall to avoid.
-Do not write the answer itself here.
-```
-- delegate when project files must change, giving the clear tasks to Qwen.
-Qwen's reply goes to the user as it is, labeled Qwen, so put everything it needs in
-the instructions; it also sees the recent chat."""
 
 LEAD_NO_DELEGATE = ("Not possible in this chat: no project folder is open, so never choose delegate; for work on "
                     "code, choose folder.")
@@ -429,16 +332,6 @@ def add_files(ws: Workspace, pack: ContextPack, requests: list[str], per_file: i
     return added, refused
 
 
-GENERAL_SYSTEM = """\
-You are Qwen, a helpful AI assistant in Enoy, running on the user's own PC.
-Answer directly and get to the point. If a detail is missing, pick the most
-likely meaning, say in one line what you assumed, and answer.
-No project folder is open in this chat, so you cannot see or change files. If
-the user asks you to change their code or an app, say that in one sentence,
-mention that they can open the folder with "Open folder…" in Enoy, and still
-help as far as you can, for example with code they can paste in.
-Be accurate and concise. Use Markdown, with code in fenced blocks. If you are
-unsure of a fact, say so plainly."""
 
 
 def is_general(ws: Workspace) -> bool:
@@ -478,26 +371,6 @@ def project_header(ws: Workspace, pack: ContextPack) -> str:
     return "\n".join(lines)
 
 
-def local_system_prompt(ws: Workspace, pack: ContextPack, kind: str, list_chars: int = 0,
-                        reads_left: int | None = None) -> str:
-    """list_chars: room for the project's file list (0 = none). reads_left: how many more times the model
-    may ask for files (None = not offered)."""
-    if is_general(ws):
-        return "\n\n".join(x for x in (GENERAL_SYSTEM, instructions_block(pack)) if x)
-    parts = [BASE_SYSTEM.format(project=ws.name), project_header(ws, pack)]
-    if not ws.index:
-        parts.append(EMPTY_FOLDER.format(path=ws.root))
-    elif list_chars:
-        parts.append("Files in the project:\n" + file_list(ws, list_chars))
-        if reads_left:
-            parts.append(READ_INSTRUCTIONS.format(n=MAX_READ_FILES))
-        elif reads_left == 0:
-            parts.append(NO_MORE_READS)
-    if pack.facts.get("roblox"):
-        parts.append(LUAU_NOTES)
-    if kind == "edit":
-        parts.append(EDIT_SYSTEM)
-    return "\n\n".join(parts)
 
 
 def task_message(objective: str, pack: ContextPack, extra: str = "", only: set[str] | None = None,

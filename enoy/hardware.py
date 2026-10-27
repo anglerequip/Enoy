@@ -2,7 +2,7 @@
 
 Reads CPU name (registry), logical processors, RAM (GlobalMemoryStatusEx), GPUs
 (nvidia-smi, else Windows' display adapter list), disks (free/total per drive),
-Windows version, and the local model runtime (Ollama version, loaded models,
+Windows version and hardware usage (
 memory). No documents, browser data, credentials or personal files are read.
 """
 
@@ -95,22 +95,6 @@ def inventory(orchestrator=None, max_age_s: float = 30) -> dict:
             "python": sys.version.split()[0],
         }
         _CACHE.update(at=time.time(), inv=dict(inv))
-    if orchestrator is not None:
-        runtime: dict = {}
-        local = orchestrator.backends.get("qwen")
-        try:
-            runtime["ollama_version"] = local.version()
-            runtime["loaded_models"] = [{"name": m.get("name"), "size_mib": round((m.get("size") or 0) / 2**20),
-                                         "vram_mib": round((m.get("size_vram") or 0) / 2**20),
-                                         "context_length": m.get("context_length")} for m in local.loaded_models()]
-            runtime["configured_model"] = local.settings.get("model")
-        except Exception as exc:
-            runtime["error"] = f"Ollama not reachable: {exc}"
-        if getattr(orchestrator, "memory", None) is not None:
-            st = orchestrator.memory.status()
-            runtime["memory_mode"] = f"{st['label']} ({st['ceiling_mib']:,} MiB)"
-            runtime["workload_mib"] = st["total_mib"]
-        inv["runtime"] = runtime
     return inv
 
 
@@ -131,11 +115,4 @@ def as_text(inv: dict) -> str:
         lines.append(f"Disk {d['drive']}: {d['free_gb']} GB free of {d['total_gb']} GB")
     w = inv.get("windows", {})
     lines.append(f"Windows: {w.get('name')} {w.get('displayVersion', '')} {w.get('editionID', '')} {w.get('architecture', '')}".strip())
-    rt = inv.get("runtime") or {}
-    if rt.get("ollama_version"):
-        lines.append(f"Ollama {rt['ollama_version']}, configured model {rt.get('configured_model')}")
-        for m in rt.get("loaded_models", []):
-            lines.append(f"Loaded: {m['name']} ({m['size_mib']:,} MiB, {m['vram_mib']:,} MiB on the GPU, context {m['context_length']})")
-    if rt.get("memory_mode"):
-        lines.append(f"Enoy memory mode: {rt['memory_mode']}; local model now uses {rt.get('workload_mib', 0):,.0f} MiB of RAM")
     return "\n".join(lines)

@@ -70,24 +70,24 @@ def test_mcp_server_serves_the_project_read_only_and_redacted(repo, monkeypatch,
 
 
 def test_claude_lead_and_team_requests_carry_the_file_tools(orc_factory, project):
-    orc = orc_factory(qwen=["UNUSED"], claude=[delegate(plan_task(model="claude")), "No change blocks."],
-                      lead__enabled=True, lead__style="claude_first")
+    orc = orc_factory(qwen=[delegate(plan_task(model="claude")), "Done.\nNEXT: done"], claude=["No change blocks."],
+                      )
     orc.start_task(open_project(orc, project), "Add a multiply function")
-    lead, dev = orc.backends[CLAUDE].requests[:2]
-    for req in (lead, dev):
+    dev = orc.backends[CLAUDE].requests[0]
+    for req in (dev,):
         assert req.enoy_tools == ["list_files", "read_file", "search_code"]
         assert req.enoy_env["ENOY_MCP_WORKSPACE"] == str(project.resolve())
         assert CLAUDE_FILES_NOTE in req.messages[0].content
-    assert lead.enoy_env["ENOY_MCP_PRIVATE"]["cloud_excluded_globs"] == []
+    assert dev.enoy_env["ENOY_MCP_PRIVATE"]["cloud_excluded_globs"] == []
 
 
 def test_no_file_tools_without_files_local_only_or_when_switched_off(orc_factory, project, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    orc = orc_factory(claude=["MODE: answer\nOk."] * 3, lead__enabled=True, lead__style="claude_first")
-    orc.start_task(open_project(orc, empty), "Is divide thread-safe? Explain the race conditions.")
+    orc = orc_factory(claude=["MODE: answer\nOk."] * 3, )
+    orc.start_task(open_project(orc, empty), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
     assert orc.backends[CLAUDE].requests[-1].enoy_tools == []
-    t = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.")
+    t = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
     orc.set_task_local_only(t["id"], True)
     assert orc._claude_file_tools(t["id"]) == []
     orc.set_task_local_only(t["id"], False)

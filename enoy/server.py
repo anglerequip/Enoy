@@ -22,9 +22,8 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, activity, artifacts as art_mod, config as config_mod, diagnostics, hardware, images, knowledge, paths
-from . import memory_guard
 from . import pccontrol as pc
-from .backends.base import CLAUDE, LOCAL, CODEX, BackendError, ChatMessage, ChatRequest
+from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage, ChatRequest
 from .orchestrator import Orchestrator, TaskError
 from .project import PathError
 from .redact import redact
@@ -70,21 +69,12 @@ class App:
 
         @r("GET", "/api/status")
         def status(q, body):
-            local = orc.backends[LOCAL].status().as_dict()
-            available, detail = orc.claude_available(refresh=q.get("refresh") == "1")
-            claude = orc.backends[CLAUDE].status().as_dict() if q.get("refresh") == "1" else {
-                "backend": CLAUDE, "available": available, "detail": detail,
-                "verified": orc.backends[CLAUDE].verified,
-            }
-            claude["model_setting"] = orc.cfg["claude"]["model"]
-            codex = orc.backends[CODEX].status().as_dict() if CODEX in orc.backends else {"available": False}
-            return {"version": __version__, "local": local, "claude": claude, "codex": codex,
-                    "coordinator": orc.cfg["coordinator"]["enabled"],
-                    "routing": orc.cfg["routing"], "config_warnings": self.cfg_warnings,
-                    "privacy_never": orc.cfg["privacy"]["cloud_policy"] == "never",
-                    "team_default": orc.cfg["team"]["default_new_chats"],
-                    "lead": orc.cfg["lead"]["enabled"], "lead_style": orc.cfg["lead"].get("style", "claude_first"),
-                    "claude_last_verified": db.kv_get("claude_last_verified")}
+            states = orc.backend_status(refresh=q.get('refresh')=='1')
+            return {'version':__version__, 'codex':states.get(CODEX,{}), 'claude':states.get(CLAUDE,{}),
+                    'coordinator':True,'routing':orc.cfg['routing'],'config_warnings':self.cfg_warnings,
+                    'privacy_never':orc.cfg['privacy']['cloud_policy']=='never',
+                    'team_default':orc.cfg['team']['default_new_chats'], 'lead':True,
+                    'claude_last_verified':db.kv_get('claude_last_verified')}
 
         @r("GET", "/api/config")
         def get_config(q, body):
@@ -97,7 +87,7 @@ class App:
             merged = config_mod.merge_update(orc.cfg, body.get("config", {}))
             # Permission profile and memory mode change only through their own endpoints,
             # which ask for confirmation and log the change in Activity.
-            if merged["pc"]["profile"] != orc.cfg["pc"]["profile"] or merged["memory"]["mode"] != orc.cfg["memory"]["mode"]:
+            if merged["pc"]["profile"] != orc.cfg["pc"]["profile"]:
                 raise ApiError(400, "Change the PC profile and memory mode in Settings → Memory & PC.")
             try:
                 cfg = config_mod.validate_strict(merged)
@@ -117,44 +107,8 @@ class App:
             orc.update_config(cfg)
             return cfg
 
-        @r("GET", "/api/memory")
-        def memory_status(q, body):
-            if orc.memory is None:
-                cfg = orc.cfg["memory"]
-                return {"available": False, "mode": cfg["mode"], "label": memory_guard.LABEL[cfg["mode"]],
-                        "ceiling_mib": memory_guard.MODES[cfg["mode"]],
-                        "modes": {k: {"label": memory_guard.LABEL[k], "ceiling_mib": v} for k, v in memory_guard.MODES.items()},
-                        "detail": "The memory supervisor is not running (development mode or not Windows)."}
-            if q.get("refresh"):
-                orc.memory.tick()
-            local = orc.backends.get(LOCAL)
-            model = (local.settings.get("model") if local is not None else None) or None
-            ctx = int(local.settings.get("num_ctx") or 0) if local is not None else 0
-            return {"available": True, **orc.memory.status(model, ctx or None)}
 
-        @r("POST", "/api/memory/mode")
-        def memory_mode(q, body):
-            mode = body.get("mode")
-            if mode not in memory_guard.MODES:
-                raise ApiError(400, "Unknown memory mode.")
-            old = orc.cfg["memory"]["mode"]
-            if mode == old:
-                return {"config": orc.cfg}
-            cfg = save(config_mod.merge_update(orc.cfg, {"memory": {"mode": mode}}))
-            orc._act(None, "memory.mode_changed", f"Memory mode changed from {memory_guard.LABEL[old]} to "
-                     f"{memory_guard.LABEL[mode]} ({memory_guard.MODES[mode]:,} MiB).", "user", outcome=mode)
-            if orc.memory is not None:
-                orc.memory.tick()  # Apply right away (unloads if the new limit is already exceeded).
-            return {"config": cfg}
 
-        @r("POST", "/api/memory/forget")
-        def memory_forget(q, body):
-            if orc.memory is None:
-                raise ApiError(409, "The memory supervisor is not running.")
-            n = orc.memory.forget()
-            orc._act(None, "memory.measurements_cleared", f"Cleared {n} stored memory measurement(s); estimates start "
-                     "again from the model file size.", "user")
-            return {"cleared": n}
 
         @r("GET", "/api/hardware")
         def hardware_inventory(q, body):
@@ -256,16 +210,7 @@ class App:
                 raise ApiError(403, str(exc)) from exc
             return {"windows": [w.as_dict() for w in pc.list_windows()]}
 
-        @r("GET", "/api/ollama/models")
-        def ollama_models(q, body):
-            try:
-                return {"models": orc.backends[LOCAL].list_models()}
-            except BackendError as exc:
-                raise ApiError(503, str(exc)) from exc
 
-        @r("POST", "/api/ollama/test")
-        def ollama_test(q, body):
-            return self._test_backend(LOCAL)
 
         @r("POST", "/api/claude/test")
         def claude_test(q, body):
@@ -545,8 +490,10 @@ class App:
         @r("POST", "/api/tasks")
         def new_task(q, body):
             self._project(body.get("project_id"))
+            if body.get('backend') not in (None, '', 'auto', CODEX, CLAUDE):
+                raise ApiError(400, 'Choose Auto, ChatGPT / Codex, or Claude.')
             kind = body.get("kind") if body.get("kind") in ("ask", "edit") else None
-            backend = body.get("backend") if body.get("backend") in (LOCAL, CLAUDE) else None
+            backend = body.get("backend") if body.get("backend") in (CODEX, CLAUDE) else None
             return {"task": orc.start_task(int(body["project_id"]), body.get("objective", ""), kind, backend,
                                            [f for f in body.get("files", []) if isinstance(f, str)],
                                            local_only=bool(body.get("local_only")),
@@ -615,7 +562,7 @@ class App:
 
         @r("POST", r"/api/tasks/(\d+)/message")
         def message(q, body, tid):
-            backend = body.get("backend") if body.get("backend") in (LOCAL, CLAUDE) else None
+            backend = body.get("backend") if body.get("backend") in (CODEX, CLAUDE) else None
             files = [f for f in body.get("files", []) if isinstance(f, str)]
             return {"task": orc.send_message(int(tid), body.get("text", ""), backend, files, body.get("images") or [])}
 
@@ -720,7 +667,7 @@ class App:
 
         @r("POST", "/api/activity/explain")
         def explain(q, body):
-            # Optional and user-triggered: one local Qwen request. Claude is never used here.
+            # Optional and user-triggered: one local ChatGPT request. Claude is never used here.
             return orc.explain_workflow(int(body.get("task_id", 0)))
 
         @r("POST", "/api/heartbeat")

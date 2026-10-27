@@ -61,10 +61,10 @@ def test_existing_change_approval_resumes_coordinator(orc_factory, project):
     assert "def multiply" in (project / "calculator.py").read_text()
 
 
-def test_local_only_never_calls_coordinator(orc_factory, project):
+def test_cloud_disabled_never_calls_any_provider(orc_factory, project):
     orc = setup(orc_factory, [], qwen=["Local answer."])
     task = orc.start_task(open_project(orc, project), "What does add do?", local_only=True)
-    assert orc.db.get_task(task["id"])["status"] == "completed"
+    assert orc.db.get_task(task["id"])["status"] == "failed"
     assert not orc.backends[CODEX].requests
 
 
@@ -167,4 +167,4 @@ def test_coordinator_work_is_not_counted_as_qwen(orc_factory, project):
     orc = setup(orc_factory, ["MODE: answer\nHello."])
     orc.start_task(open_project(orc, project), "Hello")
     stats = orc.routing_stats()
-    assert stats["qwen"] == 0 and stats["counted"] == 0
+    assert "qwen" not in stats["providers"] and stats["counted"] == 1

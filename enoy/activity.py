@@ -397,15 +397,8 @@ def _lead_state(run: dict, tasks: list[dict]) -> str:
     return "Claude planned the work; the team is carrying it out."
 
 
-def _memory_info(orc: Any) -> dict | None:
-    """Memory mode and the last measured use, from the supervisor's own readings (no new measurement)."""
-    sup = orc.memory
-    if sup is None:
-        return None
-    from .memory_guard import LABEL
-    cur = sup.current or {}
-    return {"mode": LABEL.get(sup.mode, sup.mode), "ceiling_mib": sup.ceiling_mib, "used_mib": cur.get("total_mib"),
-            "state": sup.state}
+def _memory_info(orc):
+    return None
 
 
 def snapshot(orc: Any, focus_id: int | None = None, task_filter: int | None = None, limit: int = 150,
@@ -462,10 +455,10 @@ def snapshot(orc: Any, focus_id: int | None = None, task_filter: int | None = No
             "cancelled": counts.get("cancelled", 0),
         },
         "routing": orc.routing_stats(),
-        "lead": {"enabled": bool(orc.cfg["lead"]["enabled"]), "final_review": bool(orc.cfg["lead"]["final_review"]),
+        "lead": {"enabled": True, "final_review": bool(orc.cfg["lead"]["final_review"]),
                  "coordinator": bool(orc.cfg["coordinator"]["enabled"])},
         "memory": _memory_info(orc),
-        "agents": [agent_card(orc, LOCAL, statuses[LOCAL], open_steps),
+        "agents": [
                    agent_card(orc, CLAUDE, statuses[CLAUDE], open_steps)]
                   + ([agent_card(orc, CODEX, statuses[CODEX], open_steps)] if CODEX in statuses else []),
         "focus": focus_block,

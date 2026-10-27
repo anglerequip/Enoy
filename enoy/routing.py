@@ -220,25 +220,6 @@ def classify(text: str, relevant_file_count: int = 0, kind_override: str | None 
     return Classification(kind, complexity, score, signals, category, risk, scope, needs)
 
 
-@dataclass
-class Decision:
-    backend: str | None           # LOCAL, CLAUDE, or None when the task cannot run
-    workflow: str
-    reason: str
-    category: str = ""
-    complexity: str = ""
-    confidence: str = ""          # Rule margin (high/medium/low), not a probability. Empty for manual choices.
-    scope: str = ""
-    risk: str = ""
-    signals: list[str] = field(default_factory=list)
-    needs: dict = field(default_factory=dict)
-    escalation: list[str] = field(default_factory=list)
-    privacy: str = ""
-    preferred: str | None = None  # What the router would pick with no restrictions.
-    source: str = "router"        # router | manual | policy
-
-    def as_dict(self) -> dict:
-        return dict(self.__dict__)
 
 
 def _confidence(score: int, threshold: int) -> str:
@@ -259,146 +240,10 @@ def escalation_conditions(routing: dict, backend: str | None, workflow: str) -> 
     ]
 
 
-def decide(
-    classification: Classification,
-    routing: dict,
-    claude_available: bool,
-    override: str | None = None,
-    local_only: str = "",
-) -> Decision:
-    """Choose the first backend for a task.
-
-    local_only: empty, or the reason this task may not use the cloud (project
-    setting, Settings). It overrides everything, including a manual choice.
-    A manual override otherwise wins. Claude is never chosen when it is
-    unavailable; if the user asked for it explicitly, the task does not run
-    rather than silently switching to the local model.
-    """
-    c = classification
-    mode = routing["mode"]
-    workflow = routing["workflow"]
-    base = dict(category=c.category, complexity=c.complexity, scope=c.scope, risk=c.risk,
-                signals=list(c.signals), needs=dict(c.needs))
-    privacy = f"Local only: {local_only}" if local_only else "Claude may receive the relevant, permitted files (secrets removed)."
-
-    def out(backend, wf, reason, confidence="", preferred=None, source="router"):
-        return Decision(backend, wf, reason, confidence=confidence, privacy=privacy,
-                        escalation=escalation_conditions(routing, backend, wf),
-                        preferred=preferred if preferred is not None else backend, source=source, **base)
-
-    if override in (LOCAL, CLAUDE) and routing.get("manual_override", True):
-        if override == CLAUDE and local_only:
-            return out(None, workflow, f"You chose Claude, but this task must stay on your PC ({local_only}). "
-                                       "Pick Qwen, or change the privacy setting.", preferred=CLAUDE, source="policy")
-        if override == CLAUDE and not claude_available:
-            return out(None, workflow, "You chose Claude, but Claude is not available. Pick Qwen or fix the Claude connection.",
-                       preferred=CLAUDE, source="manual")
-        # A manual choice runs as a single-backend task.
-        wf = "local_only" if override == LOCAL else "claude_only"
-        return out(override, wf, f"You chose {LABEL[override]} for this task.", source="manual")
-
-    threshold = THRESHOLD.get(routing.get("aggressiveness", "balanced"), 4)
-    evidence = ", ".join(c.signals[:3]) or "no special signals"
-    wants_claude = c.score >= threshold or (c.score >= threshold - 2 and c.risk == "high")
-    if c.score >= threshold:
-        why_claude = f"{evidence}; stronger reasoning is likely to change the outcome"
-    else:
-        why_claude = f"{evidence}; a wrong result would be costly or hard to detect"
-    confidence = _confidence(c.score, threshold)
-
-    if local_only:
-        note = f" Claude would likely help ({why_claude}), but" if wants_claude else ""
-        return out(LOCAL, "local_only", f"Routed to Qwen.{note} this task stays on your PC: {local_only}.",
-                   confidence, preferred=CLAUDE if wants_claude else LOCAL, source="policy")
-
-    if mode == "manual":
-        return out(LOCAL, "local_only", "Manual routing mode with no model chosen; using Qwen.", source="policy")
-
-    if workflow == "local_only":
-        return out(LOCAL, workflow, "Workflow is set to Qwen only.", source="policy")
-
-    if mode == "claude_first":
-        if claude_available:
-            wf = "claude_only" if workflow in ("escalate", "local_then_review") else workflow
-            return out(CLAUDE, wf, "Claude-first routing mode.", source="policy")
-        return out(LOCAL, "local_only", "Claude-first mode, but Claude is not available, so this task runs on Qwen.",
-                   preferred=CLAUDE, source="policy")
-
-    if workflow == "claude_plans":
-        if claude_available and c.kind == "edit":
-            return out(CLAUDE, workflow, "Workflow: Claude writes the plan, Qwen implements it.", source="policy")
-        return out(LOCAL, "escalate" if claude_available else "local_only",
-                   "Question tasks skip the planning step." if claude_available else "Claude is not available.")
-    if workflow == "compare":
-        if claude_available and c.kind == "edit":
-            return out(LOCAL, workflow, "Workflow: Qwen and Claude both propose a change; you pick one.", source="policy")
-        return out(LOCAL, "local_only", "Compare needs an edit task and an available Claude; running on Qwen.")
-
-    smart = mode == "auto" and routing.get("escalate_high_complexity", True)
-    legacy_high = mode == "local_first" and routing.get("escalate_high_complexity", True) and c.complexity == "high"
-    if (smart and wants_claude) or legacy_high:
-        if claude_available:
-            return out(CLAUDE, "claude_only", f"Routed to Claude: {why_claude}.", confidence)
-        if routing.get("claude_fallback", "local") == "stop":
-            return out(None, workflow, f"Claude would be the better choice ({why_claude}), but Claude is not available, "
-                                       "and Settings say to stop rather than use Qwen.", confidence, preferred=CLAUDE, source="policy")
-        return out(LOCAL, "local_only", f"Routed to Qwen. Claude would be the better choice ({why_claude}), "
-                                        "but Claude is not available.", confidence, preferred=CLAUDE, source="policy")
-
-    if c.score >= threshold - 2 and mode == "auto":
-        why = (f"Routed to Qwen: borderline ({evidence}), but the change is easy to verify and a mistake is cheap to fix. "
-               "Claude takes over if the attempt fails.")
-    elif c.kind == "ask":
-        why = f"Routed to Qwen: {c.signals[0] if c.signals else 'a question'} that can be answered locally."
-    else:
-        why = f"Routed to Qwen: {c.signals[0] if c.signals else 'a clearly scoped change'}, {c.scope}, low risk."
-    note = "" if claude_available else " Claude is not available, so escalation is off."
-    return out(LOCAL, workflow if claude_available else "local_only", why + note, confidence)
 
 
-@dataclass
-class AttemptSignals:
-    """Objective facts about the attempts so far."""
-    local_attempts: int = 0
-    invalid_outputs: int = 0        # Missing blocks, failed validation, syntax errors.
-    backend_errors: int = 0         # Timeouts, malformed responses.
-    test_failures: int = 0          # Failed checks after applying a local change.
-    uncertain: bool = False         # The model said it was unsure.
-    escalations: int = 0
-    user_requested: bool = False
-    repeated_error: bool = False    # The same failing line came back after a fix.
-    scope_grew: bool = False        # Attempts touched more files than the router expected.
-    handoffs: int = 0               # Times the task changed model.
 
 
-def should_escalate(signals: AttemptSignals, routing: dict, workflow: str, claude_available: bool) -> tuple[bool, str]:
-    """Return (escalate?, reason). Self-reported doubt alone never escalates."""
-    if workflow in ("local_only", "claude_only"):
-        return False, "This task's workflow does not escalate."
-    if not claude_available:
-        return False, "Claude is not available."
-    if signals.escalations >= routing["max_escalations"]:
-        return False, f"Escalation limit reached ({routing['max_escalations']})."
-    if signals.handoffs >= routing.get("max_handoffs", 3):
-        return False, f"Model switch limit reached ({routing.get('max_handoffs', 3)}); stopping instead of switching again."
-    if signals.user_requested:
-        return True, "You asked for Claude."
-    if not routing.get("failure_escalation", True):
-        return False, "Escalation after failures is turned off in Settings."
-    max_local = routing["max_local_attempts"]
-    if signals.invalid_outputs >= max_local:
-        return True, f"Qwen produced {signals.invalid_outputs} invalid result(s) in a row."
-    if signals.backend_errors >= max_local:
-        return True, f"Qwen failed {signals.backend_errors} time(s) (timeouts or bad responses)."
-    if signals.repeated_error and signals.test_failures >= 1:
-        return True, "The same error came back after a fix attempt."
-    if signals.test_failures >= routing["max_test_fix_attempts"] and signals.test_failures > 0:
-        return True, f"Checks still fail after {signals.test_failures} local fix attempt(s)."
-    if signals.scope_grew and (signals.invalid_outputs + signals.test_failures) >= 1:
-        return True, "The problem reaches more files than expected and a local attempt failed."
-    if signals.uncertain and (signals.invalid_outputs + signals.test_failures + signals.backend_errors) >= 1:
-        return True, "Qwen said it was unsure and an objective check also failed."
-    return False, "No escalation condition met."
 
 
 def sounds_uncertain(text: str) -> bool:

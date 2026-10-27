@@ -4,7 +4,7 @@ Roles describe work; providers run it. The orchestrator role is this module:
 plain code that owns the plan, the task graph, scheduling, retries and the
 final verdict. Model calls happen only for work a model must do (a plan for a
 complex change, code, a deep review, a diagnosis), and each one is routed to
-Qwen or Claude by the smart router.
+ChatGPT or Claude by the smart router.
 
 A run never trusts a model's claim of success: changed files come from
 validated change sets, verification from real check runs, and a run only
@@ -25,15 +25,15 @@ from . import context as ctx
 from . import gitinfo
 from . import patches
 from . import privacy
-from .backends.base import CLAUDE, LOCAL, CODEX, BackendError, ChatMessage
+from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage
 from .redact import contains_secret
-from .routing import classify, decide
+from .routing import classify
 from .storage import TEAM_OPEN
 
 if TYPE_CHECKING:
     from .orchestrator import Orchestrator
 
-PROVIDER_LABEL = {LOCAL: "Qwen", CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
+PROVIDER_LABEL = {CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
 
 ROLE_LABEL = {
     "lead": "Claude (lead)", "orchestrator": "Orchestrator", "architect": "Architect", "developer": "Developer", "qa": "QA",
@@ -289,7 +289,7 @@ class TeamRunner:
 
     @property
     def cooperative(self) -> bool:
-        return self.task["workflow"] == "chatgpt_leads"
+        return True
 
     @property
     def tasks(self) -> list[dict]:
@@ -328,7 +328,7 @@ class TeamRunner:
         if self.orc.cfg["routing"].get("zero_paid_mode"):
             return "zero-paid mode is on (Claude is never used automatically)"
         if self.run.get("claude_declined"):
-            return "you chose to keep this run on Qwen"
+            return "you chose to keep this run on ChatGPT"
         ok, why = self.orc.claude_available()
         return "" if ok else f"Claude is not available ({why})"
 
@@ -336,18 +336,7 @@ class TeamRunner:
         """Provider for one piece of team work, from the smart router."""
         if self.cooperative:
             return CODEX, "ChatGPT handles follow-up review and repair using shared results."
-        cls = classify(text, files, "edit" if role in ("developer", "debugger") else "ask")
-        # The team set the task type, not the user; keep the reason about the work itself.
-        cls.signals = [s for s in cls.signals if not s.startswith("task type chosen by you")]
-        if role == "architect" and cls.complexity == "low":
-            cls.complexity = "medium"
-        blocked = self._claude_allowed()
-        d = decide(cls, self.orc.cfg["routing"], not blocked, None, local_only="")
-        if d.backend is None:
-            return LOCAL, d.reason
-        if blocked and d.preferred == CLAUDE:
-            return LOCAL, f"Routed to Qwen. Claude would help here, but {blocked}."
-        return d.backend, d.reason
+        return CODEX, "ChatGPT handles this task."
 
     # Model calls -------------------------------------------------------------------
 
@@ -361,43 +350,14 @@ class TeamRunner:
         self._save_run(model_calls=run.get("model_calls", 0) + 1,
                        claude_calls=run.get("claude_calls", 0) + (1 if provider == CLAUDE else 0))
         step = self.db.get_team_task(tt["id"]).get("result", {}).get("step")
-        if provider == LOCAL:
-            result = self.orc._chat_local(self.task_id, [ChatMessage("system", system), ChatMessage("user", user)],
-                                          purpose, step)
-            return result.text
         if self.cooperative or provider == CODEX:
             from .coordinator import call
             return call(self.orc, self.task_id, provider, system, user, purpose, files_meta, private, step).text
         return self.orc._claude_direct(self.task_id, step, purpose, system, user, files_meta, private or set()).text
 
     def _agent_mode(self) -> bool:
-        s = self.orc.cfg.get("tools", {})
-        return bool(s.get("enabled", True) and s.get("agent", True))
+        return False
 
-    def _agent_develop(self, tt: dict, ws: Any, brief: str, feedback: str, system_note: str = "") -> tuple[str, list]:
-        """Qwen does one team task as an agent. Edits are staged; Enoy validates them like any proposal and
-        applies them as one change set. Returns (Qwen's summary, the changes as FILE writes)."""
-        from pathlib import Path
-        from . import tools as tools_mod
-        orc = self.orc
-        over = self._budget_left(LOCAL)
-        if over:
-            raise _Stop(f"Stopped: {over}.")
-        self._save_run(model_calls=self.run.get("model_calls", 0) + 1)
-        step = self.db.get_team_task(tt["id"]).get("result", {}).get("step")
-        files = tools_mod.AgentFiles(ws, apply=False, backup_dir=Path("."))
-        runner = orc._tool_runner(self.task_id, LOCAL, offer=TEAM_AGENT_TOOLS, services={"files": files})
-        names = ", ".join(t.name for t in runner.available())
-        where = (f"Project folder: {ws.name}. Paths are relative to it.\nEdits are staged: Enoy checks them and applies "
-                 "them as one change set when you finish.\n" + TEAM_AGENT_NOTE)
-        system = tools_mod.AGENT_SYSTEM.format(names=names, context=where) + system_note
-        user = brief + (f"\n\n{feedback}" if feedback else "")
-        budget = ctx.prompt_budget(*orc._local_window())
-        rounds = int(orc.cfg.get("tools", {}).get("agent_max_steps", 24))
-        result = orc._chat_local_tools(self.task_id, [ChatMessage("system", system), ChatMessage("user", user)],
-                                       "edit", step, runner, budget, rounds=rounds)
-        changes = [patches.ProposedChange("write", f["path"], f["new_content"]) for f in files.changeset_files()]
-        return result.text, changes
 
     # Run ------------------------------------------------------------------------------
 
@@ -455,7 +415,7 @@ class TeamRunner:
         step = orc._step(self.task_id, "Architect: plan the work", provider, "plan", reason)
         self.db.update_team_task(tt["id"], result={"step": step})
         system = ARCHITECT_PROMPT.replace("{max_tasks}", str(self.cfg["max_tasks"]))
-        view, private = orc._cloud_view(pack) if provider in (CLAUDE, CODEX) else (pack, set())
+        view, private = orc._cloud_view(pack)
         user = ctx.project_header(ws, view) + "\n\n" + ctx.task_message(objective, view)
         if specialties:
             user += "\n\nAreas mentioned: " + ", ".join(SPECIALISTS[k][0] for k in specialties)
@@ -523,7 +483,7 @@ class TeamRunner:
                           "Change only the files this task owns unless required.",
                           "Do not claim to have run tests or changed files: Enoy applies the change and runs the checks."],
                       "model_requested": p.extra.get("model", ""),
-                      "privacy": "stays on this PC" if prov == LOCAL else f"sent to {PROVIDER_LABEL.get(prov, prov)} without private files",
+                      "privacy": "stays on this PC" if prov == CODEX else f"sent to {PROVIDER_LABEL.get(prov, prov)} without private files",
                       "memory_mode": f"{memory.mode} ({memory.ceiling_mib:,} MiB)" if memory is not None else "",
                       "tests": "QA runs the project's checks after all tasks are applied.",
                       "verification": "not verified yet"})
@@ -534,21 +494,12 @@ class TeamRunner:
         return key_to_id
 
     def _lead_route(self, p: PlanTask) -> tuple[str, str]:
-        """Claude's choice of model for one task, within what Enoy allows."""
-        why = p.extra.get("why", "")
-        if self.cooperative:
-            requested = p.extra.get("model", CODEX)
-            if requested not in (CODEX, CLAUDE):
-                raise PlanError("ChatGPT plans may assign only codex or claude.")
-            blocked = self._claude_allowed() if requested == CLAUDE else ""
-            provider = CODEX if blocked else requested
-            return provider, f"ChatGPT assigned {PROVIDER_LABEL[provider]}: {why or p.title}" + (f"; Claude unavailable: {blocked}" if blocked else "")
-        if p.extra.get("model") == CLAUDE:
-            blocked = self._claude_allowed()
-            if not blocked:
-                return CLAUDE, f"Claude kept this part for itself: {why or 'it needs stronger reasoning'}."
-            return LOCAL, f"Claude wanted this part for itself, but {blocked}; Qwen does it."
-        return LOCAL, f"Claude gave this to Qwen: {why or 'clear, routine work'}."
+        requested=p.extra.get('model',CODEX)
+        if requested not in (CODEX,CLAUDE):
+            raise PlanError('Plans may assign only codex or claude.')
+        blocked=self._claude_allowed() if requested==CLAUDE else ''
+        provider=CODEX if blocked else requested
+        return provider, 'ChatGPT assigned '+PROVIDER_LABEL[provider]+': '+(p.extra.get('why') or p.title)+(('; '+blocked) if blocked else '')
 
     def start_from_lead(self, objective: str, plan: tuple) -> None:
         """Run a plan Claude wrote as the lead: the team carries it out and Claude checks the result."""
@@ -593,7 +544,7 @@ class TeamRunner:
         key = f"LEAD{run['lead_reviews']}"
         tt = self.db.add_team_task(self.task_id, "developer", f"Fix: {instruction[:100]}", plan_key=key,
                                    description=instruction, files=files, acceptance=run.get("acceptance", []),
-                                   provider=CODEX if self.cooperative else LOCAL, route_reason="The lead requested a correction.",
+                                   provider=CODEX if self.cooperative else CODEX, route_reason="The lead requested a correction.",
                                    activation_reason=f"{lead_name} (lead) asked for a fix after checking the results.",
                                    spec={"parent": self.task_id, "why": f"{lead_name}'s final check",
                                          "expected_output": "Change blocks fixing exactly this defect.",
@@ -677,7 +628,7 @@ class TeamRunner:
         if blocked:
             for t in self.tasks:
                 if t["provider"] == CLAUDE and t["status"] in TEAM_OPEN:
-                    self.db.update_team_task(t["id"], provider=CODEX if self.cooperative else LOCAL, route_reason=f"Moved to an available provider: {blocked}.")
+                    self.db.update_team_task(t["id"], provider=CODEX if self.cooperative else CODEX, route_reason=f"Moved to an available provider: {blocked}.")
             return False
         planned = [t for t in self.tasks if t["provider"] == CLAUDE and t["status"] in TEAM_OPEN]
         self._save_run(status="awaiting_claude", claude_request={
@@ -697,15 +648,15 @@ class TeamRunner:
         else:
             for t in self.tasks:
                 if t["provider"] == CLAUDE and t["status"] in TEAM_OPEN:
-                    self.db.update_team_task(t["id"], provider=CODEX if self.cooperative else LOCAL, route_reason="You declined Claude for this run.")
+                    self.db.update_team_task(t["id"], provider=CODEX if self.cooperative else CODEX, route_reason="You declined Claude for this run.")
             self._save_run(claude_declined=True, status="running", claude_request=None)
-            self.orc._act(self.task_id, "approval.resolved", "You kept this run on Qwen; nothing was sent to Claude.",
+            self.orc._act(self.task_id, "approval.resolved", "You kept this run on ChatGPT; nothing was sent to Claude.",
                           "user", "team", outcome="declined")
 
     def _pick_batch(self, ready: list[dict]) -> list[dict]:
         """Independent tasks with disjoint files, at most max_parallel, at most one per provider.
 
-        Qwen runs one request at a time anyway, so two Qwen tasks in parallel would
+        ChatGPT runs one request at a time anyway, so two ChatGPT tasks in parallel would
         only queue. Different providers can genuinely work at the same time.
         """
         batch: list[dict] = []
@@ -765,33 +716,22 @@ class TeamRunner:
             if extra:
                 pack = ctx.gather(ws, tt["title"] + "\n" + tt["description"], orc.cfg["context"], extra)
         brief = self._brief(tt)
-        if provider == LOCAL:  # Only what fits Qwen's context window; Ollama would cut the rest unseen.
-            budget = ctx.prompt_budget(*orc._local_window())
-            pack = ctx.fit_files(pack, budget - len(brief) - len(feedback) - 4000)
         if role == "debugger":
-            system = (ctx.local_system_prompt(ws, pack, "edit") if provider == LOCAL else ctx.CLAUDE_SYSTEM) + "\n\n" + DEBUG_PROMPT
+            system = ("You are an engineer working through Enoy. Propose precise changes against the supplied files; Enoy applies them and runs checks. Follow the required change-block format.") + "\n\n" + DEBUG_PROMPT
         else:
-            system = ctx.local_system_prompt(ws, pack, "edit") if provider == LOCAL else ctx.CLAUDE_SYSTEM
+            system = "You are an engineer working through Enoy. Propose precise changes against the supplied files; Enoy applies them and runs checks. Follow the required change-block format."
         if tt["specialty"]:
             system += "\n\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2]
-        # Claude sees only the files it may receive; Qwen sees the whole pack.
-        view, private = orc._cloud_view(pack) if provider in (CLAUDE, CODEX) else (pack, set())
+        # Claude sees only the files it may receive; ChatGPT sees the whole pack.
+        view, private = orc._cloud_view(pack)
         user = ctx.task_message(brief, view, feedback)
         if provider in (CLAUDE, CODEX):
             user = ctx.project_header(ws, view) + "\n\n" + user + "\n\n" + patches.FORMAT_INSTRUCTIONS
         files_meta = [{"path": f.path, "sha": f.sha, "chars": len(f.content)} for f in view.files]
         versions = {f.path: f.sha for f in pack.files}
-        agent = provider == LOCAL and self._agent_mode()
+        agent = False
         try:
-            if agent:
-                # Qwen works step by step with tools (search, read, small exact edits, each checked at once)
-                # instead of writing every change in one long reply that its window cuts off.
-                text, changes = self._agent_develop(tt, ws, brief, feedback, system_note=(
-                    DEBUG_PROMPT if role == "debugger" else "") + (
-                    "\n\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2] if tt["specialty"] else ""))
-                versions = None  # The agent read the current files itself.
-            else:
-                text = self.call(self.db.get_team_task(tt["id"]), provider, system, user, "edit", files_meta, private)
+            text = self.call(self.db.get_team_task(tt["id"]), provider, system, user, "edit", files_meta, private)
         except BackendError as exc:
             if exc.kind == "cancelled":
                 raise
@@ -832,14 +772,14 @@ class TeamRunner:
                      "then edit_file with old_text copied exactly." if agent else
                      "\nSend corrected blocks for ALL intended changes, following the block format exactly."))
             self.msg("orchestrator", role, "rejection", f"{tt['plan_key']} proposal rejected: {problems[0][:160]}", tt["id"])
-            if tt["attempts"] < self.orc.cfg["routing"]["max_local_attempts"]:
+            if tt["attempts"] < self.orc.cfg["routing"]["max_attempts"]:
                 self._develop(tt, fb)
                 return
-            if provider == LOCAL and not self._claude_allowed() and self.orc.cfg["routing"].get("failure_escalation", True):
-                reason = f"Qwen's proposal failed Enoy's checks {tt['attempts']} time(s)."
+            if provider == CODEX and not self._claude_allowed() and self.orc.cfg["routing"].get("failure_escalation", True):
+                reason = f"ChatGPT's proposal failed Enoy's checks {tt['attempts']} time(s)."
                 self.db.update_team_task(tt["id"], provider=CLAUDE, route_reason=f"Escalated: {reason}", attempts=0)
                 self.msg("orchestrator", role, "escalation", f"{tt['plan_key']} moves to Claude: {reason}", tt["id"])
-                orc._act(self.task_id, "task.escalated", f"{tt['plan_key']} escalated from Qwen to Claude.", CLAUDE,
+                orc._act(self.task_id, "task.escalated", f"{tt['plan_key']} escalated from ChatGPT to Claude.", CLAUDE,
                          STAGE_OF_ROLE[role], reason=reason)
                 self._develop(self.db.get_team_task(tt["id"]), fb)
                 return
@@ -1030,7 +970,7 @@ class TeamRunner:
             why = f"{added} added lines" if added >= self.cfg["review_min_lines"] else "a high-risk change"
             provider, reason = self.route("Review a risky multi-file change for correctness and security", "reviewer", len(files))
             if provider == CLAUDE and orc.cfg["claude"]["confirm_before_send"] and not self.run.get("claude_ok"):
-                provider, reason = (CODEX if self.cooperative else LOCAL), "Reviewed by the available provider: Claude was not approved for this run, and asking now would pause after the tests already ran."
+                provider, reason = (CODEX if self.cooperative else CODEX), "Reviewed by the available provider: Claude was not approved for this run, and asking now would pause after the tests already ran."
             self.db.update_team_task(tt["id"], provider=provider, route_reason=f"Model review because of {why}. {reason}")
             step = orc._step(self.task_id, "Reviewer: independent code review", provider, "review", f"Model review because of {why}.")
             res = dict(self.db.get_team_task(tt["id"])["result"])
@@ -1038,7 +978,7 @@ class TeamRunner:
             self.db.update_team_task(tt["id"], result=res)
             globs = orc.cfg["privacy"]["cloud_excluded_globs"]
             diff = "\n".join(f["diff"] for f in files
-                             if provider == LOCAL or not privacy.cloud_excluded(f["path"], globs))[:20000]
+                             if not privacy.cloud_excluded(f["path"], globs))[:20000]
             user = (f"Task: {self.run.get('objective', '')[:1500]}\nAcceptance criteria:\n"
                     + "\n".join(f"- {a}" for a in self.run.get("acceptance", [])) + "\n\nChanges (unified diff):\n" + diff)
             try:
@@ -1079,7 +1019,7 @@ class TeamRunner:
             report += "\n\nReview blockers:\n" + "\n".join(f"- {b['file']}:{b['line']} {b['problem']}" for b in blockers)
         if straightforward:
             role, reason = "developer", "A first, straightforward failure: the developer fixes it."
-            provider = devs[-1]["provider"] if devs else LOCAL
+            provider = devs[-1]["provider"] if devs else CODEX
             route_reason = f"Same provider as the original change. {reason}"
         else:
             role = "debugger"
@@ -1107,7 +1047,7 @@ class TeamRunner:
         lines = [f"**Team result: {headline}**", ""]
         for t in tasks:
             mark = {"completed": "✓", "failed": "✕", "blocked": "⛔", "cancelled": "–"}.get(t["status"], "…")
-            who = {"qwen": "Qwen", "claude": "Claude"}.get(t["provider"], "Enoy")
+            who = {"qwen": "ChatGPT", "claude": "Claude"}.get(t["provider"], "Enoy")
             lines.append(f"- {mark} {t['plan_key']} {ROLE_LABEL[t['role']]} ({who}): {t['title']}"
                          + (f" — {t['error']}" if t["error"] else ""))
         lines.append("")
@@ -1156,37 +1096,9 @@ class TeamRunner:
             lines.append("Remaining: " + "; ".join(f"{t['plan_key']} {t['error'][:120]}" for t in failed))
         self._memory("checkpoint", "\n".join(lines), True, "Enoy (recorded results)")
 
-    def _lead_review(self, status: str, note: str, summary: str, tasks: list[dict]) -> bool:
-        """Ask Claude to check the results and write the answer. False when it cannot; the summary is used then."""
-        if self.cooperative:
-            from .coordinator import review
-            return review(self, status, note, summary, tasks)
-        orc = self.orc
-        run = self.run
-        why = "the final check by Claude is off in Settings" if not orc.cfg["lead"]["final_review"] else self._claude_allowed()
-        clean = status == "completed" and run.get("verification") != "failed" and not any(
-            t["status"] in ("failed", "blocked") for t in tasks)
-        if not why and clean and orc._claude_first():
-            # Claude first saves Claude for decisions: a run where everything finished needs no second look.
-            why = "Claude first checks only runs with problems, and every task finished"
-        if why:
-            orc._act(self.task_id, "lead.review_skipped", f"Claude did not check the results: {why}.", "system", "team")
-            self._save_run(lead_review_note=f"Claude did not check the results: {why}.")
-            return False
-        globs = orc.cfg["privacy"]["cloud_excluded_globs"]
-        diffs = []
-        for t in tasks:
-            cs = orc.db.get_changeset(t["changeset_id"]) if t["changeset_id"] else None
-            for f in (cs or {}).get("files", []):
-                if not privacy.cloud_excluded(f["path"], globs):
-                    diffs.append(f["diff"])
-        report = (summary + "\n\nChanges (unified diff):\n" + ("\n".join(diffs)[:12000] or "none")
-                  + (f"\n\nLast failing check output:\n{run['last_failure'][:3000]}" if run.get("last_failure") else ""))
-        self._save_run(status="lead_review", final_status=status, final_note=note, report=summary)
-        self.msg("orchestrator", "lead", "handoff", "Results ready for Claude's check.")
-        orc._request_claude(self.task_id, "lead_review", ctx.ContextPack(), extra=report,
-                            reason="Claude leads: it checks the team's results and writes the answer.")
-        return True
+    def _lead_review(self, status, note, summary, tasks):
+        from .coordinator import review
+        return review(self,status,note,summary,tasks)
 
     def finish_after_lead(self, verdict: str, instruction: str, answered: bool) -> None:
         """Claude checked the results. Order one more fix if it asks and the limit allows, else end the run."""

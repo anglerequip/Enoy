@@ -1,0 +1,1 @@
+Historical tests of removed local-model and Claude-first workflows. Excluded from current collection because those features were removed in Enoy 0.3.0. Active tests retain cloud collaboration, Claude adapter, security, storage, project and API coverage.

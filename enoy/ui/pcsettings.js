@@ -10,22 +10,10 @@ async function settingsMemoryPc() {
   const body = $("set-body");
   let mem, pcs;
   try {
-    [mem, pcs] = await Promise.all([api("GET", "/api/memory?refresh=1"), api("GET", "/api/pc")]);
+    pcs = await api("GET", "/api/pc");
   } catch (e) { body.innerHTML = `<div class="page-state bad">Could not load: ${esc(e.message)}</div>`; return; }
   if (S.settingsTab !== "pc" || !$("set-body")) return;
   body.innerHTML = `
-    <div class="set-section"><h3>Memory mode for Qwen</h3>
-      <div class="small muted">A ceiling for the RAM Qwen (Ollama's server and model runner) may use, so Windows stays responsive. These are limits, not targets.
-        1 MiB = 1,048,576 bytes. No mode allows ${(mem.absolute_max_mib || 2000).toLocaleString()} MiB or more.</div>
-      <div class="mode-cards">${Object.entries(mem.modes).map(([k, m]) => `
-        <button class="mode-card ${mem.mode === k ? "on" : ""}" data-action="mem-mode" data-mode="${k}" aria-pressed="${mem.mode === k}"
-          title="Requests start below ${Math.round(m.warn_mib || m.ceiling_mib).toLocaleString()} MiB; context up to ${(m.max_ctx || 0).toLocaleString()} tokens.">
-          <span class="mc-name">${esc(m.label)}</span><span class="mc-mib">${m.ceiling_mib.toLocaleString()} MiB</span>
-          ${m.max_ctx ? `<span class="mc-desc">Context up to ${m.max_ctx.toLocaleString()} tokens</span>` : ""}
-          ${fitHtml(mem.model, m.fit)}</button>`).join("")}</div>
-      <div id="mem-live">${memLiveHtml(mem)}</div>
-      ${mem.available ? toggleRow("memory", "os_cap", "Windows RAM cap on Qwen", "Asks Windows to hold Ollama's model runner under this mode's limit. Anything above it goes to the page file, so Qwen may slow down instead of using more RAM.") : ""}
-    </div>
     <div class="set-section"><h3>PC access</h3>
       <div class="small muted">What Enoy may do on this PC when you ask in a chat (for example "open youtube.com", "minimize Spotify", "what GPU do I have?").
         Checked by the app before every action and logged in Activity. A model's own text never grants access.</div>
@@ -45,81 +33,9 @@ async function settingsMemoryPc() {
       <div class="row"><button class="btn small primary" data-action="pc-apps-save">Save programs</button></div>
     </div>`;
   bindCfgInputs();
-  memTimer = setInterval(async () => {
-    if (S.settingsTab !== "pc" || !$("mem-live") || $("modal").classList.contains("hidden")) { clearInterval(memTimer); return; }
-    try {
-      const m = await api("GET", "/api/memory");
-      const open = !!$("mem-live").querySelector("details[open]");  // Keep "Measured model sizes" open.
-      $("mem-live").innerHTML = memLiveHtml(m);
-      const d = $("mem-live").querySelector("details");
-      if (open && d) d.open = true;
-    } catch (e) { /* keep last */ }
-  }, 2000);
-}
-
-// Whether the configured model fits a mode, from the backend's estimate. Says whether it was measured.
-function fitHtml(model, f) {
-  if (!model || !f) return "";
-  if (f.fits === null) return `<span class="mc-desc">${esc(model)}: no estimate yet</span>`;
-  const how = f.source === "measured" ? "measured" : "estimated";
-  return f.fits
-    ? `<span class="mc-desc">${esc(model)} fits at ${f.ctx.toLocaleString()} tokens (about ${Math.round(f.estimate).toLocaleString()} MiB, ${how})</span>`
-    : `<span class="mc-desc bad-text">${esc(model)} does not fit: needs about ${Math.round(f.estimate).toLocaleString()} MiB (${how})</span>`;
-}
-
-const MEM_STATE = {
-  idle: ["No model loaded", ""], within: ["Within limit", "ok"], approaching: ["Approaching limit", "warn"],
-  at_cap: ["Held at the Windows cap (paging)", "warn"],
-  exceeded: ["Limit exceeded", "bad"], unloading: ["Unloading model", "warn"], recovering: ["Recovery in progress", "warn"],
-  measurement_failed: ["Measurement failed", "bad"],
-};
-
-function memLiveHtml(m) {
-  if (!m.available) return `<div class="small muted" style="margin-top:8px">${esc(m.detail || "Not running.")}</div>`;
-  const blocked = m.blocked && ["idle", "within"].includes(m.state) && !m.active;
-  const [label, cls] = blocked ? ["Model loading blocked", "bad"] : MEM_STATE[m.state] || [m.state, ""];
-  const pct = Math.min(100, (m.total_mib / m.ceiling_mib) * 100);
-  const n = v => v == null ? "unknown" : `${Math.round(v).toLocaleString()} MiB`;
-  const denied = m.processes.filter(p => p.private_ws_mib == null);
-  const cap = m.os_cap || {};
-  const capPill = !cap.enabled ? `<span class="pill small" title="${esc(m.enforcement)}">Windows cap off</span>`
-    : m.hard_cap ? `<span class="pill small ok" title="${esc(m.enforcement)}">Windows RAM cap on</span>`
-    : `<span class="pill small" title="${esc(m.enforcement)}">Hard cap unavailable</span>`;
-  const rt = m.runtime || {};
-  const procs = m.processes.map(p => `${esc(p.name)} (pid ${p.pid}, ${p.role}): ${p.private_ws_mib == null ? "access denied" : `${p.private_ws_mib.toLocaleString()} MiB`}`).join("<br>");
-  const profiles = Object.entries(m.profiles || {}).map(([k, v]) => { const [model, ctx] = k.split("|"); return `${esc(model)} at ${Number(ctx).toLocaleString()} tokens: ${v.toLocaleString()} MiB`; });
-  return `<div class="mem-live">
-    <div class="row"><span class="dot ${cls}"></span><strong>${esc(label)}</strong>
-      ${capPill}<span class="grow"></span>
-      <span class="small">${m.total_mib.toLocaleString()} / ${m.ceiling_mib.toLocaleString()} MiB · headroom ${n(m.headroom_mib)} · peak ${m.peak_mib.toLocaleString()} MiB</span></div>
-    <div class="mem-bar"><span style="width:${pct.toFixed(1)}%" class="${cls}"></span><i style="left:${(m.warn_mib / m.ceiling_mib * 100).toFixed(1)}%" title="Warning: ${n(m.warn_mib)}"></i>${m.stop_mib ? `<i style="left:${(m.stop_mib / m.ceiling_mib * 100).toFixed(1)}%" title="Stop: ${n(m.stop_mib)}"></i>` : ""}</div>
-    <div class="small">Requests start below ${n(m.warn_mib)}; a running request is stopped and the model unloaded at ${n(m.stop_mib)}${cap.enabled ? `; Windows holds each model runner to ${n(cap.cap_mib)}` : ""}.</div>
-    <div class="small muted">Measured now (counts toward the limit): ${esc(m.metric)}.</div>
-    ${!m.measured || denied.length ? `<div class="small bad-text">Memory accounting is incomplete: Windows denied access to ${denied.map(p => `${esc(p.name)} (pid ${p.pid})`).join(", ") || "Ollama"}. New requests are blocked until it can be measured.</div>` : ""}
-    <div class="small muted">Also measured, not counted toward the limit: private commit ${n(m.commit_mib)} · total working set ${n(m.working_set_mib)} (includes shared model file pages) · GPU memory ${m.gpu && m.gpu.vram_mib != null ? `${n(m.gpu.vram_mib)} (reported by Ollama)` : "not reported"} · Enoy itself ${m.own ? n(m.own.total_mib) + (m.own.complete ? "" : " (incomplete)") : "unknown"}.</div>
-    ${rt.max_ctx ? `<div class="small muted">${esc(m.label)} request settings: context up to ${rt.max_ctx.toLocaleString()} tokens${rt.max_predict ? `, answers up to ${rt.max_predict.toLocaleString()} tokens` : ""}${rt.num_batch ? `, prompt batch ${rt.num_batch}` : ""}. One request and one model at a time.</div>` : ""}
-    <div class="small" style="margin-top:6px">${procs || "No Ollama model process is running."}</div>
-    ${m.active ? `<div class="small">Working: ${esc(m.active.model)}, ${Number(m.active.ctx).toLocaleString()}-token context.</div>` : ""}
-    ${m.last_action ? `<div class="small">Last action: ${esc(m.last_action.text)} (${new Date(m.last_action.at * 1000).toLocaleTimeString()})</div>` : ""}
-    ${profiles.length ? `<details class="small"><summary>Measured model sizes</summary>${profiles.join("<br>")}
-      <div class="small muted">Peak of the latest load at each context size. Used to choose the context for the next request.</div>
-      <button class="btn small" data-action="mem-forget">Forget measurements</button></details>` : ""}
-    ${blocked ? `<div class="small">The last request for ${esc(m.blocked.model)} was refused before loading (${new Date(m.blocked.at * 1000).toLocaleTimeString()}): ${esc(m.blocked.reason || "it would not fit in this mode.")}</div>` : ""}
-    <div class="small muted" style="margin-top:6px"><strong>How it is enforced:</strong> ${esc(m.enforcement)}</div>
-    <div class="small muted">${esc(m.shared_note || "")}${m.keep_alive_s ? ` In this mode the model is unloaded ${m.keep_alive_s >= 60 ? `${m.keep_alive_s / 60} minute${m.keep_alive_s === 60 ? "" : "s"}` : `${m.keep_alive_s} seconds`} after an answer to give the memory back.` : ""}</div></div>`;
 }
 
 Object.assign(actions, {
-  "mem-mode": el => guarded(async () => {
-    await api("POST", "/api/memory/mode", { mode: el.dataset.mode });
-    toast("Memory mode changed.");
-    settingsMemoryPc();
-  }),
-  "mem-forget": () => guarded(async () => {
-    const r = await api("POST", "/api/memory/forget", {});
-    toast(`Forgot ${r.cleared} measurement${r.cleared === 1 ? "" : "s"}.`);
-    settingsMemoryPc();
-  }),
   "pc-profile": async el => {
     const order = ["observe", "assist", "automation"];
     const cur = (await api("GET", "/api/pc")).profile;
@@ -155,7 +71,6 @@ Object.assign(actions, {
         <tr><td>GPU</td><td>${gpu}</td></tr>
         <tr><td>Disks</td><td>${inv.disks.map(d => `${esc(d.drive)} ${d.free_gb} GB free of ${d.total_gb} GB`).join("<br>")}</td></tr>
         <tr><td>Windows</td><td>${esc([inv.windows.name, inv.windows.displayVersion, inv.windows.editionID, inv.windows.architecture].filter(Boolean).join(" · "))}</td></tr>
-        <tr><td>Local model</td><td>${rt.ollama_version ? `Ollama ${esc(rt.ollama_version)} · ${esc(rt.configured_model || "")}<br>${(rt.loaded_models || []).map(m => `${esc(m.name)} loaded: ${m.size_mib.toLocaleString()} MiB (${m.vram_mib.toLocaleString()} MiB on GPU), context ${m.context_length}`).join("<br>") || "No model loaded"}` : esc(rt.error || "")}</td></tr>
       </table>
       <div class="row" style="justify-content:flex-end"><button class="btn" data-action="open-settings" data-tab="pc">Back</button><button class="btn primary" data-action="close-modal">Close</button></div>`, true);
   }),

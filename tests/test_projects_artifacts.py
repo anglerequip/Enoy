@@ -9,7 +9,7 @@ import pytest
 from conftest import FakeBackend
 from enoy import artifacts as art_mod
 from enoy import knowledge, paths
-from enoy.backends.base import CLAUDE, LOCAL
+from enoy.backends.base import CLAUDE, CODEX as LOCAL
 from enoy.orchestrator import EventBus, Orchestrator, TaskError
 from enoy.server import App, Server
 from enoy.storage import Storage

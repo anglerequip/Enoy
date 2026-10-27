@@ -45,7 +45,7 @@ class Tool:
     needs_workspace: bool = False     # Only offered when a project folder is open (agent mode).
 
     def spec(self) -> dict:
-        """Function definition in the format Ollama (and OpenAI-style APIs) use."""
+        """Function definition in the standard JSON function-calling format."""
         return {"type": "function", "function": {"name": self.name, "description": self.description,
                                                  "parameters": self.parameters}}
 

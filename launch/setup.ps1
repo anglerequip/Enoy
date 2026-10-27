@@ -5,7 +5,6 @@
 #   2. Creates a private Python environment in .venv inside this folder.
 #   3. Installs the pinned packages from requirements.txt (downloads from PyPI).
 #   4. Creates "Enoy" shortcuts on the Desktop and in the Start menu.
-#   5. Checks whether Ollama and the qwen3.5:9b model are present (does not download models).
 #
 # It needs no administrator rights and does not change system settings.
 # -NoShortcuts skips step 4 (used when testing a copy of the folder).
@@ -34,21 +33,21 @@ if (-not $pythonCmd) {
     Write-Host "Python 3.11 or newer was not found. Install it from https://www.python.org/downloads/ (tick 'Add python.exe to PATH'), then run this setup again." -ForegroundColor Red
     exit 1
 }
-Write-Host "[1/5] Python found."
+Write-Host "[1/4] Python found."
 
 # 2. Virtual environment
 $venvPython = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
-    Write-Host "[2/5] Creating .venv ..."
+    Write-Host "[2/4] Creating .venv ..."
     $venvArgs = @($pythonCmd | Select-Object -Skip 1) + @("-m", "venv", ".venv")
     & $pythonCmd[0] @venvArgs
     if ($LASTEXITCODE -ne 0) { Write-Host "Creating the Python environment failed." -ForegroundColor Red; exit 1 }
 } else {
-    Write-Host "[2/5] .venv already exists."
+    Write-Host "[2/4] .venv already exists."
 }
 
 # 3. Packages
-Write-Host "[3/5] Installing pinned packages (this downloads from PyPI the first time) ..."
+Write-Host "[3/4] Installing pinned packages (this downloads from PyPI the first time) ..."
 & $venvPython -m pip install --disable-pip-version-check --quiet -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Write-Host "Package installation failed. See the messages above." -ForegroundColor Red; exit 1 }
 
@@ -56,9 +55,9 @@ if ($LASTEXITCODE -ne 0) { Write-Host "Package installation failed. See the mess
 $icon = Join-Path $Root "launch\enoy.ico"
 if (-not (Test-Path $icon)) { & $venvPython (Join-Path $Root "launch\make_icon.py") $icon }
 if ($NoShortcuts) {
-    Write-Host "[4/5] Skipping shortcuts (-NoShortcuts)."
+    Write-Host "[4/4] Skipping shortcuts (-NoShortcuts)."
 } else {
-Write-Host "[4/5] Creating shortcuts ..."
+Write-Host "[4/4] Creating shortcuts ..."
 $pythonw = Join-Path $Root ".venv\Scripts\pythonw.exe"
 $shell = New-Object -ComObject WScript.Shell
 $targets = @(
@@ -79,17 +78,6 @@ foreach ($lnkPath in $targets) {
 Push-Location $Root
 & $venvPython -m enoy.winshell @targets | Out-Null
 Pop-Location
-}
-
-# 5. Ollama check (information only)
-Write-Host "[5/5] Checking Ollama ..."
-$ollama = Get-Command ollama -ErrorAction SilentlyContinue
-if (-not $ollama) {
-    Write-Host "      Ollama is not installed. Get it from https://ollama.com/download. Enoy's local model needs it." -ForegroundColor Yellow
-} else {
-    $models = & ollama list 2>$null
-    if ($models -match "qwen3.5:9b") { Write-Host "      Ollama and qwen3.5:9b are installed." -ForegroundColor Green }
-    else { Write-Host "      qwen3.5:9b is not installed. To download it (about 6.6 GB), run:  ollama pull qwen3.5:9b" -ForegroundColor Yellow }
 }
 
 Write-Host ""

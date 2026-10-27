@@ -1,4 +1,4 @@
-"""Backend interface shared by the local (Ollama) and Claude adapters."""
+"""Backend interface shared by the Codex and Claude adapters."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-LOCAL = "qwen"
+LOCAL = "qwen"  # Historical database label only; no backend is registered for it.
 CLAUDE = "claude"
 CODEX = "codex"
 

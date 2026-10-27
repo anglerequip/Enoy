@@ -60,25 +60,14 @@ def windows_version() -> str:
 
 
 def collect(orchestrator, config_warnings: list[str]) -> dict:
-    from .backends.base import CLAUDE, LOCAL
+    from .backends.base import CLAUDE, CODEX
 
-    local = orchestrator.backends[LOCAL].status().as_dict()
-    claude = orchestrator.backends[CLAUDE].status().as_dict() if CLAUDE in orchestrator.backends else None
+    states = orchestrator.backend_status()
+    codex = states.get('codex', {})
+    claude = states.get('claude', {})
     advice = []
-    if not local["available"]:
-        if "Cannot reach" in local["detail"]:
-            advice.append("Ollama is not running. Start it from the Start menu (Ollama), then press Refresh.")
-        elif "not installed" in local["detail"]:
-            advice.append("The configured model is not installed. Choose an installed model in Settings, "
-                          "or download it yourself in a terminal: ollama pull <model>.")
-    loaded = (local.get("extra") or {}).get("loaded")
-    if loaded and loaded.get("gpu_percent") is not None and loaded["gpu_percent"] < 100:
-        advice.append(f"Only {loaded['gpu_percent']}% of the model is in GPU memory; the rest runs on the CPU, which makes "
-                      "answers several times slower. Other programs also use GPU memory (games, Discord, Spotify, browsers, "
-                      "screen recorders such as Medal); closing them before starting a task frees room. A smaller context "
-                      "size (Settings > Local model) also helps a little.")
-    if claude and not claude["available"]:
-        advice.append("Claude is optional. Enoy keeps working locally without it.")
+    if not codex.get('available'):
+        advice.append('ChatGPT / Codex is unavailable. Run codex login and refresh.')
     log_file = paths.logs_dir() / "enoy.log"
     tail = ""
     if log_file.exists():
@@ -91,7 +80,7 @@ def collect(orchestrator, config_warnings: list[str]) -> dict:
         "memory": memory_gb(),
         "gpus": gpu_info(),
         "cpu_count": os.cpu_count(),
-        "local": local,
+        "codex": codex,
         "claude": claude,
         "config_warnings": config_warnings,
         "paths": {

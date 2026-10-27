@@ -7,8 +7,8 @@
 const TOKEN = document.querySelector('meta[name="enoy-token"]').content;
 const NAME = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
 const MODELS = {
-  auto: { title: "Auto", desc: "The smart router picks per message: Qwen for everyday work, Claude for hard problems. Claude asks you first." },
-  qwen: { title: "Qwen 3.5 9B", desc: "Runs on your PC. Free and private. This chat stays local unless you pick Claude." },
+  auto: { title: "Auto", desc: "ChatGPT evaluates the request and delegates to Codex or Claude." },
+  codex: { title: "ChatGPT / Codex", desc: "Uses your signed-in Codex CLI." },
   claude: { title: "Claude", desc: "Strongest reasoning. Uses your Claude plan." },
 };
 const S = {
@@ -111,14 +111,14 @@ async function loadStatus(refresh = false) {
   const note = document.querySelector(".composer-note");  // Only the note: typing in the box is not disturbed.
   if (note) note.innerHTML = composerNoteHtml();
 }
-// Keep the status dots live (Ollama can be started or closed while Enoy is open). Local checks only:
+// Keep provider sign-in status current without sending model requests.
 // Claude's status is the cached one unless you press Refresh.
 setInterval(async () => {
   if (document.hidden) return;
   try { S.status = await api("GET", "/api/status"); renderStatusLine(); } catch (e) { /* the next tick tries again */ }
 }, 15000);
 function coordinatorOn() { return !!(S.status && S.status.coordinator && S.model === "auto" && !localOnlyReason() && !S.status.routing.zero_paid_mode); }
-function qwenOk() { return !!(S.status && S.status.local.available); }
+function codexOk() { return !!(S.status && S.status.codex?.available); }
 function claudeOk() { return !!(S.status && S.status.claude.available); }
 
 async function loadProjects() { S.projects = (await api("GET", "/api/projects")).projects; }
@@ -184,17 +184,9 @@ function renderSidebar() {
 }
 
 function renderStatusLine() {
-  const st = S.status;
   const el = $("status-line");
-  if (!st) { el.innerHTML = `<span class="pill"><span class="dot bad"></span>App not responding</span>`; return; }
-  const cl = st.claude;
-  const claudeText = !cl.available ? "Claude off" : (cl.verified || st.claude_last_verified ? "Claude ready" : "Claude not tested");
-  // Ollama answers /api/version when it runs, even if Qwen's model is missing; that is what this dot shows.
-  const ollamaUp = !!st.local.version;
-  el.innerHTML = `<span class="pill" title="${esc(ollamaUp ? `Ollama ${st.local.version} is running on this PC.` : st.local.detail || "Ollama is not running.")}"><span class="dot ${ollamaUp ? "ok" : "bad"}"></span>${ollamaUp ? "Ollama ready" : "Ollama offline"}</span>
-    <span class="pill"><span class="dot ${st.local.available ? "ok" : "bad"}"></span>${st.local.available ? "Qwen ready" : "Qwen offline"}
-    <span class="dot ${cl.available ? (cl.verified || st.claude_last_verified ? "ok" : "warn") : ""}" style="margin-left:8px"></span>${claudeText}</span>
-    <span class="settings-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</span>`;
+  if (!S.status) { el.textContent = "Connecting to Enoy…"; return; }
+  el.innerHTML = ["codex", "claude"].map(p => `<span class="pill"><span class="dot ${S.status[p]?.available ? "ok" : "bad"}"></span>${NAME[p]} ${S.status[p]?.available ? "ready" : "unavailable"}</span>`).join("") + `<span class="settings-link">Settings</span>`;
 }
 
 // ---------------------------------------------------------------- top bar
@@ -263,7 +255,7 @@ function renderThread(forceBottom = false) {
     $("thread").innerHTML = `<div class="hello">
       <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">${greet}</h1>
       <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code in the sidebar to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
-      ${!qwenOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">Qwen is offline. Start Ollama, then try again. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
+      ${!codexOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">ChatGPT / Codex is unavailable. Run codex login, then refresh status. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
       <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic">${TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
     return;
   }
@@ -347,7 +339,7 @@ function messageHtml(m, isLast) {
     const pics = (m.images || []).map(id => `<a href="#" data-action="view-image" data-id="${id}"><img src="${imgUrl(id)}" alt="Attached image" loading="lazy"></a>`).join("");
     return `${pics ? `<div class="msg-images">${pics}</div>` : ""}<div class="msg-user">${esc(m.content)}</div>`;
   }
-  const b = m.backend || "qwen";
+  const b = m.backend || "enoy";
   return `<div class="msg-ai" data-msg-id="${m.id}">
     <div class="ai-head">${avatar(b)}${NAME[b] || b}<span class="where">${b === "qwen" ? "· on your PC" : ""}</span></div>
     <div class="ai-body">${md(m.content)}</div>
@@ -451,7 +443,7 @@ function statusHtml(t) {
       <div class="small">${r.tasks.map(x => `• ${esc(x)}`).join("<br>")}</div>
       <div class="small">At most ${r.budget} Claude requests, for this run only. Each one gets only the relevant files, with secrets removed. This uses your Claude plan.</div>
       <div class="row"><button class="btn accent" data-action="claude-yes">Allow for this run</button>
-        <button class="btn" data-action="claude-no">Keep the run on Qwen</button></div></div>`;
+        <button class="btn" data-action="claude-no">Use ChatGPT instead</button></div></div>`;
   }
   if (t.status === "paused") {
     return `<div class="card"><div class="card-title">${avatar("team")} Team run paused</div>
@@ -460,7 +452,7 @@ function statusHtml(t) {
         <button class="btn ghost" data-action="stop">Cancel the run</button></div></div>`;
   }
   if (["running", "queued"].includes(t.status)) {
-    const b = t.owner || "qwen";
+    const b = t.owner || "codex";
     return `<div class="msg-ai live">
       <div class="ai-head">${avatar(b)}${NAME[b]}<span class="where">${b === "qwen" ? "· on your PC" : ""}</span></div>
       <details class="thinking hidden" id="live-thinking-wrap"><summary>Thinking</summary><div id="live-thinking"></div></details>
@@ -479,7 +471,7 @@ function statusHtml(t) {
       ${(p.images || []).length ? `<div class="msg-images left">${p.images.map(id => `<img src="${imgUrl(id)}" alt="Image to send">`).join("")}</div>` : ""}
       ${p.files.length ? `<div>${p.files.map(f => `<span class="file-chip"><code>${esc(f.path)}</code></span>`).join("")}</div>` : ""}
       <div class="row"><button class="btn accent" data-action="claude-yes">Send to Claude</button>
-        <button class="btn" data-action="claude-no">Keep it with Qwen</button>
+        <button class="btn" data-action="claude-no">Use ChatGPT instead</button>
         <button class="btn ghost small" data-action="claude-preview">See exactly what is sent</button></div></div>`;
   }
   if (state.pending_folder && !["running", "queued"].includes(t.status)) {
@@ -497,8 +489,8 @@ function statusHtml(t) {
       <div class="card-sub">${esc((t.summary || "").replace(/^The local model/, "Qwen"))}</div>
       <div class="row"><button class="btn" data-action="resume">Try again</button>
         ${t.owner !== "claude" && claudeOk() ? `<button class="btn" data-action="ask-claude">Ask Claude</button>` : ""}
-        ${!qwenOk() ? `<button class="btn ghost" data-action="open-settings" data-tab="status">Check status</button>` : ""}
-        ${/Memory & PC|mode allows/.test(t.summary || "") ? `<button class="btn primary" data-action="open-settings" data-tab="pc">Memory settings</button>` : ""}</div></div>`;
+        ${!codexOk() ? `<button class="btn ghost" data-action="open-settings" data-tab="status">Check status</button>` : ""}
+        ${/PC access|mode allows/.test(t.summary || "") ? `<button class="btn primary" data-action="open-settings" data-tab="pc">Memory settings</button>` : ""}</div></div>`;
   }
   if (t.status === "interrupted") {
     return `<div class="card"><div class="card-title">This chat was interrupted</div>
@@ -613,16 +605,9 @@ function composerNoteHtml() {
   return (teamOn() && !(S.project && S.project.is_default) ? "Team roles on: code changes are planned, checked and reviewed. " : "") + composerNote();
 }
 function composerNote() {
-  const lo = localOnlyReason();
-  if (lo) return `🔒 Local only: ${esc(lo)}. Nothing here is sent to Claude.`;
-  if (coordinatorOn()) return "ChatGPT leads: evaluates your request, delegates to Codex or Claude, and reviews shared results.";
-  if (S.model === "claude") return "Claude uses your Claude plan.";
-  if (S.model === "auto" && S.status && S.status.lead && claudeOk()) {
-    return S.status.lead_style === "balanced"
-      ? "Claude leads: it reads your message first and hands routine coding to Qwen on your PC. Uses your Claude plan."
-      : "Claude first: Claude reads every message and hands most of the writing to Qwen on your PC. Uses your Claude plan.";
-  }
-  return "Qwen runs on your PC. Claude only gets the relevant files (secrets removed) when needed, and asks first.";
+  const blocked = localOnlyReason();
+  if (blocked) return `Cloud access disabled: ${esc(blocked)}. Enable cloud access to use ChatGPT or Claude.`;
+  return S.model === "claude" ? "Claude uses your Claude Code sign-in." : "ChatGPT leads: evaluates your request, delegates to Codex or Claude, and reviews shared results.";
 }
 
 async function send(textOverride) {
@@ -641,10 +626,10 @@ async function send(textOverride) {
   if (S.chat && ["running", "queued"].includes(S.chat.task.status)) return;
   const backend = S.model === "auto" ? null : S.model;
   if (!S.status) await loadStatus();  // Sent before the first status check finished.
-  if (backend === "claude" && !claudeOk()) { toast("Claude is not available right now. Pick Auto or Qwen.", true); return; }
+  if (backend === "claude" && !claudeOk()) { toast("Claude is not available right now. Pick Auto or ChatGPT.", true); return; }
   if (backend === "claude" && localOnlyReason()) { toast(`Claude is off here: ${localOnlyReason()}. Change that first.`, true); return; }
   if (coordinatorOn() && !S.status.codex?.available) { toast("ChatGPT coordinator is unavailable. Run codex login, then refresh status in Settings.", true); return; }
-  if (!qwenOk() && backend !== "claude" && !coordinatorOn()) { toast("Qwen is offline. Start Ollama (it is in the Start menu), then try again.", true); return; }
+  if (!codexOk() && backend !== "claude" && !coordinatorOn()) { toast("ChatGPT / Codex is unavailable. Run codex login, then refresh status.", true); return; }
   const files = [...S.attached];
   S.sending = true;
   const ok = await guarded(async () => {
@@ -725,7 +710,7 @@ async function openSettings(tab) {
 }
 
 function renderSettings() {
-  const tabs = [["general", "General"], ["models", "Models"], ["tools", "Tools"], ["pc", "Memory & PC"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
+  const tabs = [["general", "General"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
   openModal(`<div class="set-nav"><h2>Settings</h2>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
@@ -755,9 +740,6 @@ async function settingsTools() {
       <div class="small muted">Models ask Enoy to run these; Enoy checks the permission, runs the tool and gives the real result back,
         including errors. Every call is listed in Activity. Tools only read: nothing here changes your PC or sends anything on your behalf.</div>
       ${toggleRow("tools", "enabled", "Let models use tools", "Off: models answer only from what is in the chat.")}
-      ${toggleRow("tools", "agent", "Qwen works as an agent", "Qwen looks around the project, reads and edits files, runs the tests and checks its own work with tools, like Claude does, instead of answering in one shot.")}
-      ${toggleRow("tools", "agent_apply", "Agent edits are applied right away", "Each edit is written at once with a backup; Undo restores the whole turn. Off: Qwen's edits wait for you as one proposal. Deleting files and commands outside the allowed list always ask.")}
-      <div class="grid2">${inputRow("tools", "agent_max_steps", "Agent steps per message", "Tool rounds Qwen may use before it must answer.", "number")}</div>
       ${toggleRow("tools", "online", "Online tools", "Weather, web search and reading web pages. Off: nothing leaves your PC through tools.")}
       ${toggleRow("tools", "claude_web", "Claude may search the web", "For questions about current information, Claude gets Claude Code's own WebSearch and WebFetch (nothing else). Uses your Claude plan.")}
       ${toggleRow("tools", "claude_enoy_mcp", "Claude calls Enoy's PC and weather tools itself", "Off (default): Enoy reads the PC facts first and puts them in Claude's request. On: Claude Code runs without its safe mode so Enoy's tool server can load; your own Claude Code settings, skills and other MCP servers stay off. Tested: Claude called Enoy's GPU tool and answered from it.")}
@@ -768,7 +750,7 @@ async function settingsTools() {
     <div class="set-section"><h3>Online</h3>${group("web")}
       <label class="field">Web search provider<select data-cfg="tools.search_provider">${["auto", "brave", "searxng", "wikipedia"].map(p =>
         `<option ${c.search_provider === p ? "selected" : ""} value="${p}">${p === "auto" ? "Automatic (first one that is set up)" : p === "brave" ? "Brave Search (your API key)" : p === "searxng" ? "SearXNG (your instance)" : "Wikipedia only (background, not news)"}</option>`).join("")}</select>
-        <span class="small">In use now: ${esc(info.search_order.join(" → ") || "none")}. Without Brave or SearXNG, Qwen's web search only finds Wikipedia articles.</span></label>
+        <span class="small">In use now: ${esc(info.search_order.join(" → ") || "none")}. Without Brave or SearXNG, Enoy's web search only finds Wikipedia articles.</span></label>
       <label class="field">Brave Search API key
         <div class="row"><input type="password" id="brave-key" autocomplete="off" placeholder="${info.keys.brave_search ? "Saved in Windows Credential Manager" : "Not set"}">
         <button class="btn" data-action="tools-key" data-name="brave_search">Save</button>
@@ -793,138 +775,27 @@ function settingsGeneral() {
       <div class="set-row"><div class="lbl"><span>${p && !p.is_default ? esc(p.name) : "No project open"}</span><span class="d">${p && !p.is_default ? esc(p.path) : "Plain chat. Open a folder to let the AI read and change code."}</span></div>
         <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
     <div class="set-section"><h3>About</h3>
-      <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. Qwen runs locally through Ollama; Claude is reached through your Claude Code sign-in.
+      <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. ChatGPT uses your Codex sign-in; Claude uses your Claude Code sign-in.
       Every change to your files waits for your approval.</div></div>`;
   $("theme-select").addEventListener("change", e => { applyTheme(e.target.value); lsSet("theme", e.target.value); });
 }
 
-const PRESETS = {
-  recommended: { mode: "auto", workflow: "escalate", title: "Smart routing", desc: "Recommended. Enoy picks per task from what you ask: Qwen for everyday work, Claude straight away for hard problems, and Claude when Qwen's attempt fails. Claude still asks you first." },
-  qwen_first: { mode: "local_first", workflow: "escalate", title: "Qwen first, Claude only after failures", desc: "Qwen always tries first, even on hard tasks. Claude only steps in when Qwen's attempt fails." },
-  local: { mode: "local_first", workflow: "local_only", title: "Only Qwen", desc: "Everything stays on your PC. You can still pick Claude yourself in the model menu." },
-  review: { mode: "local_first", workflow: "local_then_review", title: "Qwen writes, Claude double-checks", desc: "Claude reviews every code change Qwen proposes. Uses more of your Claude plan." },
-  claude: { mode: "claude_first", workflow: "escalate", title: "Claude first", desc: "Claude answers by default; Qwen is used when Claude is unavailable." },
-};
-
 async function settingsModels() {
-  const c = S.config;
-  const preset = Object.entries(PRESETS).find(([, p]) => p.mode === c.routing.mode && p.workflow === c.routing.workflow);
-  let models = [];
-  try { models = (await api("GET", "/api/ollama/models")).models.map(m => m.name); } catch (e) { /* offline */ }
-  $("set-body").innerHTML = `
-    <div class="set-section"><h3>${avatar("codex")} ChatGPT coordinator</h3>
-      <p class="small muted">In Auto mode, ChatGPT evaluates each request, assigns tasks to Codex or Claude with a reason, and reviews results. Both receive recent shared chat, team messages and activity, and use the same project files through Enoy. Qwen is optional in this mode. Local-only chats keep their local workflow.</p>
-      ${toggleRow("coordinator", "enabled", "ChatGPT leads Enoy", "Uses your signed-in Codex CLI. Run codex login once. Overrides the older Claude lead in Auto mode.")}
-      ${toggleRow("codex", "enabled", "Enable ChatGPT / Codex", "Authentication is managed by the official Codex CLI.")}
-      <div class="small">${esc(S.status?.codex?.detail || "Refresh status to check Codex.")}</div>
-      <div class="grid2">${inputRow("codex", "executable", "Codex executable", "Empty: find codex on PATH")}
-      ${inputRow("codex", "model", "Codex model", "Empty: Codex default")}
-      ${inputRow("codex", "timeout_s", "Codex timeout (seconds)", "", "number")}</div>
-    </div>
-    <div class="set-section"><h3>Who answers</h3>
-      ${Object.entries(PRESETS).map(([k, p]) => `<label class="radio-card ${preset && preset[0] === k ? "sel" : ""}">
-        <input type="radio" name="preset" value="${k}" ${preset && preset[0] === k ? "checked" : ""}>
-        <span><div>${esc(p.title)}</div><div class="small muted">${esc(p.desc)}</div></span></label>`).join("")}
-      ${preset ? "" : `<div class="small muted">Custom setup (see Advanced below).</div>`}
-    </div>
-    ${c.routing.mode === "auto" ? smartRoutingHtml(c) : ""}
-    <div class="set-section"><h3>${avatar("claude")} Claude leads</h3>
-      <div class="small muted">Claude reads each new message first. It answers questions and brainstorms itself, asks when a wrong guess would be costly, and for code changes writes a plan: Qwen does the routine coding on your PC, QA runs your real checks, a reviewer checks the diff, and Claude checks the results and writes the answer. Each Claude request uses your Claude plan; "Ask before sending to Claude" still applies. Picking Qwen or Claude in the chat skips the lead for that message. If Claude is unavailable, Enoy says so and follows "If Claude is unavailable".</div>
-      ${toggleRow("lead", "enabled", "Claude leads new messages", "Off: the router sends each message to Qwen or Claude as before.")}
-      <div class="grid2"><label class="field">How Claude leads<select data-cfg="lead.style">${Object.entries(LEAD_STYLES).map(([k, v]) => `<option value="${k}" ${k === (c.lead.style || "claude_first") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
-        <span class="small">${(c.lead.style || "claude_first") === "claude_first"
-          ? `Every message starts with Claude. Claude talks and plans, and hands the writing it does not need to do itself to Qwen, aiming for Qwen to write ${c.routing.target_local_share}% of the text (the target share under Smart routing). Claude checks the team's results only when something failed.`
-          : "Casual messages go straight to Qwen; Claude answers everything else itself and checks the team's results."}</span></label>
-        <label class="field">Claude's effort when leading<select data-cfg="lead.effort">${Object.entries(LEAD_EFFORTS).map(([k, v]) => `<option value="${k}" ${k === (c.lead.effort || "medium") ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
-          <span class="small">For Claude's own lead requests: deciding, handing off to Qwen and checking results. Less effort means less thinking, which uses less of your Claude plan. Team work and chats where you pick Claude keep the effort set under Claude.</span></label></div>
-      ${toggleRow("lead", "final_review", "Claude checks the team's results", "One more Claude request per delegated task. Off: Enoy's own summary of the results is the answer.")}
-      <div class="grid2">${inputRow("lead", "max_followups", "Fix rounds Claude may order", "After its check, before the result is handed to you.", "number")}</div></div>
-    <div class="set-section"><h3>${avatar("team")} TEAM ROLES</h3>
-      <div class="small muted">A chat with TEAM ROLES on hands code changes to a small team: an orchestrator (plain code) plans and tracks the work, an architect is added for larger features, developers write the code, QA runs your project's real checks, a reviewer checks the diff, and a debugger steps in after repeated failures. Each part is routed to Qwen or Claude by the smart router. Questions are always answered directly. Switch it per chat with the TEAM ROLES button at the top.</div>
-      ${toggleRow("team", "default_new_chats", "Turn TEAM ROLES on for new chats", "Each chat keeps its own setting; this only sets the starting point.")}
-      <div class="grid2">
-        ${inputRow("team", "max_tasks", "Max developer tasks per plan", "", "number")}
-        ${inputRow("team", "max_parallel", "Team tasks at the same time", "Only tasks on different models with different files run together.", "number")}
-        ${inputRow("team", "max_repair_rounds", "Repair rounds before stopping", "", "number")}
-        ${inputRow("team", "max_model_calls", "Model requests per run", "The run stops and reports when this is used up.", "number")}
-        ${inputRow("team", "max_claude_calls", "Claude requests per run", "", "number")}
-        ${inputRow("team", "review_min_lines", "Model review from … added lines", "Smaller changes get the automatic checks only, unless they are high risk.", "number")}
-      </div></div>
-    <div class="set-section"><h3>${avatar("qwen")} Qwen (on your PC)</h3>
-      <label class="field">Model<select data-cfg="ollama.model">${[...new Set([c.ollama.model, ...models])].map(m => `<option ${m === c.ollama.model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
-        <span class="small">${models.length ? "Models installed in Ollama. Enoy never downloads models." : "Ollama is not reachable right now."}</span></label>
-      ${toggleRow("ollama", "think", "Think before answering", "Better on hard problems, much slower.")}
-      <div class="row"><button class="btn" data-action="test-backend" data-which="ollama">Test Qwen</button><span id="test-ollama" class="small"></span></div></div>
-    <div class="set-section"><h3>${avatar("claude")} Claude</h3>
-      ${toggleRow("claude", "enabled", "Use Claude", "Off = everything stays on your PC.")}
-      ${toggleRow("claude", "confirm_before_send", "Ask me before sending anything to Claude", "Shows which files and how much text will be sent.")}
-      ${toggleRow("claude", "safe_mode", "Lean requests", "Skips your personal Claude Code setup (CLAUDE.md, plugins, MCP) so each request uses far fewer tokens.")}
-      <div class="row"><button class="btn" data-action="test-backend" data-which="claude">Test Claude</button><span id="test-claude" class="small"></span></div></div>
-    <details class="set-section"><summary class="muted" style="cursor:pointer">Advanced</summary>
-      <div class="grid2" style="margin-top:10px">
-        <label class="field">Routing mode<select data-cfg="routing.mode">${S.cfgMeta.routing_modes.map(m => `<option ${m === c.routing.mode ? "selected" : ""}>${m}</option>`).join("")}</select></label>
-        <label class="field">Workflow<select data-cfg="routing.workflow">${S.cfgMeta.workflows.map(m => `<option ${m === c.routing.workflow ? "selected" : ""}>${m}</option>`).join("")}</select></label>
-        ${inputRow("ollama", "num_ctx", "Qwen context size (tokens)", "Smaller fits better in GPU memory.", "number")}
-        ${inputRow("ollama", "num_predict", "Max answer length (tokens)", "", "number")}
-        ${inputRow("ollama", "temperature", "Temperature", "", "number")}
-        ${inputRow("ollama", "keep_alive", "Keep Qwen loaded for", "e.g. 15m or 1h")}
-        ${inputRow("ollama", "endpoint", "Ollama address", "")}
-        ${inputRow("ollama", "request_timeout_s", "Qwen timeout (s)", "", "number")}
-        ${inputRow("claude", "model", "Claude model", "Default claude-opus-5-5 (Opus 5.5). Empty = Claude Code's default")}
-        <label class="field">Claude effort<select data-cfg="claude.effort">${["", "low", "medium", "high", "xhigh", "max"].map(v => `<option value="${v}" ${v === c.claude.effort ? "selected" : ""}>${v || "Claude Code default"}</option>`).join("")}</select>
-          <span class="small">Higher effort thinks longer and uses more of your Claude plan.</span></label>
-        ${inputRow("claude", "timeout_s", "Claude timeout (s)", "", "number")}
-        ${inputRow("claude", "executable", "Claude Code path", "Empty = find automatically")}
-        ${inputRow("routing", "max_local_attempts", "Qwen tries before asking Claude", "", "number")}
-        ${inputRow("routing", "max_test_fix_attempts", "Qwen test-fix tries before asking Claude", "", "number")}
-        ${inputRow("routing", "max_escalations", "Max Claude hand-offs per chat", "", "number")}
-        ${inputRow("routing", "max_review_rounds", "Max Claude review rounds", "", "number")}
-        ${inputRow("context", "max_files", "Files sent per request", "", "number")}
-        ${inputRow("context", "max_chars", "Characters of file content per request", "", "number")}
-      </div>
-      <div style="margin-top:10px">${toggleRow("routing", "escalate_high_complexity", "Send hard-looking tasks straight to Claude", "Still asks first.")}</div>
-    </details>`;
-  if (c.routing.mode === "auto") loadRoutingStats();
-  document.querySelectorAll('input[name="preset"]').forEach(r => r.addEventListener("change", async e => {
-    const p = PRESETS[e.target.value];
-    await saveCfg({ routing: { mode: p.mode, workflow: p.workflow } });
-    settingsModels();
-  }));
+  const c=S.config;
+  $("set-body").innerHTML = `<div class="set-section"><h3>ChatGPT and Claude</h3>
+    <p>ChatGPT evaluates requests and delegates development tasks to Codex or Claude. Both share project context and recorded results.</p>
+    ${toggleRow("codex","enabled","Enable ChatGPT / Codex","Uses the official Codex CLI. Run codex login to sign in.")}
+    ${inputRow("codex","executable","Codex executable","Empty: find codex on PATH")}
+    ${inputRow("codex","model","Codex model","Empty: Codex default")}
+    ${toggleRow("claude","enabled","Enable Claude","Uses your Claude Code sign-in.")}
+    ${toggleRow("claude","confirm_before_send","Ask before sending to Claude","Approve Claude once per delegated run.")}
+    ${inputRow("claude","model","Claude model","Empty: Claude Code default")}
+    ${inputRow("routing","max_attempts","Attempts per task","","number")}
+    ${inputRow("team","max_tasks","Maximum tasks per plan","","number")}
+    ${inputRow("team","max_model_calls","Requests per run","","number")}
+    ${inputRow("lead","max_followups","Final-review correction rounds","","number")}
+    <p class="small muted">Enoy uses cloud providers only. Chats with cloud access disabled cannot send model requests.</p></div>`;
   bindCfgInputs();
-}
-
-const AGGRESSIVENESS = { prefer_qwen: "Prefer Qwen", balanced: "Balanced", prefer_claude: "Prefer Claude" };
-const LEAD_EFFORTS = { inherit: "Same as Claude's effort", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max", "": "Claude Code's default" };
-const LEAD_STYLES = { claude_first: "Claude first, Qwen does most of the writing", balanced: "Balanced (casual messages go to Qwen)" };
-
-function smartRoutingHtml(c) {
-  const r = c.routing;
-  const sel = (key, opts) => `<select data-cfg="routing.${key}">${Object.entries(opts).map(([k, v]) => `<option value="${k}" ${k === r[key] ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
-  return `<div class="set-section"><h3>Smart routing</h3>
-    <div class="small muted">Every new chat is classified by what it asks (an explanation, a small function, a cross-module bug…), how far the change reaches, and how costly a mistake would be. Clear routine work goes to Qwen; work that clearly benefits from stronger reasoning goes straight to Claude. No model is asked to make this choice.</div>
-    <div class="grid2">
-      <label class="field">How readily to use Claude${sel("aggressiveness", AGGRESSIVENESS)}<span class="small">Balanced: borderline tasks stay with Qwen unless a mistake would be costly or hard to spot.</span></label>
-      ${inputRow("routing", "target_local_share", "Target share for Qwen (%)", "A goal to compare against, never a quota. Enoy never calls Claude, or avoids it, to hit this number.", "number")}
-      <label class="field">If Claude is needed but unavailable${sel("claude_fallback", { local: "Continue with Qwen and say so", stop: "Stop and tell me" })}</label>
-      ${inputRow("routing", "max_handoffs", "Max model switches per chat", "Stops Qwen and Claude handing a task back and forth.", "number")}
-      ${inputRow("routing", "stats_window", "Statistics cover the last … finished tasks", "", "number")}
-    </div>
-    ${toggleRow("routing", "failure_escalation", "Hand failed work to Claude", "When Qwen's attempts fail Enoy's checks, the same error repeats, or tests keep failing.")}
-    ${toggleRow("routing", "manual_override", "Let me pick the model per chat", "The model menu at the top. Your pick always wins, within privacy rules.")}
-    ${toggleRow("routing", "log_decisions", "Write routing decisions to the app log", "They always appear in Activity.")}
-    ${toggleRow("routing", "zero_paid_mode", "Zero-paid mode", "Claude is never used automatically, only when you pick it yourself. Enoy never uses the paid Anthropic API; Claude runs through your Claude Code plan, which has usage limits.")}
-    <div id="routing-stats" class="small muted">Loading model share…</div></div>`;
-}
-
-async function loadRoutingStats() {
-  let s;
-  try { s = await api("GET", "/api/routing/stats"); } catch (e) { return; }
-  const el = $("routing-stats");
-  if (!el) return;
-  const w = s.work || {};
-  const written = w.qwen_pct == null ? "" : `<br><b>Writing:</b> Qwen ${w.qwen_tokens.toLocaleString()} tokens (${w.qwen_pct}%), Claude ${w.claude_tokens.toLocaleString()} (${100 - w.qwen_pct}%)${w.estimated ? " (partly estimated)" : ""}.`;
-  el.innerHTML = s.counted ? `<b>Last ${s.counted} finished task(s):</b> Qwen ${s.qwen} (${s.qwen_pct}%), Claude ${s.claude} (${100 - s.qwen_pct}%). Target: Qwen ${s.target_qwen_pct}%.${written}<br>${esc(s.note)}<br><span class="muted">${esc(s.rule)} ${esc(w.rule || "")}</span>`
-    : `No finished tasks yet. ${esc(s.rule)}`;
 }
 
 function settingsSafety() {
@@ -948,31 +819,16 @@ function settingsSafety() {
       <label class="field">Cloud privacy (ChatGPT and Claude)<select data-cfg="privacy.cloud_policy">
         <option value="auto" ${c.privacy.cloud_policy === "auto" ? "selected" : ""}>Send the relevant, permitted files when Claude is needed</option>
         <option value="never" ${c.privacy.cloud_policy === "never" ? "selected" : ""}>Never send code to cloud models (everything stays on this PC)</option></select></label>
-      <label class="field">Files Qwen may read but ChatGPT and Claude never receive (one pattern per line, e.g. src/secret/** or *.private.lua)
+      <label class="field">Files never sent to ChatGPT or Claude (one pattern per line, e.g. src/secret/** or *.private.lua)
         <textarea class="field mono" rows="4" data-cfg="privacy.cloud_excluded_globs" data-list="1">${esc(c.privacy.cloud_excluded_globs.join("\n"))}</textarea></label>
-      <div class="small muted">Claude only gets the few files relevant to the task, never the whole project. Before each request Enoy removes private files, any lines quoting them (from Qwen's answers, diffs or test output), and secrets, and logs a privacy check in Activity.
+      <div class="small muted">Claude only gets the few files relevant to the task, never the whole project. Before each request Enoy removes private files, any lines quoting them (from earlier answers, diffs or test output), and secrets, and logs a privacy check in Activity.
         You can also keep a whole project or a single chat on this PC from the project menu or the ＋ menu.</div></div>`;
   bindCfgInputs();
 }
 
 async function settingsStatus() {
-  $("set-body").innerHTML = `<div class="muted">Checking…</div>`;
-  let d;
-  try { d = await api("GET", "/api/diagnostics"); } catch (e) { $("set-body").innerHTML = esc(e.message); return; }
-  const loaded = d.local.extra && d.local.extra.loaded;
-  const gpu = d.gpus.map(g => `${esc(g.name)} · ${g.vram_used_mb} / ${g.vram_total_mb} MB in use`).join("<br>") || "No NVIDIA GPU found";
-  $("set-body").innerHTML = `
-    ${d.advice.length ? `<div class="card accent">${d.advice.map(a => `<div class="small">${esc(a)}</div>`).join("")}</div>` : ""}
-    ${d.config_warnings.length ? `<div class="card bad">${d.config_warnings.map(a => `<div class="small">${esc(a)}</div>`).join("")}</div>` : ""}
-    <div class="set-section"><div class="row" style="justify-content:space-between"><h3>AI status</h3><button class="btn small" data-action="refresh-status">Refresh</button></div>
-      <div class="kv"><div>Qwen</div><div><span class="dot ${d.local.available ? "ok" : "bad"}"></span> ${esc(d.local.detail)}</div>
-      ${loaded ? `<div>Speed</div><div>${loaded.gpu_percent}% of Qwen is on the graphics card (${loaded.vram_gb} of ${loaded.size_gb} GB). ${loaded.gpu_percent < 100 ? "The rest runs on the CPU, which is slower." : ""}</div>` : ""}
-      <div>Claude</div><div><span class="dot ${d.claude && d.claude.available ? "ok" : "bad"}"></span> ${esc(d.claude ? d.claude.detail : "")}</div></div></div>
-    <div class="set-section"><h3>This PC</h3><div class="kv">
-      <div>Windows</div><div>${esc(d.os)}</div><div>Memory</div><div>${d.memory.total_gb ?? "?"} GB (${d.memory.free_gb ?? "?"} GB free)</div>
-      <div>Graphics</div><div>${gpu}</div><div>Python</div><div>${esc(d.python)}</div></div></div>
-    <div class="set-section"><h3>Where your data is</h3><div class="kv">${Object.entries(d.paths).map(([k, v]) => `<div>${esc(k.replace(/_/g, " "))}</div><div class="mono small" style="word-break:break-all">${esc(v)}</div>`).join("")}</div></div>
-    <details class="set-section"><summary class="muted" style="cursor:pointer">Recent log</summary><pre class="log">${esc(d.log_tail || "(empty)")}</pre></details>`;
+  const d=await api("GET","/api/diagnostics");
+  $("set-body").innerHTML=`<div class="set-section"><h3>Provider status</h3>${["codex","claude"].map(p=>`<p><strong>${NAME[p]}</strong>: ${esc(d[p]?.detail || "unavailable")}</p>`).join("")}<button class="btn" data-action="refresh-status">Refresh</button></div><div class="set-section"><h3>Enoy ${esc(d.app_version)}</h3><p>Data: ${esc(d.paths.data)}</p></div>`;
 }
 
 async function settingsActivity() {
@@ -1144,7 +1000,7 @@ const actions = {
       <div class="row" style="justify-content:flex-end"><button class="btn primary" data-action="close-modal">Close</button></div>`, true); },
   "model-menu": el => openMenu(el, Object.entries(MODELS).map(([k, m]) => ({
     title: `${k === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(k)} ${m.title}`,
-    desc: k === "claude" && !claudeOk() ? "Not available right now. See Settings." : k === "qwen" && !qwenOk() ? "Offline. Start Ollama." : m.desc,
+    desc: k === "claude" && !claudeOk() ? "Not available right now. See Settings." : k === "codex" && !codexOk() ? "Unavailable. Run codex login." : m.desc,
     action: "set-model", data: { model: k }, checked: S.model === k, disabled: k === "claude" && !claudeOk(),
   }))),
   "set-model": el => { S.model = el.dataset.model; lsSet("model", S.model); closeMenu(); renderModelPicker(); renderComposer(); },
@@ -1210,7 +1066,7 @@ const actions = {
       items.push({ title: "📄 Add a project file", desc: "Make sure the AI reads it", action: "toggle-files" });
       testCommands().slice(0, 3).forEach(c => items.push({ title: `▶ Run <code>${esc(c)}</code>`, action: "run-cmd", data: { cmd: c } }));
       items.push({ title: "▶ Run a command…", action: "run-custom" });
-      items.push({ title: "Summarize this project", desc: "Qwen writes an overview it reuses in later chats", action: "summarize" });
+      items.push({ title: "Summarize this project", desc: "ChatGPT writes an overview it can reuse in later chats", action: "summarize" });
       items.push("-");
     }
     items.unshift({ title: "🖼 Add images", desc: "PNG, JPEG, WebP or GIF. You can also paste or drop them", action: "add-images" });
@@ -1329,7 +1185,7 @@ const actions = {
     const which = el.dataset.which;
     if (which === "claude" && !(await confirmBox("Test Claude?", "<p>Sends one tiny request (“Reply with READY”) to Claude. It uses a very small amount of your Claude plan.</p>", "Send test"))) return;
     const out = $(`test-${which}`);
-    if (out) out.textContent = which === "ollama" ? "Testing… (up to a minute if Qwen has to load)" : "Testing…";
+    if (out) out.textContent = "Testing…";
     try {
       const d = await api("POST", `/api/${which}/test`);
       if (out) out.innerHTML = d.ok ? `<span style="color:var(--ok)">Works</span> · replied “${esc(d.reply)}” in ${d.seconds} s` : `<span style="color:var(--bad)">Failed:</span> ${esc(d.detail)}`;
@@ -1480,11 +1336,12 @@ function connectEvents() {
 // ---------------------------------------------------------------- start
 
 async function start() {
+  if (!MODELS[S.model]) S.model="auto";
   applyTheme(lsGet("theme") || "dark");
   closeSidebarIfNarrow();
   connectEvents();
   renderModelPicker();
-  // Provider checks (Ollama, Claude Code) can take a moment on a cold start; the
+  // Provider checks (Codex, Claude Code) can take a moment on a cold start; the
   // chats render without waiting for them, and the status line fills in after.
   const statusReady = loadStatus();
   setInterval(loadStatus, 20000);
@@ -1505,7 +1362,7 @@ async function start() {
   renderAll(true);
   performance.mark("enoy-ready");
   await statusReady;
-  if (!S.chat) renderThread();  // The welcome screen mentions Qwen being offline.  // First full render done (used to measure startup).
+  if (!S.chat) renderThread();  // Provider status appears once checked.  // First full render done (used to measure startup).
   const settingsLink = (location.hash.match(/^#settings(?:=(\w+))?$/) || []);
   if (settingsLink[0]) guarded(() => openSettings(settingsLink[1]));
 }
