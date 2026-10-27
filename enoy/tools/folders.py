@@ -39,9 +39,9 @@ class FolderService:
 
 
 def enoy_source() -> str:
-    """Enoy's own source folder when it runs from source (the folder holding fusion_ai/ui), else ""."""
+    """Enoy's own source folder when it runs from source (the folder holding enoy/ui), else ""."""
     root = Path(__file__).resolve().parents[2]
-    return str(root) if (root / "fusion_ai" / "ui" / "app.js").is_file() else ""
+    return str(root) if (root / "enoy" / "ui" / "app.js").is_file() else ""
 
 
 # A change asked of Enoy itself: a change word together with something only Enoy has.
@@ -132,7 +132,7 @@ def _find_folders(args: dict, ctx: ToolContext) -> dict:
     results += [Path(p) for _, p in svc.known if Path(p).is_dir()]
     if name:
         results = [p for p in results if name.lower() in p.name.lower()
-                   or (svc.source and str(p) == svc.source and name.lower() in ("enoy", "fusion", "fusion ai"))]
+                   or (svc.source and str(p) == svc.source and name.lower() in ("enoy",))]
         results += scan(name, search_roots(), time.monotonic() + TIME_LIMIT_S)
     unique, keys = [], set()
     for p in results:

@@ -532,7 +532,7 @@ class ConflictError(RuntimeError):
 
 def _write_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".fusion-tmp-")
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".enoy-tmp-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write(text)

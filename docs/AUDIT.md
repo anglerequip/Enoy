@@ -98,16 +98,16 @@ The three biggest risks are not code quality but process and verification:
 ## Low
 
 15. **The logo is a hand-traced approximation.** The original image file was not available
-    on disk. Replace `fusion_ai/ui/logo.svg` with the original artwork and run
+    on disk. Replace `enoy/ui/logo.svg` with the original artwork and run
     `launch\make_icon.py`.
 16. **"Authorized automation" equals "Assist".** Clicking, typing, form filling and logins
     are not built (honestly marked as unavailable). If you want them, a reviewed design
     comes first: UI Automation through `pywinauto`, per-app scopes, and a confirmation card
     for consequential steps.
 17. **Images can grow without limit.** They are stored by hash in
-    `%LOCALAPPDATA%\FusionAI\images`, and there is no cleanup for images whose chats are
+    `%LOCALAPPDATA%\Enoy\images`, and there is no cleanup for images whose chats are
     gone. *Fix:* a periodic sweep of unreferenced files.
-18. **Internal names still say Fusion.** The package, data folder and token header still do,
+18. **Internal names still say Enoy.** The package, data folder and token header still do,
     which only matters to developers. Renaming the data folder would need a migration.
 
 ## What is in good shape

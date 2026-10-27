@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from fusion_ai.project import PathError, Workspace
+from enoy.project import PathError, Workspace
 
 
 def test_tree_excludes_dependencies_and_flags_secrets(project):
@@ -95,9 +95,9 @@ def test_detect_facts(project):
 
 
 def test_instruction_files(project):
-    (project / "FUSION.md").write_text("Always use tabs in Luau.", encoding="utf-8")
+    (project / "ENOY.md").write_text("Always use tabs in Luau.", encoding="utf-8")
     ins = Workspace(project).instructions()
-    assert ins[0] == ("FUSION.md", "Always use tabs in Luau.")
+    assert ins[0] == ("ENOY.md", "Always use tabs in Luau.")
 
 
 def test_missing_project_folder(tmp_path):

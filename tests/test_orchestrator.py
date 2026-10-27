@@ -3,9 +3,9 @@
 import sys
 import time
 
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.orchestrator import Orchestrator
-from fusion_ai.storage import Storage
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.orchestrator import Orchestrator
+from enoy.storage import Storage
 
 ADD_MULTIPLY = """Adding multiply.
 <<<EDIT calculator.py
@@ -284,7 +284,7 @@ def test_risky_command_needs_approval_and_blocked_never_runs(orc_factory, projec
     r = orc.run_command(pid, f'"{sys.executable}" -c "print(1)"', approved=True)
     assert orc.db.get_command_run(r["run_id"])["status"] == "passed"
     import pytest as _pytest
-    from fusion_ai.orchestrator import TaskError
+    from enoy.orchestrator import TaskError
     with _pytest.raises(TaskError):
         orc.run_command(pid, "format C:", approved=True)
 
@@ -354,7 +354,7 @@ def test_cancellation(cfg, project, tmp_path):
 def test_task_state_survives_restart_and_resumes(cfg, project, tmp_path):
     from conftest import FakeBackend
 
-    db_path = tmp_path / "fusion.db"
+    db_path = tmp_path / "enoy.db"
     storage = Storage(db_path)
     pid = storage.upsert_project(str(project), "project")["id"]
     task = storage.create_task(pid, "Explain divide", "Explain divide", "ask")
@@ -391,7 +391,7 @@ def test_concurrent_user_edit_blocks_apply(orc_factory, project):
     (project / "calculator.py").write_text("# the user changed this\n", encoding="utf-8")
     cs = orc.db.list_changesets(task_id, "pending")[0]
     import pytest as _pytest
-    from fusion_ai.orchestrator import TaskError
+    from enoy.orchestrator import TaskError
     with _pytest.raises(TaskError):
         orc.approve_changeset(cs["id"])
     assert (project / "calculator.py").read_text(encoding="utf-8") == "# the user changed this\n"

@@ -22,7 +22,7 @@ EXCLUDED_DIRS = {
     ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "env", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "dist", "build", "out",
     ".next", ".nuxt", ".turbo", ".cache", "target", "bin", "obj", ".idea", ".vs",
-    ".vscode", "coverage", ".fusion", "Packages", "DevPackages", ".gradle",
+    ".vscode", "coverage", ".enoy", "Packages", "DevPackages", ".gradle",
 }
 
 # Files the agent may never read, index, or send to a model.
@@ -42,7 +42,7 @@ BINARY_EXTENSIONS = {
     ".sqlite", ".bin", ".dat", ".psd", ".glb", ".gltf",
 }
 
-INSTRUCTION_FILES = ["FUSION.md", ".fusion/instructions.md", "CLAUDE.md", "AGENTS.md"]
+INSTRUCTION_FILES = ["ENOY.md", ".enoy/instructions.md", "CLAUDE.md", "AGENTS.md"]
 
 WINDOWS_RESERVED = {
     "con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10)),

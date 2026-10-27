@@ -7,11 +7,11 @@ import sys
 
 import pytest
 
-from fusion_ai import config as config_mod
-from fusion_ai import privacy
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.orchestrator import TaskError
-from fusion_ai.routing import AttemptSignals, classify, decide, should_escalate
+from enoy import config as config_mod
+from enoy import privacy
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.orchestrator import TaskError
+from enoy.routing import AttemptSignals, classify, decide, should_escalate
 
 from test_orchestrator import ADD_MULTIPLY, open_project
 
@@ -352,8 +352,8 @@ def test_routing_preferences_persist(app_home):
 
 def test_project_local_only_persists(cfg, project, tmp_path):
     from conftest import FakeBackend
-    from fusion_ai.orchestrator import Orchestrator
-    from fusion_ai.storage import Storage
+    from enoy.orchestrator import Orchestrator
+    from enoy.storage import Storage
 
     db = tmp_path / "f.db"
     orc = Orchestrator(Storage(db), cfg, {LOCAL: FakeBackend(LOCAL), CLAUDE: FakeBackend(CLAUDE)}, synchronous=True)

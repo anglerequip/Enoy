@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from fusion_ai import winshell
+from enoy import winshell
 
 windows = pytest.mark.skipif(os.name != "nt", reason="Windows only")
 

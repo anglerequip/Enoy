@@ -65,18 +65,10 @@ $targets = @(
     (Join-Path ([Environment]::GetFolderPath("Desktop")) "Enoy.lnk"),
     (Join-Path ([Environment]::GetFolderPath("Programs")) "Enoy.lnk")
 )
-# The app was called Fusion AI Workspace before; remove only those old shortcuts, and only if they start this app.
-foreach ($old in @((Join-Path ([Environment]::GetFolderPath("Desktop")) "Fusion AI Workspace.lnk"),
-                   (Join-Path ([Environment]::GetFolderPath("Programs")) "Fusion AI Workspace.lnk"))) {
-    if (Test-Path $old) {
-        $o = $shell.CreateShortcut($old)
-        if ($o.Arguments -eq "-m fusion_ai" -and $o.WorkingDirectory -eq $Root) { Remove-Item $old; Write-Host "      Removed old shortcut $old" }
-    }
-}
 foreach ($lnkPath in $targets) {
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = $pythonw
-    $lnk.Arguments = "-m fusion_ai"
+    $lnk.Arguments = "-m enoy"
     $lnk.WorkingDirectory = $Root
     $lnk.IconLocation = $icon
     $lnk.Description = "Enoy"
@@ -85,7 +77,7 @@ foreach ($lnkPath in $targets) {
 }
 # Give the shortcuts Enoy's taskbar ID, so Windows shows Enoy instead of Python.
 Push-Location $Root
-& $venvPython -m fusion_ai.winshell @targets | Out-Null
+& $venvPython -m enoy.winshell @targets | Out-Null
 Pop-Location
 }
 

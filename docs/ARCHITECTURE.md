@@ -265,7 +265,7 @@ already running.
 
 The models do not share memory. Enoy passes state explicitly:
 
-- Project instructions (`FUSION.md`, `.fusion/instructions.md`, `CLAUDE.md`, `AGENTS.md`).
+- Project instructions (`ENOY.md`, `.enoy/instructions.md`, `CLAUDE.md`, `AGENTS.md`).
 - A project summary (made locally by Qwen, cached by file-list hash).
 - Short summaries of recent tasks in the project.
 - The task's own state: plan, decisions, failed approaches, check results.
@@ -297,6 +297,6 @@ tasks and for the manual hand-off to Claude Code.
 
 ## Data locations
 
-`%LOCALAPPDATA%\FusionAI\` holds `config.json`, `fusion.db`, `logs\`,
+`%LOCALAPPDATA%\Enoy\` holds `config.json`, `enoy.db`, `logs\`,
 `config-backups\`, `file-backups\` and the browser profile for the window.
-Set `FUSION_AI_HOME` to move it.
+Set `ENOY_HOME` to move it.

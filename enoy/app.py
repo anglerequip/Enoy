@@ -31,7 +31,7 @@ from .redact import redact
 from .server import App, Server
 from .storage import Storage
 
-log = logging.getLogger("fusion")
+log = logging.getLogger("enoy")
 
 
 class RedactingFormatter(logging.Formatter):
@@ -41,7 +41,7 @@ class RedactingFormatter(logging.Formatter):
 
 def setup_logging(verbose: bool = False) -> None:
     handler = logging.handlers.RotatingFileHandler(
-        paths.logs_dir() / "fusion.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        paths.logs_dir() / "enoy.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     root = logging.getLogger()
     root.handlers[:] = [handler]
@@ -236,16 +236,16 @@ def open_with_edge(url: str, app: App) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="fusion-ai", description="Enoy")
+    parser = argparse.ArgumentParser(prog="enoy", description="Enoy")
     parser.add_argument("--no-window", action="store_true", help="Run the server only (for development).")
     parser.add_argument("--browser", action="store_true", help="Open in the default browser instead of a native window.")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--data-dir", help="Use this folder for settings, database and logs (default %%LOCALAPPDATA%%\\FusionAI).")
+    parser.add_argument("--data-dir", help="Use this folder for settings, database and logs (default %%LOCALAPPDATA%%\\Enoy).")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
     if args.data_dir:
-        os.environ["FUSION_AI_HOME"] = os.path.abspath(args.data_dir)
+        os.environ["ENOY_HOME"] = os.path.abspath(args.data_dir)
 
     setup_logging(args.verbose)
     existing = running_instance()
@@ -256,7 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     app, orc = build()
     orc.start_memory_supervisor()
     server = Server(app, args.port).start()
-    _instance_file().write_text(json.dumps({"url": server.url, "pid": os.getpid()}), encoding="utf-8")
+    _instance_file().write_text(json.dumps({"url": server.url, "pid": os.getpid(),
+                                          "version": __version__, "source": str(Path(__file__).resolve())}),
+                                encoding="utf-8")
     log.info("Enoy %s listening on %s", __version__, server.url)
     url = server.url
     try:

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from fusion_ai import config as config_mod
-from fusion_ai import paths
+from enoy import config as config_mod
+from enoy import paths
 
 
 def test_defaults_are_valid():

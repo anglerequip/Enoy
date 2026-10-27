@@ -4,7 +4,7 @@
 // question appear as cards inside the conversation.
 // All model output is HTML-escaped: this page holds the API token.
 
-const TOKEN = document.querySelector('meta[name="fusion-token"]').content;
+const TOKEN = document.querySelector('meta[name="enoy-token"]').content;
 const NAME = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
 const MODELS = {
   auto: { title: "Auto", desc: "The smart router picks per message: Qwen for everyday work, Claude for hard problems. Claude asks you first." },
@@ -26,7 +26,7 @@ function codeProjects() { return S.projects.filter(p => !p.is_default && p.kind 
 // ---------------------------------------------------------------- helpers
 
 async function api(method, path, body) {
-  const opts = { method, headers: { "X-Fusion-Token": TOKEN } };
+  const opts = { method, headers: { "X-Enoy-Token": TOKEN } };
   if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
   const res = await fetch(path, opts);
   let data = {};
@@ -783,7 +783,7 @@ async function settingsTools() {
 }
 
 function settingsGeneral() {
-  const theme = lsGet("theme") || "system";
+  const theme = lsGet("theme") || "dark";
   const p = S.project;
   $("set-body").innerHTML = `
     <div class="set-section"><h3>Appearance</h3>
@@ -1480,7 +1480,7 @@ function connectEvents() {
 // ---------------------------------------------------------------- start
 
 async function start() {
-  applyTheme(lsGet("theme") || "system");
+  applyTheme(lsGet("theme") || "dark");
   closeSidebarIfNarrow();
   connectEvents();
   renderModelPicker();

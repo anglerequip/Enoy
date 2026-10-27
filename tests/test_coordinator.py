@@ -8,9 +8,9 @@ import pytest
 from conftest import FakeBackend
 from test_lead import delegate, plan_task
 from test_orchestrator import ADD_MULTIPLY, open_project
-from fusion_ai.backends.base import CODEX, CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest
-from fusion_ai.backends.codex import CodexBackend
-from fusion_ai.project import Workspace
+from enoy.backends.base import CODEX, CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest
+from enoy.backends.codex import CodexBackend
+from enoy.project import Workspace
 
 
 def setup(orc_factory, codex, claude=None, **kwargs):

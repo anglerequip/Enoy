@@ -1,6 +1,6 @@
 """Local HTTP API and static UI, bound to 127.0.0.1 only.
 
-Every /api request must carry the per-launch token (header X-Fusion-Token, or
+Every /api request must carry the per-launch token (header X-Enoy-Token, or
 ?token= for the event stream) and a localhost Host header. This stops web pages
 in a normal browser from driving the app (CSRF / DNS rebinding).
 """
@@ -29,7 +29,7 @@ from .orchestrator import Orchestrator, TaskError
 from .project import PathError
 from .redact import redact
 
-log = logging.getLogger("fusion.server")
+log = logging.getLogger("enoy.server")
 UI_DIR = Path(__file__).parent / "ui"
 
 
@@ -706,7 +706,7 @@ class App:
                 out = (run["stdout"] + "\n" + run["stderr"]).strip().splitlines()
                 runs.append({k: run[k] for k in ("id", "command", "status", "exit_code", "duration_s", "created")}
                             | {"tail": "\n".join(out[-40:])})
-            log_file = paths.logs_dir() / "fusion.log"
+            log_file = paths.logs_dir() / "enoy.log"
             tail = ""
             if log_file.exists():
                 with open(log_file, encoding="utf-8", errors="replace") as fh:
@@ -787,7 +787,7 @@ def make_handler(app: App):
     allowed_hosts: set[str] = set()
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "FusionAI"
+        server_version = "Enoy"
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *args):  # Route access logs to our logger, quietly.
@@ -830,7 +830,7 @@ def make_handler(app: App):
             if not url.path.startswith("/api/"):
                 self._static(url.path)
                 return
-            token = self.headers.get("X-Fusion-Token") or query.get("token")
+            token = self.headers.get("X-Enoy-Token") or query.get("token")
             if not token or not secrets.compare_digest(token, app.token):
                 self._json(401, {"error": "Missing or wrong token"})
                 return
@@ -871,7 +871,7 @@ def make_handler(app: App):
         def _static(self, path: str) -> None:
             if path in ("", "/"):
                 html = (UI_DIR / "index.html").read_text(encoding="utf-8")
-                html = html.replace("__FUSION_TOKEN__", app.token)
+                html = html.replace("__ENOY_TOKEN__", app.token)
                 self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                            {"Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; "
                                                        "img-src 'self' data:; connect-src 'self'"})

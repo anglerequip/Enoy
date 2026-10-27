@@ -406,7 +406,7 @@ Not verified:
 - The app is called **Enoy** in the window title, UI, prompts, shortcuts and docs.
 - The logo is `ui/logo.svg`, a hand-traced vector of the red mark you sent. The original image file was not available on disk, so the shape is a close approximation, not a pixel copy.
 - `launch/enoy.ico` is rendered from it by `launch/make_icon.py`, using headless Edge.
-- The Desktop and Start menu shortcuts are now "Enoy". The old "Fusion AI Workspace" ones were removed after checking they started this app.
+- The Desktop and Start menu shortcuts are now "Enoy". The old "Enoy" ones were removed after checking they started this app.
 
 **Not done or not verified:**
 
@@ -488,7 +488,7 @@ The full suite passed 315 tests.
    programs and windows; add programs under *Approved programs*. Real desktop actions were
    only tested with mocks.
 4. **The logo is a hand-traced vector of the image you sent;** the original file was not on
-   disk. To use the exact artwork, save it as SVG at `fusion_ai/ui/logo.svg` (or tell Claude
+   disk. To use the exact artwork, save it as SVG at `enoy/ui/logo.svg` (or tell Claude
    where the PNG is) and run `launch\make_icon.py`.
 5. Luau checking is a bracket-balance check only. Installing `selene` or `stylua`
    (Rokit/Aftman) gives real Luau checks, which Enoy will suggest as checks.

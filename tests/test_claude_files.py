@@ -6,10 +6,10 @@ import sys
 
 import pytest
 
-from fusion_ai.backends.base import CLAUDE, LOCAL
-from fusion_ai.project import Workspace
-from fusion_ai.tools import CLAUDE_FILES_NOTE, ToolError
-from fusion_ai.tools.agent import CloudFiles
+from enoy.backends.base import CLAUDE, LOCAL
+from enoy.project import Workspace
+from enoy.tools import CLAUDE_FILES_NOTE, ToolError
+from enoy.tools.agent import CloudFiles
 
 from test_lead import delegate, plan_task
 from test_orchestrator import open_project
@@ -43,7 +43,7 @@ def test_cloud_files_hide_private_globs_and_never_write(repo):
 
 
 def test_mcp_server_serves_the_project_read_only_and_redacted(repo, monkeypatch, capsys):
-    from fusion_ai.tools import mcp_server
+    from enoy.tools import mcp_server
     monkeypatch.setenv("ENOY_MCP_TOOLS", "list_files,read_file,search_code")
     monkeypatch.setenv("ENOY_MCP_CFG", json.dumps({"tools": {}}))
     monkeypatch.setenv("ENOY_MCP_WORKSPACE", str(repo))

@@ -1,7 +1,7 @@
 import pytest
 
-from fusion_ai import patches
-from fusion_ai.project import Workspace, sha256_bytes
+from enoy import patches
+from enoy.project import Workspace, sha256_bytes
 
 EDIT_OUTPUT = """I added a multiply function.
 
@@ -230,8 +230,8 @@ def test_whole_file_that_drops_most_lines_is_refused_but_edits_work(tmp_path):
 
 
 def test_agent_write_refuses_to_drop_code(tmp_path):
-    from fusion_ai.tools import ToolError
-    from fusion_ai.tools.agent import AgentFiles
+    from enoy.tools import ToolError
+    from enoy.tools.agent import AgentFiles
     (tmp_path / "styles.css").write_text(STYLES, encoding="utf-8")
     files = AgentFiles(Workspace(tmp_path), True, tmp_path / "bk")
     with pytest.raises(ToolError, match="placeholder"):

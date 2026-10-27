@@ -1,11 +1,11 @@
 "use strict";
-// Tests for fusion_ai/ui/markdown.js. Run by tests/test_markdown_js.py with Node.
+// Tests for enoy/ui/markdown.js. Run by tests/test_markdown_js.py with Node.
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 const assert = require("assert");
 
-const src = fs.readFileSync(path.join(__dirname, "..", "..", "fusion_ai", "ui", "markdown.js"), "utf8");
+const src = fs.readFileSync(path.join(__dirname, "..", "..", "enoy", "ui", "markdown.js"), "utf8");
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(src + "\nthis.MD = MD;", ctx);

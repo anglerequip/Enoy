@@ -1,7 +1,7 @@
 """Claude first: every message starts with Claude, which hands most of the writing to Qwen."""
 
-from fusion_ai import context as ctx
-from fusion_ai.backends.base import CLAUDE, LOCAL, ChatResult
+from enoy import context as ctx
+from enoy.backends.base import CLAUDE, LOCAL, ChatResult
 
 from test_lead import ADD_MULTIPLY, answers, delegate, kinds, plan_task
 from test_orchestrator import open_project
@@ -39,7 +39,7 @@ def test_balanced_style_keeps_the_old_lead(orc_factory, project):
 def test_claude_hands_the_reply_to_qwen_and_the_next_message_starts_with_claude(orc_factory):
     code = "def dedupe(items):\n    return list(dict.fromkeys(items))\n\nKeeps the first of each item."
     orc = first_orc(orc_factory, qwen=[code], claude=[HANDOFF, "MODE: answer\nYes, it keeps the order."])
-    from fusion_ai import paths
+    from enoy import paths
     pid = orc.open_project(str(paths.general_chat_dir()))["id"]
     task = orc.start_task(pid, "write me a function that removes duplicates from a list")
     assert answers(orc, task["id"]) == [(CLAUDE, "Qwen will write that for you."), (LOCAL, code)]
@@ -93,7 +93,7 @@ def test_lead_requests_use_the_lead_effort_and_team_work_keeps_claudes(orc_facto
 
 
 def test_effort_flag_per_request():
-    from fusion_ai.backends.claude_code import ClaudeCodeBackend
+    from enoy.backends.claude_code import ClaudeCodeBackend
     b = ClaudeCodeBackend({"effort": "high", "model": ""})
     flag = lambda args: args[args.index("--effort") + 1] if "--effort" in args else None  # noqa: E731
     assert flag(b.build_args("s", None)) == "high"

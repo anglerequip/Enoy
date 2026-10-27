@@ -7,11 +7,11 @@ import time
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai import paths
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.orchestrator import EventBus, Orchestrator, TaskError
-from fusion_ai.server import App, Server
-from fusion_ai.storage import Storage
+from enoy import paths
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.orchestrator import EventBus, Orchestrator, TaskError
+from enoy.server import App, Server
+from enoy.storage import Storage
 
 
 def make(cfg, tmp_path, qwen=None, synchronous=True):
@@ -97,7 +97,7 @@ def server(cfg, tmp_path):
 def call(srv, method, path, body=None):
     conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=10)
     conn.request(method, path, body=json.dumps(body) if body is not None else None,
-                 headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{srv.port}", "X-Fusion-Token": srv.app.token})
+                 headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{srv.port}", "X-Enoy-Token": srv.app.token})
     resp = conn.getresponse()
     data = json.loads(resp.read() or b"{}")
     conn.close()

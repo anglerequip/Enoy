@@ -1,6 +1,9 @@
 # Enoy
 
-*(formerly Fusion AI Workspace. Internal names such as the `fusion_ai` package and the `%LOCALAPPDATA%\FusionAI` data folder are unchanged, so existing chats and settings carry over.)*
+Version 0.2.0 uses the `enoy` Python package and `python -m enoy` launcher.
+Saved data lives in `%LOCALAPPDATA%\Enoy` (override with `ENOY_HOME`). The first
+launch imports data from the previous installation and keeps the original copy.
+
 
 A Windows desktop workspace for AI-assisted development. **Auto mode now starts
 with ChatGPT through your signed-in Codex CLI.** ChatGPT evaluates the request,
@@ -38,7 +41,7 @@ new line). Each answer shows who wrote it: **Qwen** (on your PC) or **Claude**.
   dropping them on the chat. Qwen 3.5 reads them on your PC. If Claude is asked, the
   approval card shows the images too; images go to Claude only after your OK and are
   never sent from a local-only chat. Pictures are stored once in
-  `%LOCALAPPDATA%\FusionAI\images`, converted to PNG/JPEG and shrunk to 1568 px if
+  `%LOCALAPPDATA%\Enoy\images`, converted to PNG/JPEG and shrunk to 1568 px if
   larger. TEAM ROLES works from text only, so messages with images are answered directly.
 - **Model menu** (in the message box, next to Send): *Auto* (Qwen first, Claude when
   needed), *Qwen* or *Claude*. Your pick always wins.

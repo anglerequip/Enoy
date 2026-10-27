@@ -248,7 +248,7 @@ def _write_mcp_config(names: list[str], env: dict) -> str:
     import sys
     root = Path(__file__).resolve().parents[2]
     cfg = {"mcpServers": {"enoy": {
-        "command": sys.executable, "args": ["-m", "fusion_ai.tools.mcp_server"],
+        "command": sys.executable, "args": ["-m", "enoy.tools.mcp_server"],
         "env": {"PYTHONPATH": str(root), "PYTHONIOENCODING": "utf-8", "ENOY_MCP_TOOLS": ",".join(names),
                 **{k: v if isinstance(v, str) else json.dumps(v) for k, v in env.items()}}}}}
     # One file per request: team runs can ask Claude for two tasks at once, each with its own project view.

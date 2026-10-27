@@ -3,9 +3,9 @@
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai.backends.base import CLAUDE, LOCAL, ChatMessage, ChatResult
-from fusion_ai.orchestrator import EventBus, Orchestrator, _fit_window
-from fusion_ai.storage import Storage
+from enoy.backends.base import CLAUDE, LOCAL, ChatMessage, ChatResult
+from enoy.orchestrator import EventBus, Orchestrator, _fit_window
+from enoy.storage import Storage
 
 
 def call(name, **args):
@@ -105,7 +105,7 @@ def test_guardrails_secrets_syntax_and_commands(cfg, tmp_path, proj):
 
 
 def test_general_chat_agent_has_no_file_tools(cfg, tmp_path):
-    from fusion_ai import paths
+    from enoy import paths
     orc, _ = agent_orc(cfg, tmp_path, ["Hello!"])
     pid = orc.open_project(str(paths.general_chat_dir()))["id"]
     orc.start_task(pid, "hey", backend=LOCAL)
@@ -125,7 +125,7 @@ def test_tool_conversation_is_kept_inside_the_window():
 
 
 def test_announcing_a_next_step_is_not_an_ending():
-    from fusion_ai.orchestrator import _announces_more
+    from enoy.orchestrator import _announces_more
     assert _announces_more("Changed todo.py. Now let me write comprehensive tests:")
     assert _announces_more("I read app.js. Let me search for where the dots are drawn.")
     for done in ("Added multiply; 4 tests pass.", "Done. Let me know if you want more.",

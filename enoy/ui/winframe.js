@@ -1,5 +1,5 @@
 "use strict";
-// Enoy's own window header in the desktop app (see fusion_ai/winframe.py).
+// Enoy's own window header in the desktop app (see enoy/winframe.py).
 // The page's header rows are the real Windows title bar (CSS app-region: drag);
 // these three buttons send the standard minimize / maximize / close commands.
 // In a browser tab /api/window reports custom: false and nothing here runs.

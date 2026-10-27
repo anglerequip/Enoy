@@ -1,4 +1,4 @@
-from fusion_ai.redact import REDACTED, contains_secret, is_secret_env_name, redact
+from enoy.redact import REDACTED, contains_secret, is_secret_env_name, redact
 
 
 def test_known_token_formats_are_redacted():

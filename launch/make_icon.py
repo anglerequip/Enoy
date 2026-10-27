@@ -1,4 +1,4 @@
-"""Build the Enoy Windows icon (launch/enoy.ico) from fusion_ai/ui/logo.svg.
+"""Build the Enoy Windows icon (launch/enoy.ico) from enoy/ui/logo.svg.
 
 Microsoft Edge (always present on Windows 10/11) renders the SVG headlessly at
 each icon size; the PNGs are packed into an .ico container (PNG entries are
@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SVG = ROOT / "fusion_ai" / "ui" / "logo.svg"
+SVG = ROOT / "enoy" / "ui" / "logo.svg"
 SIZES = (256, 64, 48, 32, 24, 16)
 EDGE_PATHS = [Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
               Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe")]

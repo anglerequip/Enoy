@@ -12,12 +12,12 @@ build/
 dist/
 *.egg-info/
 
-# App data never lives here (it is in %LOCALAPPDATA%\FusionAI), but keep stray copies out
+# App data never lives here (it is in %LOCALAPPDATA%\Enoy), but keep stray copies out
 *.db
 *.db-wal
 *.db-shm
 *.log
-.fusion/
+.enoy/
 
 # Secrets: never commit real keys or env files
 .env
@@ -30,8 +30,9 @@ dist/
 !fixtures/sample_project/.env
 !fixtures/sample_project/node_modules/
 
-# Old icon (replaced by launch/enoy.ico)
-launch/fusion.ico
+# Generated and unused icon variants
+launch/*.ico
+!launch/enoy.ico
 
 # Local tooling and editor settings
 .claude/

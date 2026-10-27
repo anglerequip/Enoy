@@ -1,7 +1,7 @@
 [project]
-name = "fusion-ai-workspace"
-version = "0.1.0"
-description = "Local-first AI development workspace: Qwen via Ollama, Claude via Claude Code."
+name = "enoy"
+version = "0.2.0"
+description = "Enoy: ChatGPT-led development with Codex, Claude and optional local Qwen."
 requires-python = ">=3.11"
 dependencies = ["pywebview==5.4"]
 
@@ -9,7 +9,7 @@ dependencies = ["pywebview==5.4"]
 dev = ["pytest==8.3.5"]
 
 [project.scripts]
-fusion-ai = "fusion_ai.app:main"
+enoy = "enoy.app:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

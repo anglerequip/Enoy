@@ -9,10 +9,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from fusion_ai import config as config_mod
-from fusion_ai.backends.base import BackendError, ChatMessage, ChatRequest
-from fusion_ai.backends.claude_code import ClaudeCodeBackend
-from fusion_ai.backends.ollama import OllamaBackend
+from enoy import config as config_mod
+from enoy.backends.base import BackendError, ChatMessage, ChatRequest
+from enoy.backends.claude_code import ClaudeCodeBackend
+from enoy.backends.ollama import OllamaBackend
 
 
 # ---------------------------------------------------------------- fake Ollama
@@ -257,7 +257,7 @@ def test_claude_success_uses_no_tools_and_stdin(fake_claude):
 
 
 def test_claude_defaults_to_opus_high_effort(fake_claude):
-    from fusion_ai import config as config_mod
+    from enoy import config as config_mod
 
     cfg, _ = config_mod.validate({})
     assert cfg["claude"]["model"] == "claude-opus-5-5" and cfg["claude"]["effort"] == "high"

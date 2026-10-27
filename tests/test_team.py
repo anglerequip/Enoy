@@ -5,9 +5,9 @@ import sys
 
 import pytest
 
-from fusion_ai import team as team_mod
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.project import Workspace
+from enoy import team as team_mod
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.project import Workspace
 
 from test_orchestrator import ADD_MULTIPLY, BREAK_SUBTRACT, FIX_SUBTRACT, open_project
 
@@ -317,8 +317,8 @@ def test_cancel_closes_the_team_graph(orc_factory, project):
 
 def test_interrupted_run_resumes_from_saved_graph(cfg, project, tmp_path, monkeypatch):
     from conftest import FakeBackend
-    from fusion_ai.orchestrator import Orchestrator
-    from fusion_ai.storage import Storage
+    from enoy.orchestrator import Orchestrator
+    from enoy.storage import Storage
 
     db = tmp_path / "f.db"
     cfg["permissions"]["auto_apply_patches"] = True
@@ -409,8 +409,8 @@ def test_messages_memory_and_activity_reflect_the_run(orc_factory, project):
 
 def test_team_state_persists(cfg, project, tmp_path, monkeypatch):
     from conftest import FakeBackend
-    from fusion_ai.orchestrator import Orchestrator
-    from fusion_ai.storage import Storage
+    from enoy.orchestrator import Orchestrator
+    from enoy.storage import Storage
 
     db = tmp_path / "f.db"
     cfg["permissions"]["auto_apply_patches"] = True
@@ -425,7 +425,7 @@ def test_team_state_persists(cfg, project, tmp_path, monkeypatch):
 
 
 def test_activity_board_shows_the_real_team(orc_factory, project):
-    from fusion_ai import activity
+    from enoy import activity
 
     arch = plan(task("T1", "Add power", ["calculator.py"]), task("T2", "Add a negative add test", ["tests/test_calculator.py"], ["T1"]))
     orc = team_orc(orc_factory, qwen=[ADD_POWER, ADD_TEST], claude=[arch])

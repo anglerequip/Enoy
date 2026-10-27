@@ -1,7 +1,7 @@
 # Troubleshooting
 
 Start with the **Diagnostics** screen: it shows the problem and a suggestion for most
-of the cases below. The log is at `%LOCALAPPDATA%\FusionAI\logs\fusion.log`.
+of the cases below. The log is at `%LOCALAPPDATA%\Enoy\logs\enoy.log`.
 
 ## Qwen shows "offline" / "Cannot reach Ollama"
 
@@ -77,7 +77,7 @@ forces the browser.
 ## "Enoy is already running"
 
 Another copy is open (check the taskbar). If no window is visible, end
-`pythonw.exe` in Task Manager, or delete `%LOCALAPPDATA%\FusionAI\instance.json`.
+`pythonw.exe` in Task Manager, or delete `%LOCALAPPDATA%\Enoy\instance.json`.
 
 ## Tasks show "interrupted"
 

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from fusion_ai import context as ctx
-from fusion_ai.backends.base import CLAUDE, LOCAL, ChatResult
-from fusion_ai.tools import FolderService, ToolError
-from fusion_ai.tools import folders
+from enoy import context as ctx
+from enoy.backends.base import CLAUDE, LOCAL, ChatResult
+from enoy.tools import FolderService, ToolError
+from enoy.tools import folders
 
 from test_agent import agent_orc, call
 from test_orchestrator import open_project
@@ -33,7 +33,7 @@ def empty(tmp_path):
 
 def test_enoy_knows_its_own_source():
     src = folders.enoy_source()
-    assert src and (Path(src) / "fusion_ai" / "ui" / "app.js").is_file()
+    assert src and (Path(src) / "enoy" / "ui" / "app.js").is_file()
 
 
 def test_scan_finds_folders_by_name_and_skips_system_folders(tmp_path, code):
@@ -45,7 +45,7 @@ def test_scan_finds_folders_by_name_and_skips_system_folders(tmp_path, code):
 
 def test_find_folders_tool_lists_known_folders_and_enoy(code):
     svc = FolderService("", [("my-app", str(code))], folders.enoy_source())
-    from fusion_ai.tools.registry import ToolContext
+    from enoy.tools.registry import ToolContext
     out = folders._find_folders({}, ToolContext(cfg={}, cancel=threading.Event(), services={"folders": svc}))
     paths = [f["path"] for f in out["folders"]]
     assert str(code) in paths and folders.enoy_source() in paths

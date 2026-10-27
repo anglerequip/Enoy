@@ -6,10 +6,10 @@ import json
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai.backends.base import CLAUDE, LOCAL
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.server import App, Server
-from fusion_ai.storage import Storage
+from enoy.backends.base import CLAUDE, LOCAL
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.server import App, Server
+from enoy.storage import Storage
 
 ADD = """<<<FILE notes.txt
 hello
@@ -31,7 +31,7 @@ def call(srv, method, path, body=None, token=True, host=None):
     conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=10)
     headers = {"Content-Type": "application/json", "Host": host or f"127.0.0.1:{srv.port}"}
     if token:
-        headers["X-Fusion-Token"] = srv.app.token
+        headers["X-Enoy-Token"] = srv.app.token
     conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
     resp = conn.getresponse()
     data = resp.read()
@@ -133,14 +133,14 @@ def test_followup_can_attach_files(server, project):
 
 def test_build_app_starts(app_home):
     """The real wiring (config, database, both adapters) starts without a window."""
-    from fusion_ai.app import build
+    from enoy.app import build
 
     app, orc = build(save_config=False)
     srv = Server(app).start()
     try:
         status, html = call(srv, "GET", "/", token=False)
         assert status == 200
-        assert (app_home / "fusion.db").exists()
+        assert (app_home / "enoy.db").exists()
     finally:
         srv.stop()
         orc.db.close()

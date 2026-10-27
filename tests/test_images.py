@@ -10,13 +10,13 @@ import zlib
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai import config as config_mod
-from fusion_ai import images
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ImageData
-from fusion_ai.backends.claude_code import ClaudeCodeBackend, _parse_json_output
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.server import App, Server
-from fusion_ai.storage import Storage
+from enoy import config as config_mod
+from enoy import images
+from enoy.backends.base import CLAUDE, LOCAL, BackendError, ChatMessage, ChatRequest, ImageData
+from enoy.backends.claude_code import ClaudeCodeBackend, _parse_json_output
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.server import App, Server
+from enoy.storage import Storage
 
 
 def png(color=(255, 0, 0)) -> bytes:
@@ -66,7 +66,7 @@ def test_ids_are_checked_against_path_tricks():
         with pytest.raises(images.ImageError):
             images.valid_ids([bad])
     with pytest.raises(images.ImageError):
-        images.load("..\\..\\fusion.db")
+        images.load("..\\..\\enoy.db")
     many = [images.store(png((i, 0, 0)))["id"] for i in range(images.MAX_PER_MESSAGE + 1)]
     with pytest.raises(images.ImageError, match="At most"):
         images.valid_ids(many)
@@ -89,7 +89,7 @@ def make(cfg, tmp_path, qwen=None, claude=None, vision=True):
 
 
 def general_project(orc):
-    from fusion_ai import paths
+    from enoy import paths
     return orc.open_project(str(paths.general_chat_dir()))["id"]
 
 
@@ -170,7 +170,7 @@ def test_team_chat_answers_image_messages_directly(cfg, tmp_path, project):
 # ---------------------------------------------------------------- backends
 
 def test_ollama_body_carries_base64_images(monkeypatch):
-    from fusion_ai.backends.ollama import OllamaBackend
+    from enoy.backends.ollama import OllamaBackend
     captured = {}
 
     backend = OllamaBackend(dict(config_mod.DEFAULTS["ollama"]))
@@ -257,7 +257,7 @@ def call(srv, method, path, body=None, token=True):
     conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=10)
     headers = {"Content-Type": "application/json", "Host": f"127.0.0.1:{srv.port}"}
     if token:
-        headers["X-Fusion-Token"] = srv.app.token
+        headers["X-Enoy-Token"] = srv.app.token
     conn.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
     resp = conn.getresponse()
     data = resp.read()
@@ -275,7 +275,7 @@ def test_upload_view_and_send_image_through_api(server):
     assert status == 200 and ctype == "image/png" and raw == png()
     assert call(server, "GET", f"/api/images/{img}", token=False)[0] == 401
     assert call(server, "GET", f"/api/images/{img}?token={server.app.token}", token=False)[0] == 200
-    assert call(server, "GET", "/api/images/..%2F..%2Ffusion.db")[0] == 404
+    assert call(server, "GET", "/api/images/..%2F..%2Fenoy.db")[0] == 404
     status, body, _ = call(server, "POST", "/api/images", {"data": base64.b64encode(b"GIF89a....").decode()})
     assert status == 400 and "PNG and JPEG" in body["error"]
     pid = call(server, "POST", "/api/projects/default")[1]["project"]["id"]

@@ -42,7 +42,7 @@ from .redact import redact
 from .routing import AttemptSignals, classify, decide, should_escalate, sounds_uncertain
 from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
 
-log = logging.getLogger("fusion.orchestrator")
+log = logging.getLogger("enoy.orchestrator")
 
 BACKEND_LABEL = {LOCAL: "Qwen (local)", CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
 MAX_READ_ROUNDS = 3  # How many times Qwen may ask for more project files in one answer.
@@ -1020,7 +1020,7 @@ class Orchestrator:
         s = self.cfg.get("tools", {})
         files = None
         if not general:
-            backup_dir = (self.backups_dir or Path(ws.root) / ".fusion" / "backups") / f"task-{task_id}"
+            backup_dir = (self.backups_dir or Path(ws.root) / ".enoy" / "backups") / f"task-{task_id}"
 
             def run(command: str) -> dict:
                 started = self.run_command(task["project_id"], command, task_id=task_id, wait=True)
@@ -2110,7 +2110,7 @@ class Orchestrator:
             raise TaskError("This change set is not waiting for approval.")
         task = self.db.get_task(cs["task_id"])
         ws = self.workspace(task["project_id"])
-        backup_dir = self.backups_dir or Path(ws.root) / ".fusion" / "backups"
+        backup_dir = self.backups_dir or Path(ws.root) / ".enoy" / "backups"
         names = ", ".join(f["path"] for f in cs["files"])
         self._act(task["id"], "tool.started", f"Writing change set #{cs_id} ({names}), with backups.", "system", "approval")
         try:
@@ -2606,7 +2606,7 @@ class Orchestrator:
         lines = ["Folders on this PC that you may need:"]
         if svc.source:
             lines.append(f"- Enoy's own source code (this app: its window, sidebar, status dots, chat, settings, "
-                         f"styles; Python in fusion_ai/, the interface in fusion_ai/ui/): {svc.source}")
+                         f"styles; Python in enoy/, the interface in enoy/ui/): {svc.source}")
         lines += [f"- {name}: {path}" for name, path in svc.known
                   if os.path.normcase(path) not in (os.path.normcase(svc.source), os.path.normcase(svc.current))]
         lines.append(f"This chat works in: {svc.current or 'no folder (general chat)'}. Work on code in another "
@@ -2962,9 +2962,9 @@ class Orchestrator:
 
         task = self._require(task_id)
         ws = self.workspace(task["project_id"])
-        folder = ws.root / ".fusion" / "handoff"
+        folder = ws.root / ".enoy" / "handoff"
         folder.mkdir(parents=True, exist_ok=True)
-        gitignore = ws.root / ".fusion" / ".gitignore"
+        gitignore = ws.root / ".enoy" / ".gitignore"
         if not gitignore.exists():
             gitignore.write_text("*\n", encoding="utf-8")
         brief_path = folder / f"task-{task_id}.md"

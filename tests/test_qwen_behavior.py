@@ -1,10 +1,10 @@
 """How Qwen is briefed and how it gets files: act-first instructions, file lookups, context-window fit."""
 
-from fusion_ai import context as ctx
-from fusion_ai.backends.base import CLAUDE, LOCAL
-from fusion_ai.orchestrator import MAX_READ_ROUNDS
-from fusion_ai.project import Workspace
-from fusion_ai.routing import classify
+from enoy import context as ctx
+from enoy.backends.base import CLAUDE, LOCAL
+from enoy.orchestrator import MAX_READ_ROUNDS
+from enoy.project import Workspace
+from enoy.routing import classify
 
 ADD_MULTIPLY = """Added multiply.
 <<<EDIT calculator.py

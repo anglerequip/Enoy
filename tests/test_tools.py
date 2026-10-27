@@ -7,17 +7,17 @@ import time
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai import paths
-from fusion_ai import tools as tools_mod
-from fusion_ai.backends.base import CLAUDE, LOCAL, ChatMessage, ChatResult
-from fusion_ai.backends.claude_code import ClaudeCodeBackend, _tool_events
-from fusion_ai.backends.ollama import _wire
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.storage import Storage
-from fusion_ai.tools import registry as reg_mod
-from fusion_ai.tools import system as sys_tools
-from fusion_ai.tools import web
-from fusion_ai.tools.registry import Tool, ToolError, ToolRunner, validate
+from enoy import paths
+from enoy import tools as tools_mod
+from enoy.backends.base import CLAUDE, LOCAL, ChatMessage, ChatResult
+from enoy.backends.claude_code import ClaudeCodeBackend, _tool_events
+from enoy.backends.ollama import _wire
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.storage import Storage
+from enoy.tools import registry as reg_mod
+from enoy.tools import system as sys_tools
+from enoy.tools import web
+from enoy.tools.registry import Tool, ToolError, ToolRunner, validate
 
 RAW = {
     "cpu": [{"Name": "Test CPU 9000  ", "Manufacturer": "Acme", "NumberOfCores": 8, "NumberOfLogicalProcessors": 16,
@@ -141,7 +141,7 @@ def test_html_reader_prefers_main_content():
 
 
 def test_weather_uses_smhi_and_falls_back_to_met_norway(cfg, monkeypatch):
-    from fusion_ai.tools import weather
+    from enoy.tools import weather
     weather._geo_cache.clear()
     now = time.strftime("%Y-%m-%dT%H:00:00Z", time.gmtime())
     smhi = {"referenceTime": "2026-01-01T00:00:00Z", "timeSeries": [
@@ -177,7 +177,7 @@ def test_weather_uses_smhi_and_falls_back_to_met_norway(cfg, monkeypatch):
 
 
 def test_search_reports_provider_and_limits(cfg, monkeypatch):
-    from fusion_ai.tools import search
+    from enoy.tools import search
     monkeypatch.setattr(search.keystore, "get", lambda name: None)
     monkeypatch.setattr(search, "get_json", lambda url, c, cancel=None, timeout=12: {"query": {"search": [
         {"title": "Hash table", "snippet": "<span>A</span> map", "timestamp": "2026-01-01"}]}})
@@ -362,7 +362,7 @@ def test_mcp_mode_builds_a_strict_config_and_leaves_safe_mode():
 def test_mcp_server_only_runs_offered_tools(monkeypatch, capsys):
     import io
     import sys as _sys
-    from fusion_ai.tools import mcp_server
+    from enoy.tools import mcp_server
     monkeypatch.setenv("ENOY_MCP_TOOLS", "get_cpu_info")
     monkeypatch.setenv("ENOY_MCP_CFG", json.dumps({"tools": {"permissions": {"web": True}},
                                                    "pc": {"profile": "observe", "hardware_read": True}}))
@@ -381,7 +381,7 @@ def test_mcp_server_only_runs_offered_tools(monkeypatch, capsys):
 
 
 def test_research_goes_to_claude_when_qwen_only_has_wikipedia(cfg, tmp_path, monkeypatch):
-    from fusion_ai.tools import search
+    from enoy.tools import search
     monkeypatch.setattr(search.keystore, "get", lambda name: None)
     cfg["lead"]["enabled"] = False
     cfg["claude"]["confirm_before_send"] = False
@@ -401,7 +401,7 @@ def test_research_goes_to_claude_when_qwen_only_has_wikipedia(cfg, tmp_path, mon
 
 
 def test_brave_stops_at_the_monthly_limit_and_falls_back(cfg, monkeypatch, tmp_path):
-    from fusion_ai.tools import search
+    from enoy.tools import search
     monkeypatch.setattr(search, "_usage_file", lambda: tmp_path / "brave-usage.json")
     monkeypatch.setattr(search.keystore, "get", lambda name: "key")
     sent = []

@@ -7,13 +7,13 @@ import threading
 import pytest
 
 from conftest import FakeBackend
-from fusion_ai import config as config_mod
-from fusion_ai import memory_guard, paths, pccontrol as pc, winproc
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.memory_guard import MODES, MemorySupervisor
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.server import App, Server
-from fusion_ai.storage import Storage
+from enoy import config as config_mod
+from enoy import memory_guard, paths, pccontrol as pc, winproc
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.memory_guard import MODES, MemorySupervisor
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.server import App, Server
+from enoy.storage import Storage
 
 MIB = winproc.MIB
 
@@ -535,7 +535,7 @@ def test_window_actions_need_assist_and_a_real_window(cfg, tmp_path, monkeypatch
 
 
 def test_hardware_question_uses_measured_facts_and_stays_local(cfg, tmp_path, monkeypatch):
-    from fusion_ai import hardware
+    from enoy import hardware
     monkeypatch.setattr(hardware, "inventory", lambda orc=None, max_age_s=30: {
         "cpu": {"name": "Test CPU 9000", "logical_processors": 16}, "memory": {"total_gb": 15.9, "free_gb": 6.0},
         "gpus": [{"name": "Test GPU", "vram_total_mb": 8192, "vram_used_mb": 1000, "driver": "1"}], "disks": [],
@@ -553,7 +553,7 @@ def test_hardware_question_uses_measured_facts_and_stays_local(cfg, tmp_path, mo
 
 
 def test_hardware_inventory_reads_this_pc():
-    from fusion_ai import hardware
+    from enoy import hardware
     inv = hardware.inventory(max_age_s=0)
     assert inv["cpu"]["logical_processors"] >= 1
     if winproc.IS_WINDOWS:
@@ -574,7 +574,7 @@ def server(cfg, tmp_path):
 def call(srv, method, path, body=None):
     conn = http.client.HTTPConnection("127.0.0.1", srv.port, timeout=20)
     conn.request(method, path, body=json.dumps(body) if body is not None else None,
-                 headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{srv.port}", "X-Fusion-Token": srv.app.token})
+                 headers={"Content-Type": "application/json", "Host": f"127.0.0.1:{srv.port}", "X-Enoy-Token": srv.app.token})
     resp = conn.getresponse()
     data = json.loads(resp.read() or b"{}")
     conn.close()

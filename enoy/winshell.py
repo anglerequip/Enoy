@@ -20,7 +20,7 @@ import sys
 from ctypes import wintypes
 from pathlib import Path
 
-log = logging.getLogger("fusion.winshell")
+log = logging.getLogger("enoy.winshell")
 
 APP_ID = "Enoy.Desktop"
 ICON = Path(__file__).resolve().parent.parent / "launch" / "enoy.ico"
@@ -130,7 +130,7 @@ def default_shortcuts() -> list[Path]:
 
 
 if __name__ == "__main__":
-    # Used by setup.ps1: python -m fusion_ai.winshell <shortcut.lnk> ...
+    # Used by setup.ps1: python -m enoy.winshell <shortcut.lnk> ...
     targets = [Path(a) for a in sys.argv[1:]] or default_shortcuts()
     for t in targets:
         print(("tagged " if tag_shortcut(t) else "skipped ") + str(t))

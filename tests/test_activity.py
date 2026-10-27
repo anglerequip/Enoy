@@ -4,10 +4,10 @@ import sys
 import threading
 import time
 
-from fusion_ai import activity
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.storage import Storage
+from enoy import activity
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.storage import Storage
 
 from test_orchestrator import ADD_MULTIPLY, open_project
 
@@ -170,7 +170,7 @@ def test_monitoring_never_calls_a_model(orc_factory, project):
 def test_restart_keeps_history_and_marks_interrupted(cfg, project, tmp_path):
     from conftest import FakeBackend
 
-    db_path = tmp_path / "fusion.db"
+    db_path = tmp_path / "enoy.db"
     storage = Storage(db_path)
     pid = storage.upsert_project(str(project), "project")["id"]
     task = storage.create_task(pid, "Explain divide", "Explain divide", "ask")
@@ -261,7 +261,7 @@ def test_cancel_reports_what_was_stopped(cfg, project, tmp_path):
 def test_pause_queues_new_tasks_across_restart(cfg, project, tmp_path):
     from conftest import FakeBackend
 
-    db_path = tmp_path / "fusion.db"
+    db_path = tmp_path / "enoy.db"
     backends = {LOCAL: FakeBackend(LOCAL, ["divide divides."]), CLAUDE: FakeBackend(CLAUDE)}
     orc = Orchestrator(Storage(db_path), cfg, backends, synchronous=True)
     pid = orc.open_project(str(project))["id"]

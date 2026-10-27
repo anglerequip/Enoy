@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from fusion_ai import commands
-from fusion_ai.config import DEFAULT_ALLOWLIST
+from enoy import commands
+from enoy.config import DEFAULT_ALLOWLIST
 
 
 @pytest.mark.parametrize("command,level", [

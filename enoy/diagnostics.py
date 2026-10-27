@@ -79,7 +79,7 @@ def collect(orchestrator, config_warnings: list[str]) -> dict:
                       "size (Settings > Local model) also helps a little.")
     if claude and not claude["available"]:
         advice.append("Claude is optional. Enoy keeps working locally without it.")
-    log_file = paths.logs_dir() / "fusion.log"
+    log_file = paths.logs_dir() / "enoy.log"
     tail = ""
     if log_file.exists():
         with open(log_file, encoding="utf-8", errors="replace") as fh:

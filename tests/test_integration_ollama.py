@@ -8,11 +8,11 @@ import time
 
 import pytest
 
-from fusion_ai import config as config_mod
-from fusion_ai.backends.base import CLAUDE, LOCAL, ChatMessage, ChatRequest
-from fusion_ai.backends.ollama import OllamaBackend
-from fusion_ai.orchestrator import EventBus, Orchestrator
-from fusion_ai.storage import Storage
+from enoy import config as config_mod
+from enoy.backends.base import CLAUDE, LOCAL, ChatMessage, ChatRequest
+from enoy.backends.ollama import OllamaBackend
+from enoy.orchestrator import EventBus, Orchestrator
+from enoy.storage import Storage
 
 pytestmark = pytest.mark.integration
 
@@ -48,7 +48,7 @@ def test_qwen_proposes_a_valid_change_through_the_orchestrator(qwen, project, tm
         settings = cfg["claude"]
 
         def status(self):
-            from fusion_ai.backends.base import BackendStatus
+            from enoy.backends.base import BackendStatus
             return BackendStatus(CLAUDE, False, "disabled for this test")
 
         def chat(self, request):
@@ -77,7 +77,7 @@ def test_qwen_proposes_a_valid_change_through_the_orchestrator(qwen, project, tm
 
 def test_qwen_agent_changes_and_checks_the_project(qwen, project, tmp_path):
     """Agent mode with the real model: it edits the files itself and runs the real tests."""
-    from fusion_ai.backends.base import BackendStatus
+    from enoy.backends.base import BackendStatus
     cfg, _ = config_mod.validate({})
     cfg["routing"]["workflow"] = "local_only"
     cfg["tools"]["agent"] = True

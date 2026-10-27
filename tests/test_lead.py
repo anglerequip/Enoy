@@ -9,10 +9,10 @@ import sys
 
 import pytest
 
-from fusion_ai import activity
-from fusion_ai import context as ctx
-from fusion_ai.backends.base import CLAUDE, LOCAL, BackendError
-from fusion_ai.project import Workspace
+from enoy import activity
+from enoy import context as ctx
+from enoy.backends.base import CLAUDE, LOCAL, BackendError
+from enoy.project import Workspace
 
 from test_orchestrator import ADD_MULTIPLY, BREAK_SUBTRACT, FIX_SUBTRACT, open_project
 
@@ -390,7 +390,7 @@ def test_team_does_not_resend_when_claude_changes_nothing_and_retry_asks_the_lea
 # Qwen's team tasks in agent mode -------------------------------------------------------------
 
 def _tool(name, **args):
-    from fusion_ai.backends.base import ChatResult
+    from enoy.backends.base import ChatResult
     return ChatResult(text="", backend=LOCAL, model="fake", tool_calls=[{"name": name, "arguments": args}])
 
 

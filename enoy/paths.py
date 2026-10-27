@@ -5,21 +5,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .legacy import data_home
+
 
 def app_home() -> Path:
     """Directory for all application state.
 
-    FUSION_AI_HOME overrides the default so tests and portable installs can
+    ENOY_HOME overrides the default so tests and portable installs can
     keep their data elsewhere.
     """
-    override = os.environ.get("FUSION_AI_HOME")
-    if override:
-        home = Path(override)
-    else:
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        home = Path(base) / "FusionAI"
-    home.mkdir(parents=True, exist_ok=True)
-    return home
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return data_home(Path(base))
 
 
 def sub_dir(name: str) -> Path:
@@ -33,7 +29,7 @@ def config_path() -> Path:
 
 
 def database_path() -> Path:
-    return app_home() / "fusion.db"
+    return app_home() / "enoy.db"
 
 
 def logs_dir() -> Path:

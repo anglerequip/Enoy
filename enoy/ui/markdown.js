@@ -116,15 +116,15 @@ const MD = (() => {
     quote: /^\s{0,3}>/,
     item: /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/,
     tableSep: /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/,
-    fusion: /^<<<(FILE|EDIT)\s+(.+)$/,
-    fusionOne: /^<<<(DELETE|RUN)\s+(.+?)\s*>>>$/,
+    enoy: /^<<<(FILE|EDIT)\s+(.+)$/,
+    enoyOne: /^<<<(DELETE|RUN)\s+(.+?)\s*>>>$/,
   };
   const indentOf = l => l.match(/^\s*/)[0].replace(/\t/g, "    ").length;
   const isTableStart = (lines, i) => lines[i].includes("|") && i + 1 < lines.length && RE.tableSep.test(lines[i + 1]) && lines[i + 1].includes("-");
   const startsBlock = (lines, i) => {
     const l = lines[i], t = l.trim();
     return RE.fence.test(l) || RE.heading.test(l) || RE.hr.test(l) || RE.quote.test(l) || RE.item.test(l)
-      || RE.fusion.test(t) || RE.fusionOne.test(t) || isTableStart(lines, i);
+      || RE.enoy.test(t) || RE.enoyOne.test(t) || isTableStart(lines, i);
   };
 
   function parse(text) {
@@ -147,14 +147,14 @@ const MD = (() => {
         blocks.push({ type: "code", lang: m[2].toLowerCase(), code: buf.join("\n"), closed, src: lines.slice(start, i).join("\n") });
         continue;
       }
-      if ((m = t.match(RE.fusion))) {
+      if ((m = t.match(RE.enoy))) {
         let closed = false;
         i++;
         while (i < lines.length) { if (lines[i].trim() === ">>>END") { closed = true; i++; break; } i++; }
-        blocks.push({ type: "fusion", verb: m[1], path: m[2], closed, src: lines.slice(start, i).join("\n") });
+        blocks.push({ type: "enoy", verb: m[1], path: m[2], closed, src: lines.slice(start, i).join("\n") });
         continue;
       }
-      if ((m = t.match(RE.fusionOne))) { blocks.push({ type: "fusion", verb: m[1], path: m[2], closed: true, src: line }); i++; continue; }
+      if ((m = t.match(RE.enoyOne))) { blocks.push({ type: "enoy", verb: m[1], path: m[2], closed: true, src: line }); i++; continue; }
       if ((m = line.match(RE.heading))) { blocks.push({ type: "heading", level: m[1].length, text: m[2], src: line }); i++; continue; }
       if (RE.hr.test(line)) { blocks.push({ type: "hr", src: line }); i++; continue; }
       if (RE.quote.test(line)) {
@@ -237,7 +237,7 @@ const MD = (() => {
           <span class="cb-actions"><button class="btn ghost small cb-save" data-action="save-code-artifact" title="Save this code in Artifacts">Save</button>
           <button class="btn ghost small" data-action="copy-code" title="Copy the code">Copy</button></span></div><pre><code>${highlight(b.code, b.lang)}</code></pre></div>`;
       }
-      case "fusion": {
+      case "enoy": {
         if (DUPES.has(b)) return `<span class="chip-dup" hidden></span>`;  // Same file again: one chip is enough.
         if (b.verb === "DELETE") return `<div class="chip-row"><span class="file-chip">🗑 Delete <code>${escape(b.path)}</code></span></div>`;
         if (b.verb === "RUN") return `<div class="chip-row"><span class="file-chip">▶ Suggested check <code>${escape(b.path)}</code>
@@ -269,7 +269,7 @@ const MD = (() => {
     const seen = new Set();
     DUPES = new Set();
     for (const b of blocks) {
-      if (b.type !== "fusion" || b.verb === "RUN") continue;
+      if (b.type !== "enoy" || b.verb === "RUN") continue;
       const key = b.verb + " " + b.path;
       if (seen.has(key)) DUPES.add(b); else seen.add(key);
     }
