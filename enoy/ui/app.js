@@ -1018,11 +1018,18 @@ async function openSettings(tab) {
 
 function renderSettings() {
   const tabs = [["general", "General"], ["appearance", "Colours"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
-  openModal(`<div class="set-nav"><h2>Settings</h2>${tabs.map(([k, l]) =>
+  openModal(`<div class="set-nav"><h2>Settings</h2>
+    <button class="set-nav-about ${S.settingsTab === "about" ? "active" : ""}" data-action="settings-tab" data-tab="about">About Enoy</button>
+    <div class="set-nav-divider" role="separator" aria-label="Settings sections">—</div>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
     <div class="set-body" id="set-body"><div class="muted">Loading…</div></div>`, true);
-  ({ general: settingsGeneral, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+  ({ about: settingsAbout, general: settingsGeneral, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+}
+
+function settingsAbout() {
+  $("set-body").innerHTML = `<div class="set-section"><h3>About Enoy</h3>
+    <p class="small muted">Enoy brings chat and coding into one desktop app. Ask questions in Chat, or open a project in Code and work with Codex and Claude Code. Review progress in Activity and manage your accounts, models, appearance, privacy, and updates in Settings.</p></div>`;
 }
 
 function toggleRow(sec, key, label, desc) {
@@ -1086,9 +1093,6 @@ function settingsGeneral() {
     <div class="set-section"><h3>Project</h3>
       <div class="set-row"><div class="lbl"><span>${p && !p.is_default ? esc(p.name) : "No project open"}</span><span class="d">${p && !p.is_default ? esc(p.path) : (mode() === "code" ? "Choose a folder for your development workspace." : "Open a folder in Code to work on a project.")}</span></div>
         <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
-    <div class="set-section"><h3>About</h3>
-      <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. Code uses your Codex or Claude Code sign-in. Regular ChatGPT uses your browser sign-in.
-      Native agents can edit the selected project directly. Delegated patch proposals follow your approval settings.</div></div>
     <div class="set-section"><h3>Accounts and setup</h3>
       <p class="small muted">Use your own ChatGPT and Claude accounts. Install missing tools, then open each provider to sign in.</p>
       <div class="provider-actions"><button class="btn" data-action="install-providers">Install missing tools</button>

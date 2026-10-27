@@ -272,6 +272,8 @@ details.thinking div { white-space: pre-wrap; max-height: 180px; overflow: auto;
 .set-nav button { border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
 .set-nav button:hover { background: var(--hover); }
 .set-nav button.active { background: var(--hover); font-weight: 600; }
+.set-nav button.set-nav-about { font-size: 12px; padding: 5px 10px; color: var(--muted); }
+.set-nav .set-nav-divider { height: 16px; display: flex; align-items: center; padding-left: 10px; color: var(--faint); font-size: 14px; line-height: 1; }
 .set-body { flex: 1; overflow-y: auto; padding: 22px 26px; display: flex; flex-direction: column; gap: 18px; }
 .set-section { display: flex; flex-direction: column; gap: 10px; }
 .set-section h3 { font-size: 14.5px; margin: 0; }
