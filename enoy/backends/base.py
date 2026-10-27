@@ -60,7 +60,9 @@ class ChatRequest:
     web_tools: bool = False            # Claude: allow Claude Code's own WebSearch and WebFetch for this request.
     enoy_tools: list[str] = field(default_factory=list)   # Claude: Enoy tools offered through Enoy's MCP server.
     enoy_env: dict = field(default_factory=dict)          # Settings the MCP server enforces (no secrets).
+    mcp_servers: dict = field(default_factory=dict)       # Explicit per-request shared integrations.
     effort: str | None = None          # Claude: --effort for this request only; None = the Claude setting.
+    model: str | None = None           # Per-request model override; None uses backend settings.
     workspace: str = ""               # Actual local working directory for native agent tools.
     native_tools: bool = False         # Native project tools, with the CLI's approval policy.
     access_mode: str = "workspace"     # workspace | full; full retains provider approval checks.

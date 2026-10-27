@@ -55,7 +55,7 @@ class CodexBackend:
 
     def status(self) -> BackendStatus:
         if not self.settings.get("enabled", True):
-            return BackendStatus(CODEX, False, "ChatGPT / Codex is disabled in Settings.")
+            return BackendStatus(CODEX, False, "Codex is disabled in Settings.")
         try:
             proc = subprocess.run(self._base_cmd() + ["login", "status"], capture_output=True,
                                   text=True, encoding="utf-8", errors="replace", timeout=15,
@@ -81,12 +81,21 @@ class CodexBackend:
         else:
             args += ["--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
                      "-c", "features.shell_tool=false"]
-        if self.settings.get("effort"):
-            args += ["-c", "model_reasoning_effort=" + json.dumps(self.settings["effort"])]
-        if self.settings.get("model"):
-            args += ["--model", self.settings["model"]]
+            if request and request.mcp_servers:
+                # MCP scene actions need a reviewer even without native shell tools.
+                # Keep the file sandbox read-only and route eligible requests to
+                # the same automatic reviewer used by native Workspace Access.
+                args += ["-c", 'approval_policy="on-request"']
+        effort = request.effort if request and request.effort is not None else self.settings.get("effort")
+        model = request.model if request and request.model is not None else self.settings.get("model")
+        if effort:
+            args += ["-c", "model_reasoning_effort=" + json.dumps(effort)]
+        if model:
+            args += ["--model", model]
         if request and request.enoy_tools:
-            values = {"command": sys.executable, "args": ["-m", "enoy.tools.mcp_server"],
+            from ..runtime import module_command
+            helper = module_command("enoy.tools.mcp_server")
+            values = {"command": helper[0], "args": helper[1:],
                       "startup_timeout_sec": 30}
             values.update({"env." + k: v if isinstance(v, str) else json.dumps(v)
                            for k, v in request.enoy_env.items()})
@@ -95,6 +104,17 @@ class CodexBackend:
             values["env.ENOY_MCP_TOOLS"] = ",".join(request.enoy_tools)
             for key, value in values.items():
                 args += ["-c", "mcp_servers.enoy." + key + "=" + json.dumps(value)]
+        if request:
+            if request.mcp_servers:
+                args += ["-c", 'approvals_reviewer="auto_review"']
+            if native_tools and "blender" not in request.mcp_servers:
+                args += ["-c", "mcp_servers.blender.enabled=false"]
+            for name, server in request.mcp_servers.items():
+                args += ["-c", f"mcp_servers.{name}.enabled=true"]
+                for key, value in server.items():
+                    entries = {"env." + k: v for k, v in value.items()} if key == "env" else {key: value}
+                    for setting, item in entries.items():
+                        args += ["-c", f"mcp_servers.{name}.{setting}=" + json.dumps(item)]
         for path in image_paths or []:
             args += ["--image", path]
         if native_tools and request and request.resume_session:
@@ -102,8 +122,13 @@ class CodexBackend:
         return args + ["-"]
 
     def chat(self, request: ChatRequest) -> ChatResult:
+        from ..blender import provider_turn
+        with provider_turn(request):
+            return self._chat(request)
+
+    def _chat(self, request: ChatRequest) -> ChatResult:
         if not self.settings.get("enabled", True):
-            raise BackendError("unavailable", "ChatGPT / Codex is disabled.")
+            raise BackendError("unavailable", "Codex is disabled.")
         if request.cancel.is_set():
             raise BackendError("cancelled", "Codex request cancelled.")
         if request.native_tools and (not request.workspace or not Path(request.workspace).is_dir()):
@@ -128,6 +153,9 @@ class CodexBackend:
                     except ValueError:
                         return
                     item = event.get("item") or {}
+                    # agent_message is public assistant text. Do not expose raw reasoning items.
+                    if event.get("type") == "item.completed" and item.get("type") == "agent_message" and request.on_thinking:
+                        request.on_thinking(item.get("text", ""))
                     if request.on_event and event.get("type") in ("item.started", "item.completed"):
                         kind = item.get("type", "")
                         if kind in ("command_execution", "file_change", "mcp_tool_call", "web_search"):
@@ -135,7 +163,8 @@ class CodexBackend:
                                 "summary": item.get("command") or item.get("query") or item.get("tool") or
                                     ", ".join(c.get("path", "") for c in item.get("changes", [])),
                                 "exit_code": item.get("exit_code"), "result_status": item.get("status", ""),
-                                "output": item.get("aggregated_output", "")})
+                                "output": item.get("aggregated_output") or
+                                    json.dumps(item.get("result") or item.get("error") or {}, ensure_ascii=False)})
                 stdout, stderr, returncode = run(
                     self._base_cmd() + self.build_args(image_paths, request.native_tools, request), prompt,
                     request.workspace if request.native_tools and request.workspace else workdir,
@@ -158,12 +187,15 @@ class CodexBackend:
             if event.get("type") in ("error", "turn.failed"):
                 error = str(event.get("message") or event.get("error") or "Codex failed")
         if returncode or error:
-            raise BackendError("failed", (error or stderr.strip() or "Codex failed")[:800])
+            message = (error or stderr.strip() or "Codex failed")[:800]
+            unavailable_model = "model" in message.lower() and any(s in message.lower() for s in
+                ("not supported", "does not exist", "not found", "not available", "unsupported", "do not have access"))
+            raise BackendError("model_missing" if unavailable_model else "failed", message)
         if not answers:
             raise BackendError("malformed", "Codex returned no assistant message.")
         text = "\n\n".join(answers)
         self.verified = True
         if request.on_token:
             request.on_token(text)
-        return ChatResult(text, CODEX, self.settings.get("model") or "Codex default", usage=usage,
+        return ChatResult(text, CODEX, request.model or self.settings.get("model") or "Codex default", usage=usage,
                           duration_s=time.monotonic() - started, session_id=session_id)

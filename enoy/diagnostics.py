@@ -67,7 +67,7 @@ def collect(orchestrator, config_warnings: list[str]) -> dict:
     claude = states.get('claude', {})
     advice = []
     if not codex.get('available'):
-        advice.append('ChatGPT / Codex is unavailable. Run codex login and refresh.')
+        advice.append('Codex is unavailable. Run codex login and refresh.')
     log_file = paths.logs_dir() / "enoy.log"
     tail = ""
     if log_file.exists():

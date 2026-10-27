@@ -262,6 +262,8 @@ class Storage:
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.executescript(SCHEMA)
         self._migrate()
+        if "history_saved_chars" not in {r["name"] for r in self._all("PRAGMA table_info(transmissions)")}:
+            self._exec("ALTER TABLE transmissions ADD COLUMN history_saved_chars INTEGER NOT NULL DEFAULT 0")
 
     def _migrate(self) -> None:
         """Add columns introduced after the first release to existing databases."""
@@ -930,11 +932,31 @@ class Storage:
     # Transmissions (what was sent to which backend) -----------------------------------
 
     def add_transmission(self, task_id: int, backend: str, purpose: str, files: list[dict], content: str) -> int:
+        # Compare only conversation text: context selection is a hypothetical
+        # full-history baseline, not a measurement of provider billing or caches.
+        saved = 0
+        marker = "Shared state snapshot (recent records; any omissions are marked):\n"
+        if marker in content:
+            try:
+                snapshot, _ = json.JSONDecoder().raw_decode(content.split(marker, 1)[1])
+                sent = sum(len(m.get("content") or "") for m in snapshot["conversation"])
+                full = sum(len(m.get("content") or "") for m in self.messages(task_id))
+                saved = max(0, full - sent)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                pass
         cur = self._exec(
-            "INSERT INTO transmissions (task_id, backend, purpose, files, chars, content, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (task_id, backend, purpose, json.dumps(files), len(content), redact(content), time.time()),
+            "INSERT INTO transmissions (task_id, backend, purpose, files, chars, content, created, history_saved_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, backend, purpose, json.dumps(files), len(content), redact(content), time.time(), saved),
         )
         return cur.lastrowid
+
+    def context_savings(self) -> dict:
+        rows = self._all("SELECT backend, COUNT(*) AS requests, SUM(history_saved_chars) AS saved_chars "
+                         "FROM transmissions WHERE usage != '' AND backend IN ('codex', 'claude') GROUP BY backend")
+        for row in rows:
+            row["estimated_tokens_saved"] = int(row["saved_chars"] / 3)
+        return {"providers": rows, "estimated_tokens_saved": sum(r["estimated_tokens_saved"] for r in rows),
+                "method": "Conversation characters omitted per completed Enoy request, divided by 3, compared with sending the full conversation each time. Tracking starts with this update; older requests contribute zero. This is a history-only estimate, not billed tokens, money saved or extra subscription quota. Native tool traffic and provider caching are excluded."}
 
     def set_transmission_usage(self, transmission_id: int, usage: str) -> None:
         self._exec("UPDATE transmissions SET usage = ? WHERE id = ?", (usage, transmission_id))

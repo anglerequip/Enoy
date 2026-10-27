@@ -5,19 +5,28 @@
 // All model output is HTML-escaped: this page holds the API token.
 
 const TOKEN = document.querySelector('meta[name="enoy-token"]').content;
-const NAME = { codex: "ChatGPT / Codex", qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
+const NAME = { codex: "Codex", qwen: "Qwen", claude: "Claude", team: "Team", enoy: "Enoy" };
 const MODELS = {
   auto: { title: "Auto", desc: "ChatGPT evaluates the request and delegates to Codex or Claude." },
-  codex: { title: "ChatGPT / Codex", desc: "Uses your signed-in Codex CLI." },
+  codex: { title: "Codex", desc: "Uses your signed-in Codex CLI." },
   claude: { title: "Claude", desc: "Strongest reasoning. Uses your Claude plan." },
 };
 const S = {
+  startingModel: null,
   status: null, projects: [], project: null, facts: null, chats: [], chatId: null, chat: null,
   model: lsGet("model") || "auto", attached: [], stream: {}, shown: {}, thinking: {}, drawer: false,
   tree: null, search: "", searchResults: null, preview: null, config: null, cfgMeta: null,
   settingsTab: "general", images: [], streamDone: {},
 };
 const MAX_IMAGES = 5;
+const SLASH_COMMANDS = [
+  { name: "/help", desc: "Show available commands" },
+  { name: "/compact", desc: "Compact earlier context and reset provider sessions" },
+  { name: "/new", desc: "Start a new chat" },
+  { name: "/model", desc: "Choose who answers" },
+  { name: "/status", desc: "Refresh provider status" },
+  { name: "/resume", desc: "Resume a stopped or failed chat" },
+];
 function imgUrl(id) { return `/api/images/${id}?token=${encodeURIComponent(TOKEN)}`; }
 // Chat mode = plain chats (no folder); Code mode = chats about a project folder.
 function mode() { return S.project && (S.project.is_default || S.project.kind === "space") ? "chat" : "code"; }
@@ -46,8 +55,10 @@ function md(text, streaming = false) { return streaming ? MD.render(text, true) 
 function clock(ts) { return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 // Qwen's mark: a "Q" drawn as a ring with a tail, in the tile's ink color (the tile flips with the theme).
 const QWEN_MARK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="11.5" r="6.8"/><path d="M13.2 13.6 18.4 19.6"/></svg>`;
+// Outlined Codex terminal mark, matching the supplied reference.
+const CODEX_MARK = `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="codex-outline" d="M15 6C18 3 23 3 26 5C31 2 38 6 38 12C44 14 46 21 42 26C44 32 40 39 34 39C31 45 24 46 19 42C13 45 6 41 6 35C1 32 1 25 5 21C2 14 7 7 15 6Z"/><path d="m15 18 5 6-5 6"/><path class="codex-cursor" d="M25 30h8"/></svg>`;
 function avatar(b) {
-  if (b === "codex") return `<span class="avatar team">◎</span>`;
+  if (b === "codex") return `<span class="avatar codex">${CODEX_MARK}</span>`;
   if (b === "team") return `<span class="avatar team">◆</span>`;
   if (b === "enoy") return `<img class="avatar enoy" src="/static/logo.svg" alt="">`;
   return b === "claude" ? `<span class="avatar claude">✳</span>` : `<span class="avatar qwen">${QWEN_MARK}</span>`;
@@ -145,9 +156,12 @@ async function loadChats() {
   S.chats = (await api("GET", `/api/tasks?project_id=${S.project.id}&limit=200`)).tasks;
 }
 
+let chatLoadVersion = 0;
 async function loadChat(id) {
+  const version = ++chatLoadVersion;
   S.chatId = id;
-  S.chat = await api("GET", `/api/tasks/${id}`);
+  const chat = await api("GET", `/api/tasks/${id}`);
+  if (version === chatLoadVersion && S.chatId === id) S.chat = chat;
 }
 
 // ---------------------------------------------------------------- sidebar
@@ -155,6 +169,11 @@ async function loadChat(id) {
 function renderSidebar() {
   const p = S.project;
   const m = mode();
+  document.documentElement.dataset.mode = m;
+  $("mode-caption").textContent = m === "chat" ? "A little space to think" : "Your development workspace";
+  $("mode-indicator").textContent = m === "chat" ? "Chat" : "Code workspace";
+  $("workspace-context").innerHTML = m === "code" ? `<span class="workspace-label">WORKSPACE</span><span class="workspace-path" title="${esc(p?.path || "")}">${esc(p?.path || "Choose a project folder to get started")}</span><button class="btn small ghost" data-action="pick-folder">${p ? "Change folder" : "Open folder"}</button>` : "";
+  $("workspace-context").classList.toggle("hidden", m !== "code");
   document.querySelectorAll("#mode-switch button").forEach(b => {
     const on = b.dataset.mode === m;
     b.classList.toggle("on", on);
@@ -185,8 +204,133 @@ function renderSidebar() {
 
 function renderStatusLine() {
   const el = $("status-line");
-  if (!S.status) { el.textContent = "Connecting to Enoy…"; return; }
-  el.innerHTML = ["codex", "claude"].map(p => `<span class="pill"><span class="dot ${S.status[p]?.available ? "ok" : "bad"}"></span>${NAME[p]} ${S.status[p]?.available ? "ready" : "unavailable"}</span>`).join("") + `<span class="settings-link">Settings</span>`;
+  el.innerHTML = ["codex", "claude"].map(p => {
+    const ready = S.status?.[p]?.available;
+    const label = !S.status ? "Unknown" : ready ? "Ready" : "Unavailable";
+    return `<button class="provider-button" data-action="provider-status" data-provider="${p}" aria-label="${NAME[p]}: ${label}. View status">
+      <span class="provider-mark" aria-hidden="true">${p === "codex" ? CODEX_MARK : "✳"}</span>
+      <span class="provider-label">${NAME[p]}<span class="provider-state"><span class="dot ${!S.status ? "" : ready ? "ok" : "bad"}"></span>${label}</span></span><span class="provider-arrow" aria-hidden="true">›</span></button>`;
+  }).join("");
+}
+
+let providerDialog = 0;
+function usageHtml(provider) {
+  const data = S.usage?.[provider];
+  const now = Date.now() / 1000;
+  const windows = data?.windows || [];
+  return `<section class="usage-panel" aria-label="Subscription usage"><div class="usage-heading"><h3>Usage remaining</h3><span class="usage-source">${esc(data?.source || (provider === "claude" ? "Claude subscription" : "Subscription"))}</span></div>
+    ${windows.length ? windows.map(w => {
+      const expired = w.resets_at != null && w.resets_at <= now;
+      const stale = data.source !== "Manual snapshot" && now - data.checked_at > 300;
+      const hours = Math.max(0, Math.ceil((w.resets_at - now) / 60));
+      const until = hours >= 60 ? `${Math.floor(hours / 60)}h ${hours % 60}m` : `${hours}m`;
+      return `<div class="usage-window"><div class="usage-heading"><span>${esc(w.label)}</span><strong>${expired ? "Update needed" : `${stale ? "Last reported " : ""}${Number(w.remaining_percent)}% left`}</strong></div>
+        ${expired ? "" : `<progress max="100" value="${Number(w.remaining_percent)}" aria-label="${esc(w.label)} remaining"></progress>`}
+        <div class="small muted">${w.resets_at == null ? "Reset time not reported" : `${expired ? "Reported reset passed · refresh or update this snapshot" : `Resets in ${until}`}<br>${esc(new Date(w.resets_at * 1000).toLocaleString())}`}</div></div>`;
+    }).join("") : `<p class="small muted">${esc(data?.detail || "Usage has not been loaded yet.")}</p>`}
+    ${windows.length && data?.detail ? `<p class="small muted">${esc(data.detail)}</p>` : ""}
+    ${data?.checked_at ? `<p class="small muted">${data.source === "Manual snapshot" ? "Entered" : "Checked"} ${esc(new Date(data.checked_at * 1000).toLocaleString())} · times shown locally</p>` : ""}
+    <div class="provider-actions"><button class="btn" data-action="usage-refresh" data-provider="${provider}">Refresh usage</button>${provider === "codex" ? "" : `<a class="btn" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">Open Claude Usage</a><button class="btn" data-action="usage-edit">Update snapshot</button>`}</div></section>`;
+}
+
+async function refreshUsage(provider, refresh = false) {
+  const version = providerDialog;
+  const dialog = $("provider-dialog");
+  const feedback = $("provider-feedback");
+  if (feedback) feedback.textContent = "Loading usage…";
+  try {
+    S.usage = await api("GET", `/api/usage${refresh ? "?refresh=1" : ""}`);
+    if (version === providerDialog && $("provider-dialog") === dialog && !$("modal").classList.contains("hidden")) showProviderStatus(provider);
+  } catch (e) {
+    if (version === providerDialog && $("provider-dialog") === dialog) showProviderStatus(provider, e.message, true);
+  }
+}
+
+function editClaudeUsage() {
+  ++providerDialog;
+  openModal(`<h2>Claude usage snapshot</h2><p class="small muted">Copy the percentage used and reset times from Claude’s Usage page. Leave both fields empty to omit a window. These values are manual; Enoy won’t infer a new quota after a reset.</p>
+    ${[["five_hour", "5 hours"], ["seven_day", "Weekly"]].map(([key, label]) => `<div class="usage-panel"><h3>${label}</h3><label class="field">Used (%)<input id="usage-${key}-used" type="number" min="0" max="100" step="0.1"></label><label class="field">Resets at (your local time)<input id="usage-${key}-reset" type="datetime-local"></label></div>`).join("")}
+    <p id="usage-error" class="small danger-text" role="status"></p><div class="provider-actions"><button class="btn primary" data-action="usage-save">Save snapshot</button><button class="btn" data-action="provider-status" data-provider="claude">Cancel</button></div>`);
+}
+
+async function saveClaudeUsage() {
+  const version = providerDialog;
+  const form = $("usage-error");
+  const body = {};
+  try {
+    for (const key of ["five_hour", "seven_day"]) {
+      const used = $("usage-" + key + "-used").value;
+      const reset = $("usage-" + key + "-reset").value;
+      if (!used && !reset) continue;
+      const timestamp = new Date(reset).getTime() / 1000;
+      if (used === "" || !Number.isFinite(Number(used)) || Number(used) < 0 || Number(used) > 100 || !Number.isFinite(timestamp) || timestamp <= Date.now() / 1000) throw new Error("Enter a percentage from 0 to 100 and a future reset time for each window.");
+      body[key] = { used_percent: Number(used), resets_at: timestamp };
+    }
+    const saved = await api("POST", "/api/usage/claude", body);
+    S.usage = { ...S.usage, claude: { ...saved, detail: "Manual snapshot. Update from Claude’s Usage page." } };
+    if (version === providerDialog && $("usage-error") === form && !$("modal").classList.contains("hidden")) showProviderStatus("claude", "Usage snapshot saved.");
+  } catch (e) { if ($("usage-error") === form && form) form.textContent = e.message; }
+}
+
+async function showTokenSavings() {
+  ++providerDialog;
+  openModal(`<div id="savings-loading"><h2>Estimated token savings</h2><p role="status">Loading Enoy records…</p><button class="btn" data-action="close-modal">Close</button></div>`);
+  const version = providerDialog;
+  const loading = $("savings-loading");
+  try {
+    const data = await api("GET", "/api/usage/savings");
+    if (version !== providerDialog || $("savings-loading") !== loading || $("modal").classList.contains("hidden")) return;
+    openModal(`<h2>Estimated token savings</h2><div class="usage-total">≈ ${Number(data.estimated_tokens_saved).toLocaleString()}</div><p class="muted">History tokens avoided by Enoy</p>
+      ${["codex", "claude"].map(p => `<div class="usage-window usage-heading"><span>${NAME[p]}</span><strong>≈ ${Number(data.providers.find(r => r.backend === p)?.estimated_tokens_saved || 0).toLocaleString()}</strong></div>`).join("")}
+      <p class="small muted">${esc(data.method)}</p><button class="btn" data-action="close-modal">Close</button>`);
+  } catch (e) { if (version === providerDialog && $("savings-loading") === loading && !$("modal").classList.contains("hidden")) openModal(`<h2>Estimated token savings</h2><p role="alert">${esc(e.message)}</p><button class="btn" data-action="token-savings">Retry</button><button class="btn" data-action="close-modal">Close</button>`); }
+}
+
+let launchedProvider = null;
+window.addEventListener("focus", async () => {
+  const provider = launchedProvider;
+  if (!provider) return;
+  launchedProvider = null;
+  try {
+    S.status = await api("GET", "/api/status?refresh=1");
+    renderStatusLine(); renderModelPicker();
+    if ($("provider-dialog")?.dataset.provider === provider && !$("modal").classList.contains("hidden")) showProviderStatus(provider, "Status checked after returning from the terminal.");
+  } catch (e) { toast(e.message, true); }
+});
+function showProviderStatus(provider, message = "", bad = false) {
+  if (!["codex", "claude"].includes(provider)) return;
+  const st = S.status?.[provider];
+  const enabled = S.config?.[provider]?.enabled !== false;
+  openModal(`<div id="provider-dialog" data-provider="${provider}">
+    <div class="provider-dialog-head"><span class="provider-mark" aria-hidden="true">${provider === "codex" ? CODEX_MARK : "✳"}</span><div><h2>${NAME[provider]}</h2><span class="provider-state"><span class="dot ${!st ? "" : st.available ? "ok" : "bad"}"></span>${!st ? "Status unknown" : st.available ? "Ready" : "Unavailable"}</span></div></div>
+    <p class="provider-detail">${esc(st?.detail || "Check status to connect to Enoy.")}</p>
+    ${st?.model ? `<p class="small muted">Model: ${esc(st.model)}</p>` : ""}
+    ${usageHtml(provider)}
+    <p class="small muted">Enoy uses the signed-in ${provider === "codex" ? "Codex" : "Claude Code"} CLI. Checking status sends no model request.</p>
+    <p id="provider-feedback" class="small ${bad ? "danger-text" : "muted"}" role="status">${esc(message)}</p>
+    <div class="provider-actions"><button class="btn" data-action="provider-check" data-provider="${provider}">Check status</button>
+    ${enabled ? `<button class="btn primary" data-action="provider-launch" data-provider="${provider}" data-launch="${st?.available ? "launch" : "login"}">${st?.available ? "Launch CLI" : "Launch & sign in"}</button>` : `<button class="btn primary" data-action="open-settings" data-tab="models">Enable in Settings</button>`}
+    <button class="btn ghost" data-action="close-modal">Close</button></div></div>`);
+}
+async function providerAction(el, check = false) {
+  const provider = el.dataset.provider;
+  const version = ++providerDialog;
+  const dialog = $("provider-dialog");
+  if (!dialog) return;
+  dialog.querySelectorAll("button").forEach(b => { b.disabled = true; });
+  $("provider-feedback").textContent = check ? "Checking status…" : "Opening terminal…";
+  let message, failed = false;
+  try {
+    if (check) {
+      S.status = await api("GET", "/api/status?refresh=1");
+      renderStatusLine(); renderModelPicker();
+      message = "Status checked.";
+    } else {
+      message = (await api("POST", `/api/providers/${provider}/launch`, { action: el.dataset.launch })).message;
+      launchedProvider = provider;
+    }
+  } catch (e) { message = e.message; failed = true; }
+  if (version === providerDialog && $("provider-dialog") === dialog && !$("modal").classList.contains("hidden")) showProviderStatus(provider, message, failed);
 }
 
 // ---------------------------------------------------------------- top bar
@@ -200,7 +344,7 @@ function renderModelPicker() {
   if (!el) return;
   const m = MODELS[S.model] || MODELS.auto;
   el.innerHTML = `<button class="picker-btn" data-action="model-menu" title="Who answers: ${esc(m.desc)}">
-    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${m.title}${CHEV}</button>`;
+    ${S.model === "auto" ? `<img class="mini-mark" src="/static/logo.svg" alt="">` : avatar(S.model)} ${mode() === "chat" && S.model === "auto" ? "ChatGPT" : m.title}${CHEV}</button>`;
 }
 
 function teamOn() { return S.chat ? !!S.chat.task.state.team : !!S.team; }
@@ -244,19 +388,22 @@ function renderThread(forceBottom = false) {
     const general = S.project && S.project.is_default;
     if (!S.project) {
       $("thread").innerHTML = `<div class="hello">
-        <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">Code</h1>
-        <p>Open a project folder to let Enoy read and change its code, or just type below and pick the folder when you send. Changes always wait for your OK.</p>
+        <div class="home-eyebrow">ENOY / CODE</div>
+        <h1 class="serif">A clear space to build.</h1>
+        <p>Open a project, describe the work, and keep the files, changes and results together.</p>
         <div class="suggest"><button data-action="pick-folder">Open folder…</button></div></div>`;
       return;
     }
-    const tips = general
-      ? ["Explain closures in JavaScript", "Write a Luau function that shuffles a table", "What is a race condition?"]
+    const chatting = mode() === "chat";
+    const tips = chatting
+      ? ["Help me put an idea into words", "Explain something simply", "Plan something with me"]
       : ["Give me an overview of this project", "Find and fix a bug in the main file", "Add tests for the most important function"];
     $("thread").innerHTML = `<div class="hello">
-      <h1 class="serif"><img class="hello-mark" src="/static/logo.svg" alt="">${greet}</h1>
-      <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "Ask anything, or attach an image. Switch to Code in the sidebar to work on a project folder." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>.`}</p>
-      ${!codexOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">ChatGPT / Codex is unavailable. Run codex login, then refresh status. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
-      <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic">${TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
+      <div class="home-eyebrow">${chatting ? "A MOMENT FOR YOUR IDEAS" : "ENOY / CODE"}</div>
+      <h1 class="serif">${chatting ? `${greet}.` : "What are we building?"}</h1>
+      <p>${S.project && S.project.kind === "space" ? `In project <strong>${esc(S.project.name)}</strong>.${S.project.instructions ? " Its instructions apply to this chat." : ""}` : general ? "A question, a rough idea, or something on your mind. Start wherever you are." : `Working in <strong>${esc(S.project ? S.project.name : "")}</strong>. Describe a change or explore the code.`}</p>
+      ${!codexOk() && S.status && !coordinatorOn() ? `<p style="margin-top:10px;color:var(--bad)">Codex is unavailable. Run codex login, then refresh status. <a href="#" data-action="open-settings" data-tab="status">Details</a></p>` : ""}
+      <div class="suggest">${tips.map((t, i) => `<button data-action="suggest" data-text="${esc(t)}"><span class="tip-ic" aria-hidden="true">${chatting ? ["✦", "◌", "↗"][i] : TIP_ICONS[i % TIP_ICONS.length]}</span><span>${esc(t)}</span></button>`).join("")}</div></div>`;
     return;
   }
   main.classList.remove("empty");
@@ -334,6 +481,21 @@ function handoffText(e) {
   return `${who} took over · ${why}`;
 }
 
+function modelLabel(info) {
+  if (!info || !info.model) return "";
+  const names = {"gpt-6.1-sol":"GPT-6.1 Sol", "gpt-6-luna":"GPT-6 Luna"};
+  return `${names[info.model] || info.model}${info.effort ? ` · ${info.effort} effort` : ""}`;
+}
+function messageModelInfo(m) {
+  const rows = (S.chat?.transmissions || []).filter(t => t.backend === m.backend && t.created <= m.created).sort((a,b) => b.created - a.created);
+  for (const t of rows) {
+    try { const info=JSON.parse(t.usage || "{}"); if (info.model) return info; } catch (_) { /* older usage format */ }
+  }
+  return {};
+}
+function progressHtml(notes, id = "") {
+  return `<details class="thinking" open ${id ? `id="${id}-wrap"` : ""}><summary>Progress summary</summary><div ${id ? `id="${id}"` : ""} style="white-space:pre-wrap">${esc((notes || []).join("\n\n") || "Waiting for a provider progress update.")}</div></details>`;
+}
 function messageHtml(m, isLast) {
   if (m.role === "user") {
     const pics = (m.images || []).map(id => `<a href="#" data-action="view-image" data-id="${id}"><img src="${imgUrl(id)}" alt="Attached image" loading="lazy"></a>`).join("");
@@ -341,8 +503,9 @@ function messageHtml(m, isLast) {
   }
   const b = m.backend || "enoy";
   return `<div class="msg-ai" data-msg-id="${m.id}">
-    <div class="ai-head">${avatar(b)}${NAME[b] || b}<span class="where">${b === "qwen" ? "· on your PC" : ""}</span></div>
+    <div class="ai-head">${avatar(b)}${NAME[b] || b}<span class="where">${esc(modelLabel(messageModelInfo(m)))}</span></div>
     <div class="ai-body">${md(m.content)}</div>
+    ${["codex","claude"].includes(b) ? progressHtml(messageModelInfo(m).progress || ["Response completed. No provider progress updates were recorded for this older message."]) : ""}
     <div class="ai-actions">
       <button data-action="copy-msg" data-id="${m.id}">Copy</button>
       <button data-action="save-artifact" data-id="${m.id}" title="Keep this answer in Artifacts">Save as artifact</button>
@@ -430,8 +593,9 @@ function statusHtml(t) {
   if ((t.workflow === "team" || run.lead) && ["running", "queued"].includes(t.status)) {
     const who = run.lead ? `${avatar(t.workflow === "chatgpt_leads" ? "codex" : "claude")}${t.workflow === "chatgpt_leads" ? "ChatGPT" : "Claude"}<span class="where">· leading · team ${esc((run.status || "working").replace(/_/g, " "))}</span>`
       : `${avatar("team")}Team<span class="where">· ${esc(run.status || "working")}</span>`;
-    return `<div class="msg-ai live"><div class="ai-head">${who}</div>
+    return `<div class="msg-ai live"><div class="ai-head">${who}<span class="where" id="live-model">${esc(modelLabel(state.active_agent))}</span></div>
       <div class="ai-body streaming" id="live-body"></div>
+      ${progressHtml(state.active_agent?.progress, "live-thinking")}
       <div id="live-wait"><span class="typing"><span></span><span></span><span></span></span></div>
       <div class="small muted">Open <a href="#" data-action="toggle-activity">Activity</a> to see each role, its model and why.</div></div>`;
   }
@@ -452,11 +616,11 @@ function statusHtml(t) {
         <button class="btn ghost" data-action="stop">Cancel the run</button></div></div>`;
   }
   if (["running", "queued"].includes(t.status)) {
-    const b = t.owner || "codex";
+    const b = state.active_agent?.provider || t.owner || "codex";
     return `<div class="msg-ai live">
-      <div class="ai-head">${avatar(b)}${NAME[b]}<span class="where">${b === "qwen" ? "· on your PC" : ""}</span></div>
-      <details class="thinking hidden" id="live-thinking-wrap"><summary>Thinking</summary><div id="live-thinking"></div></details>
+      <div class="ai-head">${avatar(b)}${NAME[b]}<span class="where" id="live-model">${esc(modelLabel(state.active_agent) || "Selecting model…")}</span></div>
       <div class="ai-body streaming" id="live-body"></div>
+      ${progressHtml(state.active_agent?.progress, "live-thinking")}
       <div id="live-wait"><span class="typing"><span></span><span></span><span></span></span>
         <div class="small muted" id="live-hint">${b === "claude" ? "Claude is working on it" : "Thinking"}<span id="live-elapsed"></span></div></div></div>`;
   }
@@ -532,12 +696,14 @@ function renderLive(now = false) {
     if (text.length < full.length) liveFrame = requestAnimationFrame(paint);
     const wait = $("live-wait");
     if (wait) wait.classList.toggle("hidden", !!text);
-    const think = S.thinking[id] || "";
+    const agent = S.chat.task.state.active_agent || {};
+    const model = $("live-model");
+    if (model) model.textContent = modelLabel(agent);
+    const think = (agent.progress || []).join("\n\n") || S.thinking[id] || "Waiting for a provider progress update.";
     const wrap = $("live-thinking-wrap");
     if (wrap) {
-      wrap.classList.toggle("hidden", !think);
       const th = $("live-thinking");
-      if (th.textContent.length !== think.length) th.textContent = think;
+      if (th.textContent !== think) th.textContent = think;
     }
     if (stick) toBottom();
   };
@@ -547,8 +713,8 @@ function renderLive(now = false) {
 setInterval(() => {
   const el = $("live-elapsed");
   if (!el || !S.chat) return;
-  const s = Math.round(Date.now() / 1000 - S.chat.task.updated);
-  el.textContent = s > 3 ? ` · ${s}s` + (s > 25 && S.chat.task.owner !== "claude" && !S.stream[S.chat.task.id] ? " (the first answer after a restart loads the model)" : "") : "";
+  const s = Math.round(Date.now() / 1000 - (S.chat.task.state.active_agent?.started || S.chat.task.updated));
+  el.textContent = s > 3 ? ` · ${s}s` : "";
 }, 1000);
 
 // ---------------------------------------------------------------- composer
@@ -557,10 +723,10 @@ const AUTO_SIZE = CSS.supports("field-sizing", "content");
 function renderComposer() {
   const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
   const general = S.project && S.project.is_default;
-  const placeholder = S.chat ? "Reply…" : general ? "Message Enoy…" : S.project ? `Ask about ${S.project.name}, or describe a change…` : "Describe what to build or change. You'll pick the folder next.";
+  const placeholder = S.chat ? "Reply…" : mode() === "chat" ? "What's on your mind?" : S.project ? `Ask about ${S.project.name}, or describe a change…` : "Describe what to build or change. You'll pick the folder next.";
   $("composer-wrap").innerHTML = `
     <div class="composer">
-      ${S.images.length ? `<div class="img-chips">${S.images.map(im => `<span class="img-chip"><img src="${im.src}" alt="Attached image">
+      ${S.images.length ? `<div class="img-chips">${S.images.map(im => `<span class="img-chip"><a href="#" data-action="view-image" data-id="${esc(im.id)}" aria-label="Preview attached image"><img src="${im.src}" alt="Attached image"></a>
         <button data-action="unattach-image" data-id="${im.id}" title="Remove image" aria-label="Remove image">✕</button></span>`).join("")}</div>` : ""}
       ${S.attached.length ? `<div class="chips">${S.attached.map(p => `<span class="chip">📄 ${esc(p)}<button data-action="unattach" data-path="${esc(p)}" title="Remove">✕</button></span>`).join("")}</div>` : ""}
       <textarea id="prompt" rows="1" placeholder="${esc(placeholder)}"></textarea>
@@ -568,7 +734,7 @@ function renderComposer() {
       <div class="bar">
         <button class="round-btn plus" data-action="plus-menu" title="Add images or files, run tests…" aria-label="Add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         ${mode() === "code" && !S.chat ? `<button class="comp-chip" data-action="project-menu" title="${esc(S.project ? S.project.path : "Choose the folder Enoy works in")}">${FOLDER_ICON}<span class="t">${S.project ? esc(S.project.name) : "Choose folder"}</span>${CHEV}</button>` : ""}
-        <div id="team-toggle"></div>
+        <div id="team-toggle"></div><button class="team-pill" data-action="starting-model-menu" title="Starting Codex model for each message">Start: ${esc(S.startingModel ? S.startingModel.model : mode() === "chat" ? (S.config?.codex?.chat_model || "gpt-6-luna") : "Default")}${CHEV}</button>
         <div class="grow"></div>
         <div id="model-picker"></div>
         ${busy ? `<button class="round-btn stop" data-action="stop" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg></button>`
@@ -583,13 +749,20 @@ function renderComposer() {
     if (!AUTO_SIZE) { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 260) + "px"; }
     const b = $("send-btn"); if (b) b.disabled = !ta.value.trim() && !S.images.length;
   };
-  ta.addEventListener("input", () => { S.draft = ta.value; resize(); });
+  ta.addEventListener("input", () => { S.draft = ta.value; resize(); showSlashSuggestions(ta); });
   ta.addEventListener("paste", e => {
     const files = [...(e.clipboardData ? e.clipboardData.files : [])].filter(f => f.type.startsWith("image/"));
     if (files.length) { e.preventDefault(); addImages(files); }
   });
   $("img-input").addEventListener("change", e => { addImages([...e.target.files]); e.target.value = ""; });
-  ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Tab" && ta.value.trimStart().startsWith("/") && !$("menu").classList.contains("hidden")) {
+      const first = $("menu").querySelector('[data-action="insert-command"]');
+      if (first) { e.preventDefault(); first.click(); }
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
+  });
   resize();
   renderModelPicker();
   renderTeamToggle();
@@ -607,6 +780,7 @@ function composerNoteHtml() {
 function composerNote() {
   const blocked = localOnlyReason();
   if (blocked) return `Cloud access disabled: ${esc(blocked)}. Enable cloud access to use ChatGPT or Claude.`;
+  if (mode() === "chat" && S.model !== "claude") return "Uses your Codex plan allowance. Choose a starting model above.";
   return S.model === "claude" ? "Claude uses your Claude Code sign-in." : "ChatGPT leads: evaluates your request, delegates to Codex or Claude, and reviews shared results.";
 }
 
@@ -617,6 +791,7 @@ async function send(textOverride) {
   const images = textOverride === undefined ? S.images.map(im => im.id) : [];
   if (!text && images.length) text = images.length > 1 ? "What is in these images?" : "What is in this image?";
   if (!text || S.sending) return;
+  if (text.startsWith("/")) { await runSlashCommand(text); return; }
   if (!S.project) {
     // Code mode with no folder: ask for one, then send this message into it.
     S.draft = text; S.sendAfterOpen = true;
@@ -629,15 +804,15 @@ async function send(textOverride) {
   if (backend === "claude" && !claudeOk()) { toast("Claude is not available right now. Pick Auto or ChatGPT.", true); return; }
   if (backend === "claude" && localOnlyReason()) { toast(`Claude is off here: ${localOnlyReason()}. Change that first.`, true); return; }
   if (coordinatorOn() && !S.status.codex?.available) { toast("ChatGPT coordinator is unavailable. Run codex login, then refresh status in Settings.", true); return; }
-  if (!codexOk() && backend !== "claude" && !coordinatorOn()) { toast("ChatGPT / Codex is unavailable. Run codex login, then refresh status.", true); return; }
+  if (!codexOk() && backend !== "claude" && !coordinatorOn()) { toast("Codex is unavailable. Run codex login, then refresh status.", true); return; }
   const files = [...S.attached];
   S.sending = true;
   const ok = await guarded(async () => {
     if (S.chat) {
-      await api("POST", `/api/tasks/${S.chat.task.id}/message`, { text, backend, files, images });
+      await api("POST", `/api/tasks/${S.chat.task.id}/message`, { text, backend, files, images, starting_model: S.startingModel });
       await loadChat(S.chat.task.id);
     } else {
-      const d = await api("POST", "/api/tasks", { project_id: S.project.id, objective: text, backend, files, images, local_only: !!S.localOnly, team: !!S.team });
+      const d = await api("POST", "/api/tasks", { project_id: S.project.id, objective: text, backend, files, images, local_only: !!S.localOnly, team: !!S.team, starting_model: S.startingModel });
       await loadChat(d.task.id);
     }
     return true;
@@ -648,6 +823,71 @@ async function send(textOverride) {
   if (images.length) S.images = [];
   await guarded(loadChats);
   renderAll(true);
+}
+
+function showSlashSuggestions(ta) {
+  const value = ta.value.trimStart();
+  if (!value.startsWith("/") || /\s/.test(value)) { closeMenu(); return; }
+  const choices = SLASH_COMMANDS.filter(c => c.name.startsWith(value.toLowerCase()));
+  if (!choices.length) { closeMenu(); return; }
+  openMenu(ta, choices.map(c => ({ title: `<code>${esc(c.name)}</code>`, desc: c.desc,
+    action: "insert-command", data: { command: c.name } })));
+}
+
+async function runSlashCommand(text) {
+  const [rawName, ...args] = text.trim().split(/\s+/);
+  const name = rawName.toLowerCase();
+  const clear = () => { S.draft = ""; closeMenu(); renderComposer(); };
+  if (!SLASH_COMMANDS.some(c => c.name === name)) {
+    toast(`Unknown command: ${rawName}. Type /help to see available commands.`, true);
+    return;
+  }
+  if (name === "/help") {
+    if (args.length) { toast("Usage: /help", true); return; }
+    clear();
+    openModal(`<h2>Commands</h2><div class="stack small">${SLASH_COMMANDS.map(c => `<div><code>${esc(c.name)}</code> — ${esc(c.desc)}${c.name === "/compact" ? ` <span class="muted">(optional: add a short focus note)</span>` : ""}</div>`).join("")}</div>
+      <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn primary" data-action="close-modal">Close</button></div>`);
+    return;
+  }
+  if (name === "/new") {
+    if (args.length) { toast("Usage: /new", true); return; }
+    clear(); actions["new-chat"](); return;
+  }
+  if (name === "/model") {
+    if (args.length) { toast("Usage: /model", true); return; }
+    clear();
+    const button = $("model-picker")?.querySelector("button");
+    if (button) actions["model-menu"](button); else toast("The model picker is not available here.", true);
+    return;
+  }
+  if (name === "/status") {
+    if (args.length) { toast("Usage: /status", true); return; }
+    clear();
+    await loadStatus(true);
+    if (!S.status) { toast("Could not load provider status.", true); return; }
+    const line = ["codex", "claude"].map(k => `${NAME[k]}: ${S.status[k]?.available ? "available" : "unavailable"}`).join(" · ");
+    toast(line);
+    return;
+  }
+  if (name === "/resume") {
+    if (args.length) { toast("Usage: /resume", true); return; }
+    if (!S.chat || !["failed", "cancelled", "interrupted"].includes(S.chat.task.status)) {
+      toast("There is no stopped or failed chat to resume.", true); return;
+    }
+    clear(); actions.resume(); return;
+  }
+  if (name === "/compact") {
+    if (!S.chat) { toast("Open a saved chat before using /compact.", true); return; }
+    const focus = text.trim().slice(rawName.length).trim();
+    const result = await guarded(async () => {
+      const d = await api("POST", `/api/tasks/${S.chat.task.id}/compact`, { focus });
+      await loadChat(d.task.id);
+      return d;
+    });
+    if (!result) return;
+    clear();
+    toast("Chat context compacted. Your transcript is still saved.");
+  }
 }
 
 function renderAll(forceBottom = false) {
@@ -776,18 +1016,62 @@ function settingsGeneral() {
         <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
     <div class="set-section"><h3>About</h3>
       <div class="small muted">Enoy ${esc(S.status ? S.status.version : "")}. ChatGPT uses your Codex sign-in; Claude uses your Claude Code sign-in.
-      Native agents can edit the selected project directly. Delegated patch proposals follow your approval settings.</div></div>`;
+      Native agents can edit the selected project directly. Delegated patch proposals follow your approval settings.</div></div>
+    <div class="set-section"><h3>Accounts and setup</h3>
+      <p class="small muted">Use your own ChatGPT and Claude accounts. Install missing tools, then open each provider to sign in.</p>
+      <div class="provider-actions"><button class="btn" data-action="install-providers">Install missing tools</button>
+      <button class="btn" data-action="provider-status" data-provider="codex">Connect Codex</button>
+      <button class="btn" data-action="provider-status" data-provider="claude">Connect Claude</button></div></div>
+    <div class="set-section"><h3>Updates</h3>
+      <p class="small muted">Checks GitHub for a newer stable release, installs it and restarts Enoy. Finish running tasks first. Your chats and settings are kept.</p>
+      <div class="provider-actions"><button id="update-check" class="btn" data-action="check-updates">Check for updates</button>
+      <a class="btn" href="https://github.com/anglerequip/Enoy/releases" target="_blank" rel="noopener noreferrer">Releases</a></div>
+      <p id="update-state" class="small muted" role="status">Updates are checked when you click.</p></div>`;
   $("theme-select").addEventListener("change", e => { applyTheme(e.target.value); lsSet("theme", e.target.value); });
+  renderUpdateStatus(S.updates);
+}
+
+function renderUpdateStatus(data) {
+  const state = $("update-state"), button = $("update-check");
+  if (!state || !button || !data) return;
+  state.textContent = data.detail + (data.status === "downloading" ? ` ${data.progress || 0}%` : "");
+  state.classList.toggle("danger-text", data.status === "error");
+  button.disabled = ["checking", "downloading", "installing"].includes(data.status);
+}
+
+async function checkUpdates() {
+  try {
+    S.updates = await api("POST", "/api/updates", {});
+    renderUpdateStatus(S.updates);
+    while (["checking", "downloading"].includes(S.updates.status)) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      S.updates = await api("GET", "/api/updates");
+      renderUpdateStatus(S.updates);
+    }
+  } catch (e) {
+    S.updates = {status: "error", detail: e.message};
+    renderUpdateStatus(S.updates);
+    toast(e.message, true);
+  }
 }
 
 async function settingsModels() {
   const c=S.config;
+  let blenderStatus = {detail: "Connection has not been checked."};
+  try { blenderStatus = await api("GET", "/api/blender"); } catch (e) { blenderStatus.detail = e.message; }
   $("set-body").innerHTML = `<div class="set-section"><h3>ChatGPT and Claude</h3>
     <p>ChatGPT evaluates requests and delegates development tasks to Codex or Claude. Both share project context and recorded results.</p>
-    ${toggleRow("codex","enabled","Enable ChatGPT / Codex","Uses the official Codex CLI. Run codex login to sign in.")}
+    ${toggleRow("codex","enabled","Enable Codex","Uses the official Codex CLI. Run codex login to sign in.")}
     ${inputRow("codex","executable","Codex executable","Empty: find codex on PATH")}
-    ${inputRow("codex","model","Codex model","Empty: Codex default")}
-    ${inputRow("codex","effort","ChatGPT reasoning effort","low, medium, high, xhigh, max, or ultra; higher effort takes longer")}
+    ${inputRow("codex","model","Planning and review model","Default: gpt-6.1-sol")}
+    ${inputRow("codex","effort","Planning reasoning effort","Default: medium")}
+    ${toggleRow("codex","adaptive_routing","Use economical execution models automatically","Planning and final review use the Codex model above. Bounded, lower-risk implementation tasks use the execution model below; repairs return to the planning model.")}
+    ${inputRow("codex","execution_model","Execution model","Default: gpt-6-luna")}
+    ${inputRow("codex","execution_effort","Execution reasoning effort","Default: high")}
+    ${inputRow("codex","chat_model","Chat default model","Default: gpt-6-luna. Uses your Codex plan allowance.")}
+    ${inputRow("codex","chat_effort","Chat reasoning effort","Default: low")}
+    ${toggleRow("coordinator","claude_reviews","GPT plans, Claude reviews","Claude checks implementation plans before execution and reviews the final results. Unavailable reviews and GPT fallbacks are shown in Activity.")}
+    ${toggleRow("coordinator","claude_complex","Claude handles complex work and repairs","Bounded routine implementation stays with the economical GPT execution model. Claude gets broad, risky or complex work and repair tasks when available.")}
     ${toggleRow("agent","native_tools","Native tools for ChatGPT and Claude","Inspect files, edit code, and run commands. Native edits are direct and are not Enoy undoable patches. Private file filters keep requests in filtered context mode.")}
     <label class="field">Agent permission mode<select data-cfg="agent.access_mode">
       <option value="workspace" ${c.agent.access_mode === "workspace" ? "selected" : ""}>Workspace Access</option>
@@ -801,8 +1085,16 @@ async function settingsModels() {
     ${inputRow("team","max_tasks","Maximum tasks per plan","","number")}
     ${inputRow("team","max_model_calls","Requests per run","","number")}
     ${inputRow("lead","max_followups","Final-review correction rounds","","number")}
-    <p class="small muted">Enoy uses cloud providers only. Chats with cloud access disabled cannot send model requests.</p></div>`;
+    <p class="small muted">Enoy uses cloud providers only. Chats with cloud access disabled cannot send model requests.</p></div>
+    <div class="set-section"><h3>Shared Blender workspace</h3>
+    ${toggleRow("blender","enabled","Connect ChatGPT and Claude to Blender","Both providers work on the same live scene, including from general chats. Tool calls are serialized and recent actions are shared on handoff. Cloud privacy restrictions still apply. Scene edits happen directly in Blender.")}
+    ${inputRow("blender","server_executable","MCP for Blender executable","Empty: detect the local installation automatically.")}
+    ${inputRow("blender","host","Blender host","Loopback address of Blender on this PC.")}
+    ${inputRow("blender","port","Blender MCP port","Default: 9876","number")}
+    <p class="small muted">${esc(blenderStatus.detail)}</p>
+    <button id="blender-check">Check Blender connection</button></div>`;
   bindCfgInputs();
+  $("blender-check").onclick = () => settingsModels();
 }
 
 function settingsSafety() {
@@ -841,14 +1133,29 @@ async function settingsStatus() {
 
 async function settingsActivity() {
   let tx = [];
-  try { tx = (await api("GET", "/api/transmissions?backend=claude")).transmissions; } catch (e) { /* ignore */ }
-  $("set-body").innerHTML = `<div class="set-section"><h3>What was sent to Claude</h3>
-    <div class="small muted">Every Claude request, stored with secrets removed. Token counts are shown only when Claude Code reports them.</div>
-    ${tx.length ? `<table><tr><th>When</th><th>Chat</th><th>Size</th><th>Files</th><th>Reported tokens</th><th></th></tr>
-    ${tx.map(x => `<tr><td>${new Date(x.created * 1000).toLocaleString()}</td><td>#${x.task_id}</td><td>${x.chars.toLocaleString()} chars</td>
-      <td>${x.files.map(f => esc(f.path)).join(", ") || "–"}</td><td class="small">${esc(x.usage || "not reported")}</td>
-      <td><button class="btn small" data-action="view-tx" data-id="${x.id}">View</button></td></tr>`).join("")}</table>`
-    : `<div class="muted">Nothing has been sent to Claude yet.</div>`}</div>`;
+  try { tx = (await api("GET", "/api/transmissions?backend=claude")).transmissions; }
+  catch (e) {
+    if (S.settingsTab === "activity") $("set-body").innerHTML = `<div class="page-state bad">Could not load activity: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (S.settingsTab !== "activity" || !$("set-body")) return;
+  const chats = new Set(tx.map(x => x.task_id)).size;
+  const files = tx.reduce((n, x) => n + x.files.length, 0);
+  const latest = tx.length ? Math.max(...tx.map(x => x.created)) : null;
+  $("set-body").innerHTML = `<div class="set-section"><h3>Claude activity, explained</h3>
+    <p>When Claude helps with a chat, Enoy records what it sends here. This history covers Claude requests only.</p>
+    ${tx.length ? `<div class="tx-summary"><strong>${tx.length} request(s) across ${chats} chat(s)</strong><p>${files} file attachment(s) in these requests. The same file may have been sent more than once.</p><span class="small muted">Most recent: ${new Date(latest * 1000).toLocaleString()}</span></div>
+    <h3>What was shared</h3>
+    ${tx.map(x => `<article class="tx-card"><div class="row"><strong>Chat #${esc(x.task_id)}</strong><span class="small muted">${new Date(x.created * 1000).toLocaleString()}</span></div>
+      <p>Sent a request to Claude with ${x.files.length ? `${x.files.length} file(s) for context` : "no attached files"}.</p>
+      <details><summary>More · files, size & token counts</summary>
+        <p><strong>Files:</strong> ${x.files.map(f => esc(f.path)).join(", ") || "None"}</p>
+        <p><strong>Request size:</strong> ${x.chars.toLocaleString()} characters</p>
+        <p class="small muted">Tokens measure text processed by the model. These are reported usage figures, not a price.</p>
+        <p class="small tx-usage">${esc(x.usage || "Token counts were not reported for this request.")}</p>
+      </details><button class="btn small" data-action="view-tx" data-id="${esc(x.id)}">View sent request</button></article>`).join("")}`
+    : `<p class="muted">Nothing has been sent to Claude yet.</p>`}
+    <p class="small muted">Saved requests have secrets removed. This log shows what was sent; it does not confirm whether the work succeeded.</p></div>`;
 }
 
 function bindCfgInputs() {
@@ -939,6 +1246,7 @@ async function openProject(id) {
   await useProject(id);
   S.chat = null; S.chatId = null;
   await loadProjects();
+  if (typeof setView === "function") setView("chat");
   renderAll();
   if (S.sendAfterOpen) { S.sendAfterOpen = false; await send(); }
 }
@@ -949,6 +1257,29 @@ const NARROW = 900;
 function closeSidebarIfNarrow() { if (window.innerWidth < NARROW) $("app").classList.add("no-sidebar"); }
 
 const actions = {
+  "starting-model-menu": el => openMenu(el, [
+    { title: "Default", desc: "Use the configured planning model", action: "starting-model-default", checked: !S.startingModel },
+    { title: "Lighter model", desc: esc(S.config?.codex?.execution_model || "gpt-6-luna"), action: "starting-model-light" },
+    { title: "Custom model…", desc: "Choose a model ID and reasoning effort", action: "starting-model-custom" },
+  ]),
+  "starting-model-default": () => { S.startingModel = null; closeMenu(); renderComposer(); },
+  "starting-model-light": () => {
+    S.startingModel = { model: S.config?.codex?.execution_model || "gpt-6-luna", effort: S.config?.codex?.execution_effort || "high" };
+    closeMenu(); renderComposer();
+  },
+  "starting-model-custom": () => {
+    closeMenu();
+    openModal(`<h2>Starting Codex model</h2><p>Used for the opening Codex request on each message. Later team phases use automatic routing.</p>
+      <label>Model ID <input id="start-model-id" maxlength="200" placeholder="Model ID" value="${esc(S.startingModel?.model || S.config?.codex?.model || "")}"></label>
+      <label>Reasoning effort <select id="start-model-effort">${["", "low", "medium", "high", "xhigh", "max"].map(e => `<option value="${e}" ${e === (S.startingModel?.effort || "") ? "selected" : ""}>${e || "Model default"}</option>`).join("")}</select></label>
+      <div class="row"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" data-action="starting-model-save">Use model</button></div>`);
+  },
+  "starting-model-save": () => {
+    const model = $("start-model-id").value.trim();
+    if (!model || /\s/.test(model)) { toast("Enter a model ID without spaces.", true); return; }
+    S.startingModel = { model, effort: $("start-model-effort").value };
+    closeModal(); renderComposer();
+  },
   "toggle-sidebar": () => $("app").classList.toggle("no-sidebar"),
   "new-chat": () => { closeSidebarIfNarrow(); S.chat = null; S.chatId = null; S.draft = ""; S.localOnly = false;
     S.team = !!(S.status && S.status.team_default); renderAll(); $("prompt").focus(); },
@@ -963,6 +1294,10 @@ const actions = {
   }),
   "open-chat": el => guarded(async () => { closeSidebarIfNarrow(); await loadChat(Number(el.dataset.id)); renderAll(true); }),
   "suggest": el => { S.draft = el.dataset.text; renderComposer(); $("prompt").focus(); },
+  "insert-command": el => {
+    S.draft = el.dataset.command + (el.dataset.command === "/compact" ? " " : "");
+    closeMenu(); renderComposer(); $("prompt").focus();
+  },
   "send": () => send(),
   "stop": () => chatAction("cancel"),
   "project-menu": el => openMenu(el, [
@@ -1178,7 +1513,30 @@ const actions = {
       <pre class="log">${esc(x.content)}</pre><div class="row" style="justify-content:flex-end"><button class="btn primary" data-action="close-modal">Close</button></div>`);
   }),
   "open-settings": (el, e) => { if (e) e.preventDefault(); closeMenu(); guarded(() => openSettings(el && el.dataset.tab)); },
+  "provider-status": el => {
+    const version = ++providerDialog;
+    showProviderStatus(el.dataset.provider);
+    guarded(async () => {
+      const meta = await api("GET", "/api/config");
+      S.config = meta.config;
+      if (version === providerDialog && $("provider-dialog")?.dataset.provider === el.dataset.provider && !$("modal").classList.contains("hidden")) {
+        showProviderStatus(el.dataset.provider);
+        await refreshUsage(el.dataset.provider);
+      }
+    });
+  },
+  "provider-check": el => providerAction(el, true),
+  "provider-launch": el => providerAction(el),
+  "usage-refresh": el => refreshUsage(el.dataset.provider, true),
+  "usage-edit": () => editClaudeUsage(),
+  "usage-save": () => saveClaudeUsage(),
+  "token-savings": () => showTokenSavings(),
   "settings-tab": el => { S.settingsTab = el.dataset.tab; renderSettings(); },
+  "check-updates": () => checkUpdates(),
+  "install-providers": async () => {
+    try { toast((await api("POST", "/api/providers/install", {})).message); }
+    catch (e) { toast(e.message, true); }
+  },
   "tools-key": async el => {
     const input = $("brave-key");
     const value = el.dataset.clear ? "" : (input ? input.value.trim() : "");
@@ -1214,7 +1572,7 @@ document.addEventListener("click", e => {
     if (!e.target.closest("#menu")) closeMenu();
     return;
   }
-  if (!target.closest("#menu") && !["model-menu", "project-menu", "chat-menu", "plus-menu", "chat-item-menu"].includes(target.dataset.action)) closeMenu();
+  if (!target.closest("#menu") && !["starting-model-menu", "model-menu", "project-menu", "chat-menu", "plus-menu", "chat-item-menu"].includes(target.dataset.action)) closeMenu();
   const fn = actions[target.dataset.action];
   if (fn) {
     if (target.tagName === "A") e.preventDefault();
@@ -1295,32 +1653,72 @@ async function addImages(files) {
 // ---------------------------------------------------------------- live events
 
 let refreshTimer = null;
+let refreshRunning = false;
+let refreshVersion = 0;
 function scheduleRefresh() {
+  ++refreshVersion;
   clearTimeout(refreshTimer);
+  if (refreshRunning) return;
   refreshTimer = setTimeout(async () => {
+    refreshRunning = true;
+    const version = refreshVersion;
+    const id = S.chatId;
+    const loadVersion = chatLoadVersion;
+    const done = S.streamDone[id];
+    let retry = false;
     try {
-      if (S.chatId) await loadChat(S.chatId);
+      const chat = id ? await api("GET", `/api/tasks/${id}`) : null;
       await loadChats();
-    } catch (e) { return; }
-    for (const id of Object.keys(S.streamDone)) {
-      delete S.stream[id]; delete S.thinking[id]; delete S.streamDone[id]; delete S.shown[id];
+      // Events received during either request make this snapshot obsolete.
+      // Keep the visible response until a fresh snapshot can replace it.
+      if (version !== refreshVersion || id !== S.chatId || loadVersion !== chatLoadVersion) return;
+      if (chat) {
+        S.chat = chat;
+        // message_done is published after saving the answer. Only retire the
+        // stream covered by this request, never streams for un-fetched chats.
+        if (done && S.streamDone[id] === done) {
+          delete S.stream[id]; delete S.thinking[id]; delete S.streamDone[id]; delete S.shown[id];
+        }
+      }
+      renderSidebar();
+      renderChatMenu();
+      if (S.chat) renderThread();
+      const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
+      const hasStop = !!document.querySelector(".round-btn.stop");
+      if (busy !== hasStop) renderComposer();
+    } catch (e) {
+      retry = true;
+    } finally {
+      refreshRunning = false;
+      if (retry) refreshTimer = setTimeout(scheduleRefresh, 1000);
+      else if (version !== refreshVersion) scheduleRefresh();
     }
-    renderSidebar();
-    renderChatMenu();
-    if (S.chat) { renderThread(); }
-    const busy = S.chat && ["running", "queued"].includes(S.chat.task.status);
-    const hasStop = !!document.querySelector(".round-btn.stop");
-    if (busy !== hasStop) renderComposer();
   }, 200);
 }
 
 function connectEvents() {
   const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+  // A reconnect can miss completion events. Fetch saved state without waiting
+  // for the user to send another message.
+  es.onopen = () => scheduleRefresh();
   es.onmessage = msg => {
     const ev = JSON.parse(msg.data);
+    if (ev.type === "agent_status") {
+      if (refreshRunning) scheduleRefresh();
+      if (ev.task_id === S.chatId && S.chat) {
+        if (S.chat.task.state.active_agent?.started !== ev.agent.started) {
+          delete S.stream[ev.task_id]; delete S.thinking[ev.task_id]; delete S.streamDone[ev.task_id];
+          S.shown[ev.task_id] = 0;
+        }
+        S.chat.task.state.active_agent = ev.agent;
+        renderLive();
+      }
+      return;
+    }
     if (typeof activityEvent === "function") activityEvent(ev);
     if (ev.type === "activity" || ev.type === "dispatch") return;
     if (ev.type === "token" || ev.type === "thinking") {
+      if (refreshRunning) scheduleRefresh();
       if (S.streamDone[ev.task_id]) {  // A new answer starts in the same task.
         delete S.streamDone[ev.task_id]; delete S.stream[ev.task_id]; delete S.thinking[ev.task_id];
       }
@@ -1330,7 +1728,7 @@ function connectEvents() {
       if (ev.task_id === S.chatId) renderLive();
       return;
     }
-    if (ev.type === "message_done") S.streamDone[ev.task_id] = true;
+    if (ev.type === "message_done") S.streamDone[ev.task_id] = {};
     if (ev.type === "command" && !(ev.run && ev.run.task_id === S.chatId)) {
       if (ev.run && ev.run.status !== "running" && !ev.run.task_id) toast(`${ev.run.command}: ${ev.run.status}`, ev.run.status !== "passed");
       return;

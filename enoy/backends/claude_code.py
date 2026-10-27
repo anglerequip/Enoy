@@ -157,6 +157,11 @@ class ClaudeCodeBackend:
         return args
 
     def chat(self, request: ChatRequest) -> ChatResult:
+        from ..blender import provider_turn
+        with provider_turn(request):
+            return self._chat(request)
+
+    def _chat(self, request: ChatRequest) -> ChatResult:
         if not self.settings.get("enabled", True):
             raise BackendError("unavailable", "Claude is turned off in Settings.")
         system = "\n\n".join(m.content for m in request.messages if m.role == "system")
@@ -175,9 +180,14 @@ class ClaudeCodeBackend:
                       for img in pictures]
             prompt = json.dumps({"type": "user", "message": {"role": "user",
                                                              "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
-        mcp_config = _write_mcp_config(request.enoy_tools, request.enoy_env) if request.enoy_tools else None
+        mcp_config = (_write_mcp_config(request.enoy_tools, request.enoy_env, request.mcp_servers)
+                      if request.enoy_tools or request.mcp_servers else None)
         cmd = self._base_cmd() + self.build_args(system, request.resume_session, bool(pictures), request.web_tools,
                                                  mcp_config, request.enoy_tools, request.effort, request.native_tools)
+        if request.mcp_servers and not request.native_tools:
+            # Keep built-in file/command tools restricted; the Blender server retains
+            # Claude's own automatic permission review for scene changes.
+            cmd += ["--permission-mode", "auto"]
         timeout = float(self.settings.get("timeout_s", 600))
         start = time.monotonic()
         if request.native_tools:
@@ -194,6 +204,8 @@ class ClaudeCodeBackend:
                     for block in (item.get("message") or {}).get("content") or []:
                         if not isinstance(block, dict):
                             continue
+                        if block.get('type') == 'text' and request.on_thinking:
+                            request.on_thinking(block.get('text', ''))
                         if block.get("type") == "tool_use":
                             tool_names[block.get("id")] = block.get("name", "tool")
                         elif block.get("type") == "tool_result":
@@ -274,14 +286,21 @@ class ClaudeCodeBackend:
         )
 
 
-def _write_mcp_config(names: list[str], env: dict) -> str:
+def _write_mcp_config(names: list[str], env: dict, servers: dict | None = None) -> str:
     """MCP config for one request: Enoy's own server, offering only `names`. Holds settings, never secrets."""
     import sys
+    from ..runtime import module_command
+    helper = module_command("enoy.tools.mcp_server")
     root = Path(__file__).resolve().parents[2]
     cfg = {"mcpServers": {"enoy": {
-        "command": sys.executable, "args": ["-m", "enoy.tools.mcp_server"],
+        "command": helper[0], "args": helper[1:],
         "env": {"PYTHONPATH": str(root), "PYTHONIOENCODING": "utf-8", "ENOY_MCP_TOOLS": ",".join(names),
                 **{k: v if isinstance(v, str) else json.dumps(v) for k, v in env.items()}}}}}
+    if not names:
+        cfg["mcpServers"].pop("enoy")
+    # Claude's MCP format uses command/args/env, not Codex timeout settings.
+    for name, server in (servers or {}).items():
+        cfg["mcpServers"][name] = {k: v for k, v in server.items() if k in ("command", "args", "env")}
     # One file per request: team runs can ask Claude for two tasks at once, each with its own project view.
     folder = paths.claude_workdir()
     for old in folder.glob("enoy-mcp*.json"):

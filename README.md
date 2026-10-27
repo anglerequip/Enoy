@@ -1,18 +1,46 @@
 # Enoy
 
-Enoy 0.4.0 is a Windows desktop app where ChatGPT evaluates your request,
+Enoy 0.5.0 is a Windows desktop app where ChatGPT evaluates your request,
 assigns development tasks to Codex or Claude, and reviews the real results.
 Both providers share recent conversation, attached images, task outputs, activity,
 and permitted project files through Enoy. Dark mode is the default.
 
-## Start
+## Download and start (Windows 10/11, x64)
 
-1. Run **Setup Enoy.cmd** once to install the desktop dependencies and shortcuts.
-2. Install the official Codex CLI and run `codex login`.
-3. Install and sign in to Claude Code to enable Claude tasks.
-4. Open **Enoy** from the Desktop or Start menu. Open your code folder and use Auto.
+**[Download Enoy for Windows](https://github.com/anglerequip/Enoy/releases/latest/download/Enoy-Setup-x64.exe)** · [Release notes](https://github.com/anglerequip/Enoy/releases)
 
-The only providers are **ChatGPT / Codex** and **Claude**. There is no local-model
+1. Download and run **Enoy-Setup-x64.exe**. Python and the app dependencies are included.
+2. Keep **Install missing Codex, Claude Code and WebView2** selected. Setup downloads missing tools from their official publishers; internet is required.
+3. Open Enoy → **Settings → General → Accounts and setup**. Use **Connect Codex** and **Connect Claude**, then **Launch & sign in** for each missing sign-in. Complete the browser sign-in using your own accounts.
+4. Use **Chat** for ordinary conversations or **Code** to open a project folder.
+
+ChatGPT Plus includes Codex CLI access; Claude Pro includes Claude Code. Model access and usage remain subject to each provider's account limits. No Enoy subscription or separate API key is required for subscription sign-in. See [Codex plans](https://learn.chatgpt.com/docs/pricing) and [Claude Code setup and access](https://code.claude.com/docs/en/setup).
+
+The installer is currently unsigned, so Windows may display a publisher or SmartScreen warning. Download it only from this repository's Releases. Each release includes a SHA-256 checksum. This is an early app, not a security-audited product; use version control or backups when letting agents edit projects.
+
+## Chat and Code
+
+| Chat | Code |
+| --- | --- |
+| Softer buttons, warm green surfaces, room for everyday questions and ideas. | Compact blue-grey workspace, sharper controls, visible folder path and project tools. |
+| Defaults to **GPT-6 Luna / low effort**. Requests use your Codex allowance; there is no zero-usage model in this integration. | Keeps the configured planning model and automatic execution routing. |
+
+![Chat workspace](docs/screenshots/chat.png)
+![Code workspace](docs/screenshots/code.png)
+
+Choose a custom **Start** model before any message. Chat defaults can also be changed in **Settings → Models**.
+
+## Updates
+
+**Settings → General → Check for updates** checks stable GitHub Releases. If a newer version exists, Enoy downloads the installer, verifies its SHA-256 checksum, backs up the database and settings, then installs and restarts automatically. Finish running tasks first. Checks happen only when requested; there is no background polling of GitHub.
+
+App files are installed under `%LOCALAPPDATA%\Programs\Enoy`. Chats, settings and attachments remain under `%LOCALAPPDATA%\Enoy`; update backups are in its `update-backups` folder. Provider CLIs manage their own updates. Optional Blender integration requires separate Blender/MCP setup and is not needed for ordinary Chat or Code.
+
+If setup was interrupted, use **Install missing tools** in General settings, then check each provider's status. Signing in doesn't send a model request. Claude's live usage panel can show when a plan limit prevents a request.
+
+For source development, install Python 3.11+ and run **Setup Enoy.cmd**; provider CLI installation remains separate for source checkouts.
+
+The only providers are **Codex** and **Claude**. There is no local-model
 provider, model download, model server, or automatic local fallback. The previous
 local-model integration has been removed. An unavailable Claude task can transfer
 to Codex, with the reason recorded in Activity.
@@ -39,7 +67,31 @@ starts a fresh native session; both providers still receive Enoy's shared chat,
 task and activity context. Large shared-context records explicitly mark omitted
 text; native session history and tool results remain managed by the provider.
 ChatGPT defaults to gpt-6.1-sol with
-high reasoning effort; model and effort are configurable under Settings → Models.
+medium reasoning effort for planning and review. Bounded, lower-risk execution
+tasks automatically use GPT-6 Luna at high effort. By default Claude reviews
+GPT's implementation plan before any workers start, handles complex implementation
+and repairs, then reviews the actual results. Claude may approve or replace the
+plan; revised plans undergo the same dependency and path validation. Automatic
+tests remain the source of test outcomes. Settings → Models controls these roles.
+
+The composer supports app-level slash commands: `/help`, `/compact`, `/new`,
+`/model`, `/status` and `/resume`. `/compact` saves a continuation brief, resets
+native provider sessions and omits earlier transcript turns from future provider
+context; the full chat remains visible and saved. Add a short focus note after
+`/compact` to carry it into the continuation brief.
+
+Claude quota failures, disabled access, declined consent and request budgets are
+reported explicitly. When Claude is unavailable, implementation falls back to
+GPT, the plan is marked as not Claude-reviewed, and GPT performs the final review.
+An unavailable economical GPT model falls back to Sol. Per-run Claude confirmation
+is respected when enabled; choosing an automatic Claude workflow can turn it off
+in Settings. Model switching and fallback decisions appear in Activity.
+
+The active model and effort appear beside the assistant's name. An open progress
+summary beneath the response shows routing explanations, public assistant updates
+and actual tool activity. These are public progress summaries, not private internal
+chain of thought. No additional model request is made to generate that panel.
+Completed-message model and progress metadata persist in transmission records.
 
 Native edits are direct filesystem changes and do not create Enoy undo backups.
 Delegated development tasks also use native tools, with observed filesystem diffs
@@ -59,6 +111,11 @@ access instead. A project or chat with cloud
 access disabled can still be browsed and managed, but cannot make model requests.
 
 ## Development
+
+Blender modelling is available to both providers through **Settings → Models →
+Shared Blender workspace**. Both work on the same live scene with serialized
+tool calls and shared handoff activity. See [Blender collaboration](docs/BLENDER.md)
+for setup and the modelling workflow.
 
 ```
 .venv\Scripts\python.exe -m enoy --verbose

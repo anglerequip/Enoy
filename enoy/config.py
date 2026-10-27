@@ -40,9 +40,12 @@ DEFAULT_ALLOWLIST = [
     "stylua --check .",
 ]
 
-DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True},
+DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': True, 'claude_complex': True},
+ 'blender': {'enabled': False, 'server_executable': '', 'host': '127.0.0.1', 'port': 9876},
  'agent': {'native_tools': True, 'access_mode': 'workspace'},
- 'codex': {'enabled': True, 'executable': '', 'model': 'gpt-6.1-sol', 'effort': 'high', 'timeout_s': 1800},
+ 'codex': {'enabled': True, 'executable': '', 'model': 'gpt-6.1-sol', 'effort': 'medium', 'timeout_s': 1800,
+           'adaptive_routing': True, 'execution_model': 'gpt-6-luna', 'execution_effort': 'high',
+           'chat_model': 'gpt-6-luna', 'chat_effort': 'low'},
  'claude': {'enabled': True,
             'executable': '',
             'model': 'claude-opus-5-5',
@@ -112,13 +115,21 @@ def _url(v: str):
 
 
 SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
+    "blender": {"enabled": (bool, None), "server_executable": (str, None),
+                "host": (str, _choice(("127.0.0.1", "localhost", "::1"))),
+                "port": (int, _range(1, 65535))},
     "agent": {"native_tools": (bool, None), "access_mode": (str, _choice(("workspace", "full")))},
-    "coordinator": {"enabled": (bool, None)},
+    "coordinator": {"enabled": (bool, None), "claude_reviews": (bool, None), "claude_complex": (bool, None)},
     "codex": {
         "enabled": (bool, None),
         "executable": (str, None),
         "model": (str, None),
         "effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max", "ultra"))),
+        "adaptive_routing": (bool, None),
+        "execution_model": (str, None),
+        "execution_effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max", "ultra"))),
+        "chat_model": (str, None),
+        "chat_effort": (str, _choice(("", "low", "medium", "high", "xhigh", "max"))),
         "timeout_s": ((int, float), _range(10, 7200)),
     },
     "claude": {

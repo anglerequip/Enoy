@@ -118,7 +118,7 @@ def open_with_pywebview(url: str, app: App) -> bool:
         return False
     winshell.set_app_id()  # Taskbar shows Enoy, not Python.
     window = webview.create_window("Enoy", url, width=1440, height=920, min_size=(1000, 640),
-                                   background_color="#1f1e1c")
+                                   background_color="#1f1e1c", text_select=True)
 
     def on_shown() -> None:
         try:
@@ -150,11 +150,14 @@ def open_with_pywebview(url: str, app: App) -> bool:
 
     app.folder_picker = picker
     app.file_saver = saver
+    app.shutdown_callback = window.destroy
     try:
         webview.start(gui="edgechromium", private_mode=False, storage_path=str(paths.sub_dir("webview")))
     except Exception as exc:
         log.warning("pywebview failed (%s); trying Edge app mode.", exc)
         return False
+    finally:
+        app.shutdown_callback = None
     return True
 
 
@@ -228,6 +231,10 @@ def open_with_edge(url: str, app: App) -> bool:
     # to an existing process instead.
     while True:
         time.sleep(2)
+        if app.shutdown_requested.is_set():
+            if proc.poll() is None:
+                proc.terminate()
+            return True
         if proc.poll() is not None and time.time() - app.last_seen > 20:
             return True
         if time.time() - app.last_seen > 180:
@@ -262,13 +269,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.no_window:
             print(f"Enoy running at {url}  (Ctrl+C to stop)", flush=True)
-            while True:
+            while not app.shutdown_requested.is_set():
                 time.sleep(1)
+            return 0
         if args.browser:
             import webbrowser
             app.folder_picker = tk_folder_picker
             webbrowser.open(url)
-            while time.time() - app.last_seen < 180:
+            while not app.shutdown_requested.is_set() and time.time() - app.last_seen < 180:
                 time.sleep(2)
             return 0
         if open_with_pywebview(url, app):
@@ -278,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         import webbrowser
         app.folder_picker = tk_folder_picker
         webbrowser.open(url)
-        while time.time() - app.last_seen < 180:
+        while not app.shutdown_requested.is_set() and time.time() - app.last_seen < 180:
             time.sleep(2)
         return 0
     except KeyboardInterrupt:

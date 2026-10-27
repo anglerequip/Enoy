@@ -6,7 +6,7 @@
 
 const ART_TYPES = { markdown: "Document", text: "Text", code: "Code", html: "HTML", svg: "SVG", json: "JSON", csv: "CSV" };
 const ART_ICON = { markdown: "¶", text: "≡", code: "</>", html: "◇", svg: "◈", json: "{}", csv: "▦" };
-S.view = "chat";          // chat | projects | project | artifacts
+S.view = "chat";          // chat | projects | project | artifacts | about
 S.page = {};              // Data for the current page.
 S.art = null;             // Open artifact: { data, draft, tab, saving }
 
@@ -34,11 +34,33 @@ function setView(view) {
 function renderPage() {
   $("main").classList.remove("empty");
   const v = S.view;
-  const html = v === "projects" ? projectsPageHtml() : v === "project" ? projectPageHtml() : artifactsPageHtml();
+  const html = v === "projects" ? projectsPageHtml() : v === "project" ? projectPageHtml() : v === "about" ? aboutPageHtml() : artifactsPageHtml();
   $("thread").innerHTML = `<div class="page">${html}</div>`;
   $("composer-wrap").innerHTML = "";
   if (v === "project") bindProjectPage();
   if (v === "artifacts") bindArtifactsPage();
+}
+
+function aboutPageHtml() {
+  return `<div class="page-head"><div><h1>How Enoy works</h1>
+    <p class="page-sub">Ask a question or open a folder to work on code.</p></div>
+      <div class="row"><button class="btn primary" data-action="new-chat">New chat</button>
+        <button class="btn" data-action="pick-folder">Open folder…</button></div></div>
+    <div class="set-section"><h2>From request to result</h2>
+      <ol class="about-steps">
+        <li><strong>Describe the result you want.</strong> Add files or images if useful.</li>
+        <li><strong>Enoy coordinates the work.</strong> It answers directly or assigns tasks to models.</li>
+        <li><strong>Review the result.</strong> Find the answer in chat and recorded checks in Activity.</li>
+      </ol></div>
+    <div class="card accent"><div class="card-title">Models</div>
+      <div class="card-sub"><strong>GPT / Sol</strong> coordinates. <strong>Claude</strong> can implement and review. <strong>GPT / Luna</strong> handles routine tasks.</div>
+      <div class="row"><button class="btn" data-action="open-settings" data-tab="models">Configure models</button></div></div>
+    <div class="card-grid">
+      <div class="card"><div class="card-title">Activity</div><div class="card-sub">See progress, model assignments and checks.</div>
+        <div class="row"><button class="btn" data-action="toggle-activity">View activity</button></div></div>
+      <div class="card"><div class="card-title">Access & privacy</div><div class="card-sub">Uses your Codex and Claude Code accounts with cloud models. Control project access and what gets shared in Settings.</div>
+        <div class="row"><button class="btn" data-action="open-settings" data-tab="safety">Privacy settings</button></div></div>
+    </div>`;
 }
 
 function loadingHtml() { return `<div class="page-state"><span class="typing"><span></span><span></span><span></span></span> Loading…</div>`; }
@@ -507,6 +529,7 @@ async function showArtifactHistory() {
 Object.assign(actions, {
   "nav-projects": () => { closeSidebarIfNarrow(); showProjects(); },
   "nav-artifacts": () => { closeSidebarIfNarrow(); showArtifacts(); },
+  "nav-about": () => { closeSidebarIfNarrow(); setView("about"); renderPage(); },
   "project-create": () => openCreateProject(),
   "open-project-page": el => showProject(Number(el.dataset.id)),
   "project-page": () => { closeMenu(); if (S.project) showProject(S.project.id); },

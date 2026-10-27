@@ -21,15 +21,17 @@ def mode(orc):
     return orc.cfg.get("agent", {}).get("access_mode", "workspace")
 
 
-def options(orc, task_id, provider, purpose):
+def options(orc, task_id, provider, purpose, profile=None):
     if not allowed(orc, task_id, purpose):
         return {}
     ws = orc.workspace(orc.db.get_task(task_id)["project_id"])
 
     def on_event(event):
+        from . import model_policy
         status = event.get("status", "started")
         summary = redact(str(event.get("summary", "")))[:500]
         tool = str(event.get("tool", "tool"))[:100]
+        model_policy.progress(orc, task_id, f"{tool} {status}: {summary}")
         code = event.get("exit_code")
         outcome = "failed" if code not in (None, 0) or event.get("result_status") == "failed" else ""
         output = redact(str(event.get("output", "")))
@@ -41,24 +43,34 @@ def options(orc, task_id, provider, purpose):
                  provider, "tools", outcome=outcome)
 
     root = Path.home() if context.is_general(ws) and mode(orc) == "full" else ws.root
-    saved = orc.db.get_task(task_id)["state"].get("native_sessions", {}).get(provider, {})
-    scope = [str(root), mode(orc), orc.cfg.get(provider, {}).get("model", ""),
-             orc.cfg.get(provider, {}).get("effort", "")]
+    settings = orc.cfg.get(provider, {})
+    model = (profile or {}).get('model', settings.get('model', ''))
+    effort = (profile or {}).get('effort', settings.get('effort', ''))
+    key = session_key(orc, provider, model, effort)
+    saved = orc.db.get_task(task_id)["state"].get("native_sessions", {}).get(key, {})
+    scope = [str(root), mode(orc), model, effort]
     return {"native_tools": True, "workspace": str(root), "access_mode": mode(orc), "on_event": on_event,
+            "model": model, "effort": effort,
             "resume_session": saved.get("id") if saved.get("scope") == scope else None}
 
 
+def session_key(orc, provider, model, effort):
+    cfg = orc.cfg.get(provider, {})
+    return provider if (model, effort) == (cfg.get('model', ''), cfg.get('effort', '')) else f'{provider}:{model}:{effort}'
+
+
 def remember(orc, task_id, provider, request_options, result):
-    if not request_options:
+    if not request_options.get('native_tools'):
         return
     # Direct edits may have happened even if the final answer failed. Always refresh the index.
     orc._workspaces.pop(orc.db.get_task(task_id)["project_id"], None)
     if result and result.session_id:
         sessions = dict(orc.db.get_task(task_id)["state"].get("native_sessions", {}))
-        sessions[provider] = {"id": result.session_id,
+        model = request_options.get('model', orc.cfg.get(provider, {}).get('model', ''))
+        effort = request_options.get('effort', orc.cfg.get(provider, {}).get('effort', ''))
+        sessions[session_key(orc, provider, model, effort)] = {"id": result.session_id,
                              "scope": [request_options["workspace"], request_options["access_mode"],
-                                       orc.cfg.get(provider, {}).get("model", ""),
-                                       orc.cfg.get(provider, {}).get("effort", "")]}
+                                       model, effort]}
         orc.db.update_task_state(task_id, native_sessions=sessions)
 
 
@@ -75,6 +87,7 @@ Find information yourself before asking the user to find folders or paste files.
 Enoy's source path above is authoritative even if its folder has an older name.
 Inspect the existing application before making changes; never invent a replacement app.
 Run relevant checks. Report actual results and failures. Native tools use the CLI's approval policy.
+Give brief public progress updates explaining the next action and its purpose. Do not expose private internal reasoning.
 Native edits change files directly; do not also return patch blocks for edits already applied.
 The coordinator may delegate substantial tasks before editing. An assigned worker completes its task directly.
 Publishing, messaging and destructive actions require specific authorization.

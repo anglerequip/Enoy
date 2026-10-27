@@ -51,8 +51,21 @@ class App:
         self.window = None  # The desktop window with Enoy's own header (app.DesktopFrame), when there is one.
         self.save_config = save_config
         self.last_seen = time.time()
+        from .usage import UsageMonitor
+        self.usage_monitor = UsageMonitor()
+        self.shutdown_requested = threading.Event()
+        self.shutdown_callback = None
+        from .updates import UpdateManager
+        self.updates = UpdateManager(
+            busy=lambda: any(t.is_alive() for t in orchestrator._threads) or bool(orchestrator._busy),
+            shutdown=self.request_shutdown)
         self.routes: list[tuple[str, re.Pattern, Callable]] = []
         self._register()
+
+    def request_shutdown(self):
+        self.shutdown_requested.set()
+        if self.shutdown_callback:
+            self.shutdown_callback()
 
     def route(self, method: str, pattern: str):
         def deco(fn):
@@ -67,8 +80,47 @@ class App:
         orc = self.orc
         db = orc.db
 
+        @r("GET", "/api/updates")
+        def update_status(q, body):
+            return self.updates.snapshot()
+
+        @r("POST", "/api/updates")
+        def check_updates(q, body):
+            try:
+                return self.updates.start(install=True)
+            except ValueError as exc:
+                raise ApiError(409, str(exc)) from exc
+
+        @r("POST", "/api/providers/install")
+        def install_providers(q, body):
+            from .provider_launch import install_missing
+            try:
+                return install_missing()
+            except (ValueError, OSError) as exc:
+                raise ApiError(400, str(exc)) from exc
+
+        @r("GET", "/api/usage")
+        def provider_usage(q, body):
+            return self.usage_monitor.read(orc, refresh=q.get("refresh") == "1")
+
+        @r("POST", "/api/usage/claude")
+        def claude_usage(q, body):
+            from .usage import save_claude
+            try:
+                return save_claude(db, body)
+            except (ValueError, TypeError, AttributeError) as exc:
+                raise ApiError(400, "Enter valid percentages and reset dates for each window.") from exc
+
+        @r("GET", "/api/usage/savings")
+        def token_savings(q, body):
+            return db.context_savings()
+
         @r("GET", "/api/status")
         def status(q, body):
+            if q.get('refresh') == '1':
+                claude = orc.backends.get(CLAUDE)
+                if claude is not None and hasattr(claude, '_auth_cache'):
+                    claude._auth_cache = None
             states = orc.backend_status(refresh=q.get('refresh')=='1')
             return {'version':__version__, 'codex':states.get(CODEX,{}), 'claude':states.get(CLAUDE,{}),
                     'coordinator':True,'routing':orc.cfg['routing'],'config_warnings':self.cfg_warnings,
@@ -77,11 +129,24 @@ class App:
                     'agent':orc.cfg['agent'],
                     'claude_last_verified':db.kv_get('claude_last_verified')}
 
+        @r("POST", "/api/providers/(codex|claude)/launch")
+        def launch_provider(q, body, provider):
+            from .provider_launch import launch
+            try:
+                return launch(provider, orc.cfg[provider], body.get('action', 'launch'))
+            except (ValueError, OSError) as exc:
+                raise ApiError(400, str(exc)) from exc
+
         @r("GET", "/api/config")
         def get_config(q, body):
             return {"config": orc.cfg, "defaults": config_mod.DEFAULTS,
                     "routing_modes": config_mod.ROUTING_MODES, "workflows": config_mod.WORKFLOWS,
                     "aggressiveness": config_mod.AGGRESSIVENESS}
+
+        @r("GET", "/api/blender")
+        def blender_status(q, body):
+            from . import blender
+            return blender.status(orc.cfg)
 
         @r("POST", "/api/config")
         def set_config(q, body):
@@ -495,14 +560,14 @@ class App:
         def new_task(q, body):
             self._project(body.get("project_id"))
             if body.get('backend') not in (None, '', 'auto', CODEX, CLAUDE):
-                raise ApiError(400, 'Choose Auto, ChatGPT / Codex, or Claude.')
+                raise ApiError(400, 'Choose Auto, Codex, or Claude.')
             kind = body.get("kind") if body.get("kind") in ("ask", "edit") else None
             backend = body.get("backend") if body.get("backend") in (CODEX, CLAUDE) else None
             return {"task": orc.start_task(int(body["project_id"]), body.get("objective", ""), kind, backend,
                                            [f for f in body.get("files", []) if isinstance(f, str)],
                                            local_only=bool(body.get("local_only")),
                                            team=body.get("team") if isinstance(body.get("team"), bool) else None,
-                                           images=body.get("images") or [])}
+                                           images=body.get("images") or [], starting_model=body.get("starting_model"))}
 
         @r("POST", "/api/images")
         def upload_image(q, body):
@@ -568,7 +633,11 @@ class App:
         def message(q, body, tid):
             backend = body.get("backend") if body.get("backend") in (CODEX, CLAUDE) else None
             files = [f for f in body.get("files", []) if isinstance(f, str)]
-            return {"task": orc.send_message(int(tid), body.get("text", ""), backend, files, body.get("images") or [])}
+            return {"task": orc.send_message(int(tid), body.get("text", ""), backend, files, body.get("images") or [], starting_model=body.get("starting_model"))}
+
+        @r("POST", r"/api/tasks/(\d+)/compact")
+        def compact(q, body, tid):
+            return {"task": orc.compact_task(int(tid), body.get("focus", ""))}
 
         for action, fn in (
             ("cancel", lambda tid: orc.cancel(tid)),
@@ -809,6 +878,8 @@ def make_handler(app: App):
                     self._json(400, {"error": "Body is not JSON"})
                     return
             try:
+                if method == "POST" and app.updates.snapshot()["status"] == "installing":
+                    raise ApiError(409, "Enoy is installing an update and will restart shortly.")
                 result = app.dispatch(method, url.path, query, body)
                 self._json(200, result if result is not None else {"ok": True})
             except ApiError as exc:

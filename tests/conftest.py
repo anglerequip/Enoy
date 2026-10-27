@@ -70,6 +70,7 @@ class FakeBackend:
 def cfg():
     c, _ = config_mod.validate({})
     c["agent"]["native_tools"] = False  # Existing fixtures exercise validated patch workflows.
+    c['coordinator'].update(claude_reviews=False, claude_complex=False)  # Legacy workflow contracts.
     c["claude"]["confirm_before_send"] = False
     c["permissions"]["test_after_apply"] = False  # Tests that want it turn it on.
     return c

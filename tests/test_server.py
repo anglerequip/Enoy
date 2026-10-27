@@ -50,6 +50,57 @@ def test_ui_is_served_with_token(server):
     assert status == 200
 
 
+def test_provider_launch_endpoint(server, monkeypatch):
+    from enoy import provider_launch
+    calls = []
+    def launch(provider, settings, action):
+        calls.append((provider, settings, action))
+        return {'opened': True}
+    monkeypatch.setattr(provider_launch, 'launch', launch)
+    url = '/api/providers/claude/launch'
+    assert call(server, 'POST', url, {}, token=False)[0] == 401
+    assert not calls
+    assert call(server, 'POST', url, {'action': 'login'}) == (200, {'opened': True})
+    assert calls == [('claude', server.app.orc.cfg['claude'], 'login')]
+    def fail(*args):
+        raise ValueError('CLI missing')
+    monkeypatch.setattr(provider_launch, 'launch', fail)
+    assert call(server, 'POST', url, {}) == (400, {'error': 'CLI missing'})
+
+
+def test_usage_api(server):
+    import time
+    assert call(server, "GET", "/api/usage", token=False)[0] == 401
+    assert call(server, "POST", "/api/usage/claude", {}, token=False)[0] == 401
+    assert call(server, "GET", "/api/usage/savings", token=False)[0] == 401
+    status, data = call(server, "GET", "/api/usage")
+    assert status == 200
+    assert data["codex"]["windows"] == []
+    assert data["claude"]["source"] == "Claude subscription"
+    assert call(server, "POST", "/api/usage/claude", {"five_hour": {"used_percent": -1, "resets_at": time.time() + 100}})[0] == 400
+    status, data = call(server, "POST", "/api/usage/claude", {"seven_day": {"used_percent": 64, "resets_at": time.time() + 100}})
+    assert status == 200 and data["windows"][0]["remaining_percent"] == 36
+    assert call(server, "GET", "/api/usage")[1]["claude"]["windows"] == data["windows"]
+    assert call(server, "GET", "/api/usage/savings")[1]["estimated_tokens_saved"] == 0
+
+
+def test_explicit_status_refresh_clears_auth_cache(server):
+    backend = server.app.orc.backends[CLAUDE]
+    backend._auth_cache = (1, {'loggedIn': False})
+    call(server, 'GET', '/api/status?refresh=1')
+    assert backend._auth_cache is None
+
+
+def test_update_api_requires_auth_and_handles_active_tasks(server, monkeypatch):
+    assert call(server, 'GET', '/api/updates', token=False)[0] == 401
+    assert call(server, 'POST', '/api/updates', {}, token=False)[0] == 401
+    assert call(server, 'GET', '/api/updates')[1]['status'] == 'idle'
+    monkeypatch.setattr(server.app.updates, 'busy', lambda: True)
+    assert call(server, 'POST', '/api/updates', {})[0] == 409
+    monkeypatch.setattr(server.app.updates, 'start', lambda install: {'status': 'checking'})
+    assert call(server, 'POST', '/api/updates', {}) == (200, {'status': 'checking'})
+
+
 def test_api_requires_token_and_local_host(server):
     assert call(server, "GET", "/api/status", token=False)[0] == 401
     assert call(server, "GET", "/api/status", host="evil.example.com")[0] == 403

@@ -42,7 +42,7 @@ from .storage import STEP_OPEN, TERMINAL_STATUSES, Storage
 
 log = logging.getLogger("enoy.orchestrator")
 
-BACKEND_LABEL = {CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
+BACKEND_LABEL = {CLAUDE: "Claude", CODEX: "Codex"}
 MAX_READ_ROUNDS = 3  # How many times ChatGPT may ask for more project files in one answer.
 CLAUDE_STEP_TITLE = {"plan": "Write an implementation plan", "review": "Review ChatGPT's change",
                      "edit": "Write the change", "ask": "Answer", "lead": "Read the request and decide (lead)",
@@ -323,14 +323,16 @@ class Orchestrator:
 
     def start_task(self, project_id: int, objective: str, kind: str | None = None,
                    backend: str | None = None, files: list[str] | None = None, local_only: bool = False,
-                   team: bool | None = None, images: list[str] | None = None) -> dict:
+                   team: bool | None = None, images: list[str] | None = None, starting_model: dict | None = None) -> dict:
         objective = objective.strip()
         if not objective:
             raise TaskError("The task is empty.")
+        from .model_policy import validate_start
+        starting_model = validate_start(starting_model)
         image_ids = imgs.valid_ids(images)
         title = objective.splitlines()[0][:80]
         task = self.db.create_task(project_id, title, objective, kind or "auto",
-                                   state={"override": backend, "kind_override": kind, "extra_paths": files or [],
+                                   state={"starting_model": starting_model, "override": backend, "kind_override": kind, "extra_paths": files or [],
                                           "local_only": bool(local_only),
                                           "team": self.cfg["team"]["default_new_chats"] if team is None else bool(team)})
         self.db.add_message(task["id"], "user", objective, images=image_ids)
@@ -343,21 +345,59 @@ class Orchestrator:
         return self.db.get_task(task["id"])
 
     def send_message(self, task_id: int, text: str, backend: str | None = None,
-                     files: list[str] | None = None, images: list[str] | None = None) -> dict:
+                     files: list[str] | None = None, images: list[str] | None = None, starting_model: dict | None = None) -> dict:
         """Follow-up message in an existing task (conversation continues)."""
         task = self._require(task_id)
         if task["status"] in ("running", "queued"):
             raise TaskError("This task is still running.")
         if not text.strip():
             raise TaskError("The message is empty.")
+        from .model_policy import validate_start
+        starting_model = validate_start(starting_model)
         self.db.add_message(task_id, "user", text, images=imgs.valid_ids(images))
         new_files = [f for f in (files or []) if f not in task["state"].get("extra_paths", [])]
-        self.db.update_task_state(task_id, followup=text, extra_paths=new_files)
+        self.db.update_task_state(task_id, followup=text, extra_paths=new_files, starting_model=starting_model)
         self._act(task_id, "task.message", "Follow-up message received.", "user", "request")
         self._cancel[task_id] = threading.Event()
         if self._queue_if_paused(task_id, {"type": "followup", "text": text, "backend": backend}):
             return self.db.get_task(task_id)
         self._spawn(self._guard, task_id, lambda tid: self._run_followup(tid, text, backend))
+        return self.db.get_task(task_id)
+
+    def compact_task(self, task_id: int, focus: str = "") -> dict:
+        """Compact provider context while keeping the complete chat transcript visible."""
+        task = self._require(task_id)
+        if task["status"] in ("running", "queued"):
+            raise TaskError("Wait until this chat finishes before compacting it.")
+        messages = self.db.messages(task_id)
+        if not messages:
+            raise TaskError("There is no conversation to compact yet.")
+        previous = task["state"].get("context_compaction") or {}
+        parts = []
+        if previous.get("summary"):
+            parts += ["## Earlier compacted context", previous["summary"][-4000:]]
+        current = self.continuation_brief(task_id)
+        if len(current) > 9000:
+            current = current[:7000] + "\n[Middle of the continuation brief omitted.]\n" + current[-2000:]
+        parts += ["## Current task state", current]
+        recent = messages[-8:]
+        if recent:
+            lines = [f"- {m['role'].capitalize()}: {m['content'].replace(chr(10), ' ')[:1000]}"
+                     for m in recent]
+            parts += ["## Recent conversation", *lines]
+        brief = "\n\n".join(parts)
+        focus = focus.strip()[:1000]
+        if focus:
+            brief += "\n\n## Keep in mind while continuing\n" + focus
+        cutoff = messages[-1]["id"]
+        self.db.update_task_state(task_id, context_compaction={
+            "summary": brief,
+            "through_message_id": cutoff,
+            "created": time.time(),
+        }, native_sessions={})
+        self._act(task_id, "context.compacted", "Compacted provider context and reset native provider sessions.",
+                  "user", "context")
+        self._task_changed(task_id)
         return self.db.get_task(task_id)
 
     def cancel(self, task_id: int) -> None:
@@ -534,7 +574,7 @@ class Orchestrator:
             runner.msg("user", tt["role"], "cancellation", f"You cancelled {label}.", team_task_id)
         elif action == "model":
             if provider not in (CLAUDE, CODEX):
-                raise TaskError("Pick ChatGPT / Codex or Claude.")
+                raise TaskError("Pick Codex or Claude.")
             if provider not in self.backends:
                 raise TaskError("That provider is not configured.")
             if tt["status"] not in ("planned", "ready", "paused", "blocked", "failed") or tt["role"] not in ("developer", "debugger"):
@@ -1066,7 +1106,7 @@ class Orchestrator:
         def work(tid: int) -> None:
             key = "summary:" + sha256_text(listing)
             cached = self.db.cache_get(key)
-            self._set_owner(tid, CODEX, "Project summary using ChatGPT / Codex.")
+            self._set_owner(tid, CODEX, "Project summary using Codex.")
             if cached:
                 step = self._step(tid, "Reuse the saved summary", "system", "analysis",
                                   "The file list has not changed since the last summary.")
@@ -1075,7 +1115,7 @@ class Orchestrator:
                 self._step_end(step, "completed", "Used the saved summary; no model request.")
                 self._complete(tid, "Used the cached summary; the file list has not changed.")
                 return
-            step = self._step(tid, "Summarize the project", CODEX, "local", "Project summary using ChatGPT / Codex.")
+            step = self._step(tid, "Summarize the project", CODEX, "local", "Project summary using Codex.")
             pack = ctx.gather(ws, "readme main index init app server game config", self.cfg["context"])
             readme = [f for f in pack.files][:5]
             prompt = ("Write a concise summary of this project for another developer: purpose, main parts, "
@@ -1456,7 +1496,10 @@ class Orchestrator:
         check = privacy.CloudCheck(sent_files=[f["path"] for f in allowed],
                                    excluded_files=[f["path"] for f in files_meta if f not in allowed])
         prompt = privacy.finalize(user, private, check)
-        from . import native
+        from . import native, model_policy, blender
+        profile = {'model':self.cfg['claude'].get('model', ''), 'effort':self.cfg['claude'].get('effort', ''),
+                   'reason':'Claude is handling the selected or delegated task.'}
+        model_policy.announce(self, task_id, CLAUDE, purpose, profile)
         native_options = native.options(self, task_id, CLAUDE, purpose)
         files = [] if native_options else self._claude_file_tools(task_id)
         if not native_options and self.cfg.get("tools", {}).get("enabled", True):
@@ -1474,6 +1517,8 @@ class Orchestrator:
             result = self.backends[CLAUDE].chat(ChatRequest(
                 messages=[ChatMessage("system", system), ChatMessage("user", prompt, images=images or [])], purpose=purpose,
                 cancel=self._cancel.setdefault(task_id, threading.Event()), enoy_tools=files,
+                mcp_servers=blender.servers(self, task_id, CLAUDE, purpose),
+                on_thinking=lambda text: model_policy.progress(self, task_id, text),
                 enoy_env=self._mcp_env(task_id) if files else {}, **native_options))
         except BackendError as exc:
             if exc.kind in ("limit", "unavailable"):
@@ -1489,8 +1534,9 @@ class Orchestrator:
             self._record_claude_tools(task_id, result.tool_events, step_id)
         if result.usage:
             note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
-            self.db.set_transmission_usage(trans, note)
             self._act(task_id, "backend.usage", f"Reported by Claude Code: {note}", CLAUDE, step_id=step_id)
+        self.db.set_transmission_usage(trans, json.dumps({**result.usage, 'model':result.model,
+            'effort':profile['effort'], 'progress':self.db.get_task(task_id)['state'].get('active_agent', {}).get('progress', [])}))
         self.db.kv_set("claude_last_verified", time.time())
         return result
 
@@ -1547,7 +1593,7 @@ class Orchestrator:
     def routing_stats(self) -> dict:
         rows = self.db.finished_tasks(50)
         counts = {p: sum(int((t['state'].get('work') or {}).get(p,0)) for t in rows) for p in (CODEX, CLAUDE)}
-        return {'window':50,'counted':len(rows),'providers':counts,'note':'Only ChatGPT / Codex and Claude are available.','work':{},'rule':'Recorded provider usage.'}
+        return {'window':50,'counted':len(rows),'providers':counts,'note':'Only Codex and Claude are available.','work':{},'rule':'Recorded provider usage.'}
 
     # Activity --------------------------------------------------------------------------------------
 

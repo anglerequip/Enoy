@@ -40,7 +40,7 @@ TASK_STATUS_LABEL = {
     "awaiting_claude": "Needs your OK for Claude", "completed": "Completed", "failed": "Failed",
     "cancelled": "Cancelled", "interrupted": "Interrupted",
 }
-AGENT_LABEL = {LOCAL: "Qwen", CLAUDE: "Claude", CODEX: "ChatGPT / Codex", "system": "Enoy", "user": "You"}
+AGENT_LABEL = {LOCAL: "Qwen", CLAUDE: "Claude", CODEX: "Codex", "system": "Enoy", "user": "You"}
 
 # Timeline filter groups.
 CATEGORY = {

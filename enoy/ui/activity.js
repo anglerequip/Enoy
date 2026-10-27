@@ -9,7 +9,7 @@ const AC = {
   agent: lsGet("acAgent") || "all", type: lsGet("acType") || "all", scope: lsGet("acScope") || "task",
   timer: null, loading: false, chunks: {}, openDetails: new Set(),
 };
-const AGENT = { codex: "ChatGPT / Codex", qwen: "Qwen (previous provider)", claude: "Claude", system: "Enoy", user: "You" };
+const AGENT = { codex: "Codex", qwen: "Qwen (previous provider)", claude: "Claude", system: "Enoy", user: "You" };
 const STATE = {
   offline: ["Offline", "muted"], available: ["Available", "ok"], working: ["Working", "live"],
   waiting: ["Waiting", "warn"], blocked: ["Blocked", "bad"], failed: ["Failed", "bad"], completed: ["Completed", "ok"],
@@ -108,6 +108,8 @@ function renderActivity() {
     ["id", "key", "cs"].filter(k => a.dataset[k]).map(k => `[data-${k}="${a.dataset[k]}"]`).join("") : null) : null;
   panel.innerHTML = head(d) + `<div class="ac-body">
     ${AC.error ? `<div class="ac-banner bad">Could not refresh: ${esc(AC.error)}. Showing the last loaded state.</div>` : ""}
+    ${activitySummaryHtml(d)}
+    <details class="ac-more" data-key="activity-more" ${AC.openDetails.has("activity-more") ? "open" : ""}><summary>More · models, workflow & technical details</summary>
     ${overviewHtml(d)}
     <section class="ac-sec"><h3>Models</h3>${leadLine(d)}<div class="ac-agents">${d.agents.map(agentHtml).join("")}</div></section>
     ${d.focus && d.focus.team ? teamHtml(d.focus.team) : ""}
@@ -115,11 +117,31 @@ function renderActivity() {
     ${routingHtml(d.routing)}
     ${tasksHtml(d)}
     ${timelineHtml(d)}
+    </details>
   </div>`;
   panel.querySelector(".ac-body").scrollTop = scroll;
   if (focusKey) { const el = panel.querySelector(focusKey); if (el) el.focus({ preventScroll: true }); }
   const n = d.counts.needs_you;
   $("activity-btn").dataset.count = n > 0 ? n : "";
+}
+
+function activitySummaryHtml(d) {
+  const f = d.focus, t = f && f.task, c = d.counts;
+  const status = { running: "Your request is being worked on", queued: "Your request is waiting to start",
+    awaiting_approval: "Your approval is needed", awaiting_claude: "Waiting to send work to Claude",
+    completed: "Your request is complete", failed: "Something went wrong", cancelled: "This request was cancelled",
+    interrupted: "Work stopped before finishing" };
+  return `<section class="ac-sec ac-summary">
+    <h3>At a glance</h3>
+    <p class="ac-summary-status">${t ? esc(status[t.status] || t.status_label) : "No request selected"}</p>
+    ${t ? `<div class="ac-summary-title">${esc(t.title)}</div>
+      <div class="ac-summary-item"><b>Now</b><p>${esc(f.stage || t.status_label)}${t.owner ? ` · ${esc(AGENT[t.owner] || t.owner)}` : ""}</p></div>
+      <div class="ac-summary-item"><b>Latest update</b><p>${f.last_activity ? esc(f.last_activity.text) : "No update recorded yet."}</p>${f.last_activity ? `<span class="small muted">${ago(f.last_activity.created)}</span>` : ""}</div>
+      <div class="ac-summary-item"><b>Next</b><p>${esc(t.next || (t.status === "completed" ? "Read the result in your chat." : "Waiting for the next update."))}</p></div>
+      ${controlsHtml(t, false)}` : `<p class="muted">Send a message to see its progress here.</p>`}
+    <p class="small muted">${Number(c.active)} working · ${Number(c.queued)} waiting · ${Number(c.completed)} completed</p>
+    ${c.needs_you ? `<p class="ac-note warn">${Number(c.needs_you)} request(s) need your attention. Open More to find and review them.</p>` : ""}
+    </section>`;
 }
 
 function head(d) {
@@ -236,7 +258,7 @@ function ttControls(x) {
 }
 
 function routeRows(r) {
-  return `<p class="small muted">${esc(r.note || "ChatGPT and Claude share recorded task results.")}</p>`;
+  return `<div>Sharing</div><div>${esc((r && r.note) || "ChatGPT and Claude share recorded task results.")}</div>`;
 }
 
 function verificationRow(v) {
@@ -355,7 +377,7 @@ function timelineHtml(d) {
   return `<section class="ac-sec"><h3>Timeline</h3>
     <div class="row ac-filters">
       <select id="ac-scope" aria-label="Which tasks">${opt({ task: "This task", all: "All tasks" }, AC.scope)}</select>
-      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", codex: "ChatGPT / Codex", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
+      <select id="ac-agent" aria-label="Model or component">${opt({ all: "Everyone", codex: "Codex", claude: "Claude", system: "Enoy", user: "You" }, AC.agent)}</select>
       <select id="ac-type" aria-label="Event type">${opt(TYPES, AC.type)}</select>
     </div>
     <div class="ac-timeline">${evs.length ? evs.map(e => {

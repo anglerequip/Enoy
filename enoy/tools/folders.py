@@ -40,6 +40,9 @@ class FolderService:
 
 def enoy_source() -> str:
     """Enoy's own source folder when it runs from source (the folder holding enoy/ui), else ""."""
+    import sys
+    if getattr(sys, "frozen", False):
+        return ""
     root = Path(__file__).resolve().parents[2]
     return str(root) if (root / "enoy" / "ui" / "app.js").is_file() else ""
 

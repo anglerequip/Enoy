@@ -26,7 +26,7 @@ from . import context as ctx
 from . import gitinfo
 from . import patches
 from . import privacy
-from . import native
+from . import native, model_policy
 from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage
 from .redact import contains_secret
 from .routing import classify
@@ -35,7 +35,7 @@ from .storage import TEAM_OPEN
 if TYPE_CHECKING:
     from .orchestrator import Orchestrator
 
-PROVIDER_LABEL = {CLAUDE: "Claude", CODEX: "ChatGPT / Codex"}
+PROVIDER_LABEL = {CLAUDE: "Claude", CODEX: "Codex"}
 
 ROLE_LABEL = {
     "lead": "Claude (lead)", "orchestrator": "Orchestrator", "architect": "Architect", "developer": "Developer", "qa": "QA",
@@ -336,6 +336,14 @@ class TeamRunner:
 
     def route(self, text: str, role: str, files: int) -> tuple[str, str]:
         """Provider for one piece of team work, from the smart router."""
+        task = classify(text, files)
+        complex_work = role in ('debugger', 'reviewer') or bool(self.run.get('repairs')) or task.complexity != 'low' or task.risk == 'high' or files > 2 or task.needs.get('multi_step')
+        if self.orc.cfg['coordinator'].get('claude_complex') and complex_work:
+            blocked = self._claude_allowed() or self._budget_left(CLAUDE)
+            if not blocked:
+                return CLAUDE, 'Claude handles complex implementation, independent review, and repairs.'
+            self.orc._act(self.task_id, 'provider.fallback', f'Claude cannot handle this task: {blocked}. Using ChatGPT.', CODEX, role)
+            return CODEX, 'Claude fallback: ' + blocked
         if self.cooperative:
             return CODEX, "ChatGPT handles follow-up review and repair using shared results."
         return CODEX, "ChatGPT handles this task."
@@ -354,7 +362,10 @@ class TeamRunner:
         step = self.db.get_team_task(tt["id"]).get("result", {}).get("step")
         if self.cooperative or provider == CODEX:
             from .coordinator import call
-            return call(self.orc, self.task_id, provider, system, user, purpose, files_meta, private, step).text
+            profile = model_policy.choose(self.orc.cfg, purpose, tt['title'] + '\n' + tt['description'],
+                len(tt.get('files') or files_meta), repair=tt['role'] == 'debugger' or tt.get('attempts', 0) > 1 or bool(self.run.get('repairs')) or bool(self.run.get('lead_reviews')))
+            return call(self.orc, self.task_id, provider, system, user, purpose, files_meta, private, step,
+                        model_profile=profile).text
         return self.orc._claude_direct(self.task_id, step, purpose, system, user, files_meta, private or set()).text
 
     def _agent_mode(self) -> bool:
@@ -502,6 +513,10 @@ class TeamRunner:
         requested=p.extra.get('model',CODEX)
         if requested not in (CODEX,CLAUDE):
             raise PlanError('Plans may assign only codex or claude.')
+        if not self.task['state'].get('override') and self.orc.cfg['coordinator'].get('claude_complex'):
+            preferred, reason = self.route(p.title + '\n' + p.description, 'developer', len(p.files))
+            if preferred == CLAUDE:
+                return preferred, reason
         blocked=self._claude_allowed() if requested==CLAUDE else ''
         provider=CODEX if blocked else requested
         return provider, 'ChatGPT assigned '+PROVIDER_LABEL[provider]+': '+(p.extra.get('why') or p.title)+(('; '+blocked) if blocked else '')
@@ -522,6 +537,16 @@ class TeamRunner:
                               route_reason=f"{lead_name} leads: its first reply contained the plan.",
                               activation_reason="The lead's plan stands in for a separate architect step.")
         specialties = detect_specialties(objective)
+        if self.cooperative and orc.cfg['coordinator'].get('claude_reviews') and not self.task['state'].get('override'):
+            payload = {'acceptance':acceptance, 'architecture':architecture, 'tasks':[
+                {'id':p.key, 'title':p.title, 'description':p.description, 'files':p.files,
+                 'depends_on':p.depends_on, **p.extra} for p in tasks]}
+            review = self.db.add_team_task(self.task_id, 'reviewer', 'Claude reviews the GPT implementation plan',
+                plan_key='PLAN_REVIEW', provider=CLAUDE, description='Check scope, dependencies, acceptance criteria and verification before any edits.')
+            self._save_run(plan_review_pending=payload, plan_review_id=review['id'], specialties=specialties,
+                           acceptance=acceptance, architecture=architecture, status='running')
+            self.continue_run()
+            return
         key_to_id = self._add_plan_tasks(tasks, acceptance, specialties, lead=True)
         self._save_run(status="running", acceptance=acceptance, architecture=architecture, specialties=specialties,
                        plan_note="; ".join(notes))
@@ -547,9 +572,10 @@ class TeamRunner:
         devs = [t for t in self.tasks if t["role"] == "developer" and t["status"] == "completed"]
         files = sorted({f for t in devs for f in t["result"].get("changed", [])})
         key = f"LEAD{run['lead_reviews']}"
+        provider, repair_reason = self.route(instruction, 'debugger', len(files))
         tt = self.db.add_team_task(self.task_id, "developer", f"Fix: {instruction[:100]}", plan_key=key,
                                    description=instruction, files=files, acceptance=run.get("acceptance", []),
-                                   provider=CODEX if self.cooperative else CODEX, route_reason="The lead requested a correction.",
+                                   provider=provider, route_reason=repair_reason,
                                    activation_reason=f"{lead_name} (lead) asked for a fix after checking the results.",
                                    spec={"parent": self.task_id, "why": f"{lead_name}'s final check",
                                          "expected_output": "Change blocks fixing exactly this defect.",
@@ -589,6 +615,12 @@ class TeamRunner:
             if self.run.get("status") in ("completed", "failed", "cancelled"):
                 return
             tasks = self.tasks
+            if self.run.get('plan_review_pending'):
+                review = self.db.get_team_task(self.run['plan_review_id'])
+                if self._gate([review]):
+                    return
+                self._review_plan(self.db.get_team_task(review['id']))
+                continue
             by_id = {t["id"]: t for t in tasks}
             # Dependencies that can no longer finish block their dependents.
             for t in tasks:
@@ -617,6 +649,60 @@ class TeamRunner:
             if self._gate(batch):
                 return
             self._run_batch(batch)
+
+    def _review_plan(self, tt: dict) -> None:
+        """Review GPT's plan before installing executable developer tasks."""
+        payload = self.run['plan_review_pending']
+        blocked = self._claude_allowed() or self._budget_left(CLAUDE)
+        if tt['provider'] != CLAUDE:
+            blocked = blocked or 'Claude was not approved for this run.'
+        selected = payload
+        text = ''
+        if not blocked:
+            step = self.orc._step(self.task_id, 'Claude reviews the GPT plan', CLAUDE, 'plan_review',
+                                  'Independent review before implementation starts.')
+            self.db.update_team_task(tt['id'], status='running', result={'step':step})
+            system = ('You are Claude, independently reviewing GPT\'s proposed implementation plan. '
+                      'Check requirements, correctness, dependencies, scope, missing tests and task complexity. '
+                      'Do not edit files. Return PLAN_VERDICT: APPROVE with a short explanation, or '
+                      'PLAN_VERDICT: REVISE followed by a complete corrected plan in one JSON code block. '
+                      'The plan must contain acceptance, architecture and tasks with id, title, description, '
+                      'files, depends_on, model (codex or claude), and why. Keep within the user\'s objective. '
+                      'Assign bounded routine edits to codex; complex implementation and repairs to claude.')
+            try:
+                text = self.call(tt, CLAUDE, system, 'User objective:\n' + self.run['objective'] +
+                                 '\n\nGPT plan:\n' + json.dumps(payload), 'plan_review', [])
+                verdict = re.search(r'^\s*PLAN_VERDICT:\s*(APPROVE|REVISE)\b', text, re.I | re.M)
+                if not verdict:
+                    raise PlanError('Claude returned no explicit plan review verdict; implementation has not started.')
+                if verdict.group(1).upper() == 'REVISE':
+                    parsed = parse_plan(text, self.cfg['max_tasks'])
+                    selected = {'acceptance':parsed[1], 'architecture':parsed[2], 'tasks':[
+                        {'id':p.key, 'title':p.title, 'description':p.description, 'files':p.files,
+                         'depends_on':p.depends_on, **p.extra} for p in parsed[0]]}
+                self.orc._step_end(step, 'completed', 'Plan ' + verdict.group(1).lower() + ' by Claude.')
+            except BackendError as exc:
+                if exc.kind == 'cancelled':
+                    raise
+                self.orc._step_end(step, 'failed', error=str(exc))
+                if exc.kind not in ('limit', 'unavailable', 'budget'):
+                    raise
+                blocked = str(exc)
+        if blocked:
+            text = 'Claude plan review did not run: ' + blocked + '. Continuing with GPT\'s plan; no Claude approval is claimed.'
+            self.orc._act(self.task_id, 'review.unavailable', text, CLAUDE, 'plan_review')
+        self.db.update_team_task(tt['id'], status='completed', result={'reviewed':not bool(blocked), 'output':text})
+        self.msg('reviewer', 'orchestrator', 'review_finding', text, tt['id'])
+        self.db.add_message(self.task_id, 'assistant', text, CLAUDE if not blocked else 'enoy')
+        self.orc.bus.publish({'type':'message_done', 'task_id':self.task_id})
+        plan, acceptance, architecture, notes = parse_plan(json.dumps(selected), self.cfg['max_tasks'])
+        self._save_run(plan_review_pending=None, plan_review_status='unavailable' if blocked else 'reviewed',
+                       acceptance=acceptance, architecture=architecture)
+        ids = self._add_plan_tasks(plan, acceptance, self.run.get('specialties') or {}, lead=True)
+        self._memory('task_plan', '\n'.join(f'{p.key}: {p.title}' for p in plan), True, 'Reviewed plan' if not blocked else 'GPT plan; Claude unavailable')
+        for p in plan:
+            row = self.db.get_team_task(ids[p.key])
+            self.msg('orchestrator', 'developer', 'assignment', f"{p.key} {p.title} → {PROVIDER_LABEL[row['provider']]}", row['id'])
 
     def _gate(self, batch: list[dict]) -> bool:
         """Ask once per run before the team's first Claude request, if Settings say to ask.
@@ -766,7 +852,7 @@ class TeamRunner:
                 raise
             orc._step_end(step, "failed", error=str(exc))
             if self.cooperative and provider == CLAUDE and exc.kind in ("limit", "unavailable") and not self._budget_left(CODEX):
-                reason = f"Claude could not continue: {exc}. ChatGPT / Codex takes over."
+                reason = f"Claude could not continue: {exc}. Codex takes over."
                 self.db.update_team_task(tt["id"], provider=CODEX, route_reason=reason, attempts=0)
                 self.msg("orchestrator", role, "handoff", reason, tt["id"])
                 orc._act(self.task_id, "task.handoff", reason, CODEX, STAGE_OF_ROLE[role])
@@ -793,6 +879,11 @@ class TeamRunner:
             result.update({"native": True, "native_files": observed,
                            "changed": [f["path"] for f in observed], "output": text, "summary": _first_line(text),
                            "diff_scope": "Readable indexed text files up to 200 KB each and 16 MB total; other edits remain in native tool activity."})
+            if not observed and re.search(r'\b(blocked|unable to|could not|couldn.t|access.{0,30}denied|did not edit|left.{0,40}unchanged)\b', text, re.I):
+                self.db.update_team_task(tt['id'], result=result)
+                orc._step_end(step, 'failed', error='Native worker reported a blocker and no file changes were observed.')
+                self._task_failed(tt, 'Implementation blocked: ' + _first_line(text), step_done=True)
+                return
             self.db.update_team_task(tt["id"], status="completed", result=result)
             orc._step_end(step, "completed", f"Native agent finished; {len(observed)} file change(s) observed on disk.")
             self.msg(role, "orchestrator", "completed", text, tt["id"])
@@ -1018,7 +1109,7 @@ class TeamRunner:
         findings = review_diff(files)
         added = sum(1 for f in files for ln in (f.get("diff") or "").splitlines() if ln.startswith("+") and not ln.startswith("+++"))
         risky = (self.task["state"].get("route") or {}).get("risk") == "high" or classify(self.run.get("objective", "")).risk == "high"
-        model_review = added >= self.cfg["review_min_lines"] or risky
+        model_review = (added >= self.cfg["review_min_lines"] or risky) and not orc.cfg['coordinator'].get('claude_reviews')
         if model_review:
             why = f"{added} added lines" if added >= self.cfg["review_min_lines"] else "a high-risk change"
             provider, reason = self.route("Review a risky multi-file change for correctness and security", "reviewer", len(files))
@@ -1080,6 +1171,8 @@ class TeamRunner:
                       "Repair round 2 or later." if run["repairs"] > 1 else "Review blockers need investigation.")
             provider, route_reason = self.route("Debug a failing check across modules; the same error repeats", "debugger", len(files))
             route_reason = f"{reason} {route_reason}"
+        if self.orc.cfg['coordinator'].get('claude_complex'):
+            provider, route_reason = self.route(report, 'debugger', len(files))
         tt = self.db.add_team_task(self.task_id, role, f"Fix: {(failure or 'review blockers')[:100]}",
                                    plan_key=f"FIX{run['repairs']}", description=report, files=files,
                                    acceptance=self.run.get("acceptance", []), provider=provider, route_reason=route_reason,
