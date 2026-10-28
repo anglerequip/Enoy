@@ -141,8 +141,15 @@ def classify(command: str, allowlist: list[str]) -> Policy:
 
 
 def safe_env() -> dict[str, str]:
-    """Copy of the environment without variables that look like credentials."""
-    return {k: v for k, v in os.environ.items() if not is_secret_env_name(k)}
+    """Copy of the environment without variables that look like credentials.
+
+    Python children write no __pycache__ into the project: a cache file can outlive an edit made in
+    the same second (same size, same timestamp), so tests would run the old code, and leftover
+    caches make a finished worktree look dirty.
+    """
+    env = {k: v for k, v in os.environ.items() if not is_secret_env_name(k)}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 
 @dataclass
