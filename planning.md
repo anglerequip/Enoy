@@ -345,11 +345,16 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* Disjoint files, concurrency limits, spend reserved for every task in the batch, merges one at a time, a conflict sends the task back to ready for a new attempt. Tests first, with real temporary git and fake agents. It is enabled only after T12.1 passes.
 
 ### Phase 9: UI
-- [ ] **T9.1** Build nav entry and Project tab.
-- [ ] **T9.2** Plan tab.
-- [ ] **T9.3** Tasks tab and drawer.
-- [ ] **T9.4** Agents and Monitor tabs.
-- [ ] **T9.5** Settings → Providers tab.
+- [x] **T9.1** Build nav entry and Project tab. *Done:* There is a Build entry in the sidebar (same button style as Projects and Artifacts). The page (`enoy/ui/build.js`) reuses the projects.js page shell, `.seg` tabs, `.plist` rows and modals. The Project tab shows Git branch and clean/dirty state, instruction files, test commands, `planning.md` presence, the three roles with Local/Cloud and readiness, and the plan list. "Set up Git…" (with confirmation) and "Draft CLAUDE.md…" (preview, edit, save; replacing needs confirmation and keeps a backup) are wired to new routes. The back end is `enoy/buildservice.py` plus 16 routes under `/api/build/`. Slow work runs as background jobs whose result or error is kept in kv; tests run them inline.
+- [x] **T9.2** Plan tab. *Done:* The Plan tab has: a goal box with the planner's state (button disabled with the reason when it cannot run); version tabs; summary, architecture, risks, questions and validator warnings; task list with a full-spec modal; Request changes; Approve (latest version only, with confirmation); after approval the integration branch, changed files, "Update planning.md" (shows a diff and offers to replace it with a backup when the file was edited) and "Merge into my branch…" (confirmation, explains `git revert -m 1`). `Planner.create` is now `start()` (fast checks) plus `draft()` (model request).
+- [x] **T9.3** Tasks tab and drawer. *Done:* The Tasks tab has: Run next, Run all, Run in parallel (only when enabled) and Stop; progress and the implementer's state; a checklist with status badges, dependencies, attempts and blocker text. The task modal shows the blocker, commit and summary, evidence, frozen test SHA-256s, the full spec, runs, and Run/Try again buttons.
+- [x] **T9.4** Agents and Monitor tabs. *Done:* The Agents tab shows the current job and all implementer runs (attempt, phase, model, branch, error). The Monitor tab shows per-provider spending against its limits, totals for requests and tokens (cached ones counted separately), tasks needing attention, test results, model requests (tokens, cost, estimate/provider/unknown) and recent Build events. While work is running the page refreshes every 2 seconds.
+- [x] **T9.5** Settings → Providers tab. *Done:* Settings → Providers has: role selects (only models allowed for each role) and a parallel switch; the model list with add (prices per million tokens) and remove; one card per provider with Local/Cloud tag, state, on/off, address, concurrency, daily and monthly limits, an API key field (Credential Manager, never shown again), Test connection (free) and Send a test request… (shows the cost before sending). The Anthropic card warns about separate billing.
+  Checks:
+  - `tests/js/build.test.js` (pure helpers) and `tests/test_build_api.py` (9 tests: the full plan → approve → run → monitor → merge flow through the real OpenAI-compatible adapter against a fake server, planner failure, implementer rules, local-only, retry, git init, parallel off, CLAUDE.md).
+  - Browser preview with an isolated data folder and a seeded plan; no model was contacted: all five tabs, the task modal, Settings → Providers (switch on, add model, set role), offline banner and disabled buttons, light theme, 375 px width with no horizontal scroll, no console errors.
+  - Fixed during the check: the Settings-only wide modal style broke the task modal, so Build modals now use their own `build-modal` class; a stray "·" separator; tighter spacing in plan sections.
+  - Full suite: 560 passed.
 
 Each UI task has a JS test where logic exists (`tests/js`), plus a preview check: light and dark mode, narrow window, offline state.
 

@@ -1060,14 +1060,14 @@ async function openSettings(tab) {
 }
 
 function renderSettings() {
-  const tabs = [["general", "General"], ["updates", "Updates"], ["appearance", "Colours"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
+  const tabs = [["general", "General"], ["updates", "Updates"], ["appearance", "Colours"], ["models", "Models"], ["providers", "Providers"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
   openModal(`<div class="set-nav"><h2>Settings</h2>
     <button class="set-nav-about ${S.settingsTab === "about" ? "active" : ""}" data-action="settings-tab" data-tab="about">About Enoy</button>
     <div class="set-nav-divider" role="separator" aria-label="Settings sections">—</div>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
     <div class="set-body" id="set-body"><div class="muted">Loading…</div></div>`, true);
-  ({ about: settingsAbout, general: settingsGeneral, updates: settingsUpdates, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+  ({ about: settingsAbout, general: settingsGeneral, updates: settingsUpdates, appearance: settingsAppearance, models: settingsModels, providers: settingsProviders, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
 }
 
 function settingsAbout() {

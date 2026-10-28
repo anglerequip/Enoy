@@ -129,6 +129,10 @@ class GitWork:
             raise GitError("The repository has no commits yet. Make a first commit before running Build tasks.")
         return out.stdout.strip()
 
+    def current_branch(self) -> str:
+        """The branch the user has checked out ("" when detached)."""
+        return _git(self.repo, "branch", "--show-current").stdout.strip()
+
     @staticmethod
     def integration_branch(plan_id: int) -> str:
         return f"enoy/plan-{plan_id}"

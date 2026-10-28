@@ -10,7 +10,7 @@ NODE = shutil.which("node")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
-@pytest.mark.parametrize("filename", ["markdown.test.js", "chat-refresh.test.js", "provider-status.test.js", "activity-summary.test.js", "regular-chat.test.js", "appearance.test.js", "workspace-switch.test.js", "context-meter.test.js"])
+@pytest.mark.parametrize("filename", ["markdown.test.js", "chat-refresh.test.js", "provider-status.test.js", "activity-summary.test.js", "regular-chat.test.js", "appearance.test.js", "workspace-switch.test.js", "context-meter.test.js", "build.test.js"])
 def test_markdown_renderer(filename):
     script = Path(__file__).parent / "js" / filename
     proc = subprocess.run([NODE, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=60)

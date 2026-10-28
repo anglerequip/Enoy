@@ -55,6 +55,8 @@ class App:
         self.usage_monitor = UsageMonitor()
         from .providers import Providers
         self.build_providers = Providers(lambda: self.orc.cfg, self.orc.db)
+        from .buildservice import BuildService
+        self.build = BuildService(self.orc, self.build_providers)
         self.appearance_lock = threading.Lock()
         self.shutdown_requested = threading.Event()
         self.shutdown_callback = None
@@ -417,6 +419,88 @@ class App:
                                                                          for k, v in cfg["build"]["roles"].items()),
                      "user", "settings")
             return {"roles": cfg["build"]["roles"]}
+
+        # Build workspace: projects, plans, tasks, runs and monitoring (enoy/buildservice.py).
+        from .buildservice import BuildError
+        from .devplan import PlanError
+        from .devstore import TransitionError as _BuildTransition
+        build = self.build
+
+        def built(fn, *args):
+            try:
+                return fn(*args)
+            except (BuildError, PlanError, _BuildTransition, RuntimeError) as exc:
+                extra = getattr(exc, "errors", None)
+                raise ApiError(400, str(exc) + (" " + "; ".join(extra[:8]) if extra else "")) from None
+
+        @r("GET", "/api/build/projects")
+        def build_projects(q, body):
+            return {"projects": build.projects(), "roles": build.roles()}
+
+        @r("POST", r"/api/build/projects/(\d+)/git-init")
+        def build_git_init(q, body, pid):
+            built(build.git_init, int(pid), body.get("confirm") is True)
+            return {"ok": True}
+
+        @r("POST", r"/api/build/projects/(\d+)/instructions/draft")
+        def build_instructions_draft(q, body, pid):
+            return built(build.draft_instructions, int(pid))
+
+        @r("POST", r"/api/build/projects/(\d+)/instructions")
+        def build_instructions_save(q, body, pid):
+            return built(build.save_instructions, int(pid), str(body.get("text") or ""), body.get("confirm") is True)
+
+        @r("GET", "/api/build/plans")
+        def build_plans(q, body):
+            return {"plans": build.plans(int(q.get("project_id") or 0))}
+
+        @r("POST", "/api/build/plans")
+        def build_plan_create(q, body):
+            return {"plan": built(build.start_plan, int(body.get("project_id") or 0), str(body.get("goal") or ""))}
+
+        @r("GET", r"/api/build/plans/(\d+)")
+        def build_plan(q, body, plan_id):
+            return built(build.detail, int(plan_id))
+
+        @r("POST", r"/api/build/plans/(\d+)/revise")
+        def build_plan_revise(q, body, plan_id):
+            return {"job": built(build.revise, int(plan_id), str(body.get("comment") or ""))}
+
+        @r("POST", r"/api/build/plans/(\d+)/approve")
+        def build_plan_approve(q, body, plan_id):
+            plan = built(build.approve, int(plan_id), int(body.get("version") or 0))
+            md = plan.pop("planning_md", {})
+            return {"plan": plan, "planning_md": {k: str(v) if v is not None and not isinstance(v, (bool, str)) else v
+                                                  for k, v in md.items()}}
+
+        @r("POST", r"/api/build/plans/(\d+)/run")
+        def build_plan_run(q, body, plan_id):
+            return {"job": built(build.run, int(plan_id), str(body.get("mode") or "next"))}
+
+        @r("POST", r"/api/build/plans/(\d+)/stop")
+        def build_plan_stop(q, body, plan_id):
+            build.stop(int(plan_id))
+            return {"ok": True}
+
+        @r("POST", r"/api/build/plans/(\d+)/planning-md")
+        def build_planning_md(q, body, plan_id):
+            return built(build.sync_planning, int(plan_id), body.get("confirm") is True)
+
+        @r("POST", r"/api/build/plans/(\d+)/merge")
+        def build_plan_merge(q, body, plan_id):
+            return built(build.merge, int(plan_id), body.get("confirm") is True)
+
+        @r("POST", r"/api/build/tasks/(\d+)/run")
+        def build_task_run(q, body, task_id):
+            return {"job": built(build.run_task, int(task_id))}
+
+        @r("POST", r"/api/build/tasks/(\d+)/retry")
+        def build_task_retry(q, body, task_id):
+            return {"task": built(build.retry, int(task_id))}
+
+        @r("GET", "/api/build/monitor")
+        def build_monitor(q, body):
+            return build.monitor()
 
         @r("POST", "/api/claude/test")
         def claude_test(q, body):

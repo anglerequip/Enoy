@@ -373,14 +373,28 @@ class Planner:
             raise PlanError("The planner's plan still breaks Enoy's rules after one correction.", problems)
         return body
 
-    def create(self, project_id: int, goal: str, title: str = "") -> tuple[dict, dict]:
+    def start(self, project_id: int, goal: str, title: str = "") -> dict:
+        """Create the plan record after checking that a planner may see this project. No model request yet."""
+        if not goal.strip():
+            raise PlanError("Describe what should be built.")
         model = self._model()
-        ws = self._workspace(project_id, self._is_cloud(model))
-        plan = self.store.create_plan(project_id, title or goal.strip().splitlines()[0][:80], goal)
-        body = self._generate(model, ws, planner_context(ws, goal))
-        version = self.store.add_version(plan["id"], body, author=model["id"])
-        self.orc._act(None, "build.plan", f"Plan {plan['id']} version 1 is ready for review "
+        self._workspace(project_id, self._is_cloud(model))
+        return self.store.create_plan(project_id, title or goal.strip().splitlines()[0][:80], goal.strip())
+
+    def draft(self, plan_id: int) -> dict:
+        """Ask the planner for the first version of a started plan."""
+        plan = self.store.get_plan(plan_id)
+        model = self._model()
+        ws = self._workspace(plan["project_id"], self._is_cloud(model))
+        body = self._generate(model, ws, planner_context(ws, plan["goal"]))
+        version = self.store.add_version(plan_id, body, author=model["id"])
+        self.orc._act(None, "build.plan", f"Plan {plan_id} version {version['version']} is ready for review "
                       f"({len(body['tasks'])} task(s)).", "system", "plan")
+        return version
+
+    def create(self, project_id: int, goal: str, title: str = "") -> tuple[dict, dict]:
+        plan = self.start(project_id, goal, title)
+        version = self.draft(plan["id"])
         return self.store.get_plan(plan["id"]), version
 
     def revise(self, plan_id: int, comment: str) -> dict:
