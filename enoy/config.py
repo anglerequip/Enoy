@@ -98,18 +98,9 @@ DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': T
                                        'stylua --check .'],
                  'command_timeout_s': 300,
                  'extra_excluded_globs': []},
- # Build workspace (planning.md). Endpoints are editable settings; keys live only in Windows
- # Credential Manager; cloud providers stay off until the user turns them on.
- 'build': {'providers': {'deepseek': {'kind': 'openai', 'base_url': 'https://api.deepseek.com', 'enabled': False,
-                                      'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
-                                      'monthly_limit_usd': 10.0, 'timeout_s': 600},
-                         'fireworks': {'kind': 'openai', 'base_url': 'https://api.fireworks.ai/inference/v1',
-                                       'enabled': False, 'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
-                                       'monthly_limit_usd': 10.0, 'timeout_s': 600},
-                         'anthropic': {'kind': 'anthropic', 'base_url': 'https://api.anthropic.com', 'enabled': False,
-                                       'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
-                                       'monthly_limit_usd': 10.0, 'timeout_s': 600, 'api_version': '2026-10-21'},
-                         'ollama': {'kind': 'ollama', 'base_url': 'http://127.0.0.1:11434', 'enabled': False,
+ # Build workspace (planning.md). Build providers must run on this PC, so they never cost money;
+ # only the signed-in Claude and Codex apps reach the cloud, on the user's plans.
+ 'build': {'providers': {'ollama': {'kind': 'ollama', 'base_url': 'http://127.0.0.1:11434', 'enabled': False,
                                     'local': True, 'max_concurrency': 1, 'daily_limit_usd': 0.0,
                                     'monthly_limit_usd': 0.0, 'timeout_s': 1800}},
            # "model": "" means the CLI's own configured model.
@@ -139,6 +130,16 @@ def _is(v: Any, types: tuple) -> bool:
     return isinstance(v, types)
 
 
+def url_host(url: str) -> str | None:
+    """The lower-cased host of an http(s) address, or None if it is not one."""
+    m = re.fullmatch(r'https?://(\[[^\]]+\]|[^/:\s@]+)(:\d+)?(/\S*)?', url or '')
+    return m.group(1).lower() if m else None
+
+
+def runs_on_this_pc(url: str) -> bool:
+    return url_host(url) in _LOCAL_HOSTS
+
+
 def _provider_problem(pid: str, p: Any) -> str | None:
     if not re.fullmatch(r'[a-z0-9_-]{1,40}', pid) or pid in CLI_PROVIDERS:
         return f"provider id '{pid}' is not allowed"
@@ -151,13 +152,14 @@ def _provider_problem(pid: str, p: Any) -> str | None:
             return f"provider '{pid}' has an unknown setting '{k}'"
         if not _is(v, _PROVIDER_FIELDS[k]):
             return f"provider '{pid}' setting '{k}' has the wrong type"
-    if p.get('kind') not in ('openai', 'anthropic', 'ollama'):
-        return f"provider '{pid}' kind must be openai, anthropic or ollama"
-    m = re.fullmatch(r'(https?)://(\[[^\]]+\]|[^/:\s]+)(:\d+)?(/\S*)?', p.get('base_url', ''))
-    if not m:
+    if p.get('kind') not in ('openai', 'ollama'):
+        return f"provider '{pid}' kind must be openai or ollama"
+    host = url_host(p.get('base_url', ''))
+    if host is None:
         return f"provider '{pid}' base_url is not a web address"
-    if m.group(1) == 'http' and m.group(2).lower() not in _LOCAL_HOSTS:
-        return f"provider '{pid}' must use https unless it runs on this PC"
+    if host not in _LOCAL_HOSTS:
+        return (f"provider '{pid}' points at {host}, which is not this PC; Build only uses free models "
+                "that run on this PC")
     if not 1 <= p.get('max_concurrency', 1) <= 8:
         return f"provider '{pid}' max_concurrency must be 1-8"
     if p.get('daily_limit_usd', 0) < 0 or p.get('monthly_limit_usd', 0) < 0:
@@ -197,6 +199,22 @@ def _check_roles(v: dict) -> str | None:
     if not set(v) <= set(BUILD_ROLES) or not all(isinstance(x, str) for x in v.values()):
         return 'roles must map planner, implementer and reviewer to model ids'
     return None
+
+
+def _drop_cloud_providers(raw: dict, warnings: list[str]) -> dict:
+    """Older versions shipped paid API providers (DeepSeek, Fireworks, Anthropic). Drop every provider
+    that does not run on this PC one by one, so the user's local providers survive."""
+    build = raw.get('build')
+    providers = build.get('providers') if isinstance(build, dict) else None
+    if not isinstance(providers, dict):
+        return raw
+    kept = {pid: p for pid, p in providers.items() if not isinstance(p, dict) or runs_on_this_pc(p.get('base_url', ''))}
+    if len(kept) == len(providers):
+        return raw
+    for pid in providers.keys() - kept.keys():
+        warnings.append(f"Build provider '{pid}' does not run on this PC and could cost money; it was removed.")
+    build = {k: v for k, v in build.items() if k != 'providers'} | ({'providers': kept} if kept else {})
+    return raw | {'build': build}
 
 
 def _check_build_links(cfg: dict, warnings: list[str]) -> None:
@@ -335,6 +353,7 @@ def validate(raw: Any) -> tuple[dict, list[str]]:
     warnings: list[str] = []
     if not isinstance(raw, dict):
         return cfg, ["Config file is not a JSON object; using defaults."]
+    raw = _drop_cloud_providers(raw, warnings)
     for section, value in raw.items():
         if section not in SCHEMA:
             warnings.append(f"Unknown section '{section}' ignored.")
@@ -371,9 +390,10 @@ def validate(raw: Any) -> tuple[dict, list[str]]:
         if claude_raw.get('model', 'claude-opus-5-5') == 'claude-opus-5-5' and claude_raw.get('effort', 'high') == 'high':
             cfg['claude']['effort'] = 'medium'
     for p in cfg['build']['providers'].values():  # Fill settings a hand-written provider left out.
-        for k, v in (('enabled', False), ('local', False), ('max_concurrency', 1), ('daily_limit_usd', 0.0),
+        for k, v in (('enabled', False), ('max_concurrency', 1), ('daily_limit_usd', 0.0),
                      ('monthly_limit_usd', 0.0), ('timeout_s', 600)):
             p.setdefault(k, v)
+        p['local'] = True  # Every Build provider runs on this PC (checked above); the stored flag is not trusted.
     _check_build_links(cfg, warnings)
     return cfg, warnings
 

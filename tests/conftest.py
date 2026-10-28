@@ -76,6 +76,12 @@ def cfg():
     return c
 
 
+def local_server(url: str, **settings) -> dict:
+    """A local OpenAI-compatible server (such as LM Studio) as a Build provider; tests point it at FakeAPI."""
+    return {"kind": "openai", "base_url": url, "enabled": True, "local": True, "max_concurrency": 2,
+            "daily_limit_usd": 0.0, "monthly_limit_usd": 0.0, "timeout_s": 600} | settings
+
+
 def make_orchestrator(cfg, qwen_replies=None, claude_replies=None, claude_available=True, tmp=None):
     storage = Storage(":memory:")
     backends = {

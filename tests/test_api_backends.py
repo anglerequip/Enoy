@@ -1,8 +1,9 @@
-"""OpenAI-compatible and Anthropic Messages adapters (T2.4, T2.5), against a local fake server."""
+"""The OpenAI-compatible adapter (T2.4), against a local fake server.
+
+The Anthropic API adapter was removed: Build only uses free models that run on this PC."""
 
 import pytest
 
-from enoy.backends.anthropic_api import AnthropicBackend
 from enoy.backends.base import BackendError, ChatMessage, ChatRequest, ImageData
 from enoy.backends.openai_compat import OpenAICompatBackend
 from fakeapi import FakeAPI
@@ -23,11 +24,6 @@ def api():
 def openai(api, key=SECRET, **settings):
     return OpenAICompatBackend("deepseek", {"base_url": api.url, "timeout_s": 5, **settings}, "deepseek-flash",
                                key=lambda: key)
-
-
-def anthropic(api, key=SECRET):
-    return AnthropicBackend("anthropic", {"base_url": api.url, "timeout_s": 5, "api_version": "2026-10-21"},
-                            "claude-haiku-5-5", key=lambda: key)
 
 
 # OpenAI-compatible ------------------------------------------------------------------------
@@ -105,59 +101,3 @@ def test_openai_empty_choice_is_malformed(api):
     with pytest.raises(BackendError) as exc:
         openai(api).chat(ChatRequest([ChatMessage("user", "x")]))
     assert exc.value.kind == "malformed"
-
-
-# Anthropic Messages -----------------------------------------------------------------------
-
-def an_reply(content, stop="end_turn", usage=None):
-    return (200, {"id": "msg_1", "model": "claude-haiku-5-5", "content": content, "stop_reason": stop,
-                  "usage": usage or {"input_tokens": 50, "output_tokens": 10, "cache_read_input_tokens": 5}})
-
-
-def test_anthropic_headers_system_and_usage(api):
-    api.add("/v1/messages", an_reply([{"type": "thinking", "thinking": "", "signature": "s"},
-                                      {"type": "text", "text": "Hello"}]))
-    r = anthropic(api).chat(ChatRequest([ChatMessage("system", "Be brief."), ChatMessage("user", "Hi")], effort="low"))
-    req = api.requests[0]
-    assert req["headers"]["x-api-key"] == SECRET and req["headers"]["anthropic-version"] == "2026-10-21"
-    body = req["body"]
-    assert body["system"] == "Be brief." and body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}]
-    assert body["output_config"] == {"effort": "low"} and body["max_tokens"] == 16000
-    assert not {"temperature", "top_p", "top_k", "tool_choice"} & set(body)
-    assert r.text == "Hello" and r.usage == {"input_tokens": 50, "cached_tokens": 5, "output_tokens": 10}
-
-
-def test_anthropic_tool_use_round_trip(api):
-    blocks = [{"type": "thinking", "thinking": "", "signature": "sig"},
-              {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a.py"}},
-              {"type": "tool_use", "id": "toolu_2", "name": "read_file", "input": {"path": "b.py"}}]
-    api.add("/v1/messages", an_reply(blocks, stop="tool_use"), an_reply([{"type": "text", "text": "Done"}]))
-    b = anthropic(api)
-    first = b.chat(ChatRequest([ChatMessage("user", "Read")], tools=TOOLS))
-    assert api.requests[0]["body"]["tools"] == [{"name": "read_file", "description": "Read a file",
-                                                 "input_schema": TOOLS[0]["function"]["parameters"]}]
-    assert [c["id"] for c in first.tool_calls] == ["toolu_1", "toolu_2"] and first.stop_reason == "tool_use"
-    history = [ChatMessage("user", "Read"),
-               ChatMessage("assistant", "", tool_calls=first.tool_calls, provider_content=first.provider_content),
-               ChatMessage("tool", "A", tool_name="read_file", tool_call_id="toolu_1"),
-               ChatMessage("tool", "B", tool_name="read_file", tool_call_id="toolu_2")]
-    b.chat(ChatRequest(history, tools=TOOLS))
-    sent = api.requests[1]["body"]["messages"]
-    assert sent[1] == {"role": "assistant", "content": blocks}  # Thinking blocks go back unchanged.
-    assert sent[2] == {"role": "user", "content": [  # All results in one user message.
-        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "A"},
-        {"type": "tool_result", "tool_use_id": "toolu_2", "content": "B"}]}
-
-
-def test_anthropic_refusal_is_an_error_not_an_answer(api):
-    api.add("/v1/messages", an_reply([], stop="refusal"))
-    with pytest.raises(BackendError) as exc:
-        anthropic(api).chat(ChatRequest([ChatMessage("user", "x")]))
-    assert exc.value.kind == "failed" and "declined" in str(exc.value)
-
-
-def test_anthropic_list_models_follows_pages(api):
-    api.add("/v1/models", (200, {"data": [{"id": "a"}], "has_more": True, "last_id": "a"}),
-            (200, {"data": [{"id": "b"}], "has_more": False, "last_id": "b"}))
-    assert anthropic(api).list_models() == ["a", "b"]
-    assert "after_id=a" in api.requests[1]["path"]

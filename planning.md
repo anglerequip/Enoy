@@ -416,3 +416,9 @@ Each UI task has a JS test where logic exists (`tests/js`), plus a preview check
 9. Fix the 4 tests that were already failing first (T0.1).
 10. Work on `feature/build`. Push to `main` once at the end.
 11. Live-test budget: ask before each live request.
+12. (2026-10-28, after release) **Build is free-only.** The implementer must always be free: nothing other than the
+    signed-in Claude and Codex apps may cost money. Build providers must run on this PC (localhost, 127.0.0.1,
+    [::1]); others are rejected by config validation, dropped from older settings files, and refused again in
+    `Providers.backend()` before anything is sent. The DeepSeek, Fireworks and Anthropic API presets, the Anthropic
+    API adapter, the paid test request, spending limits and prices in the UI were removed. Decisions 1 and 2 are
+    superseded where they mention the Anthropic API and caps.

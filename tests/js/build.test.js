@@ -32,10 +32,6 @@ assert.equal(ctx.canApprove({ ...detail, job: { busy: true } }, 2), false);
 assert.equal(ctx.canApprove({ ...detail, plan: { approved_version: 2 } }, 2), false);
 
 // Money and progress.
-assert.equal(ctx.usd(null), "unknown");
-assert.equal(ctx.usd(0), "$0.00");
-assert.equal(ctx.usd(0.0007), "$0.0007");
-assert.equal(ctx.usd(1.5), "$1.50");
 assert.deepEqual(JSON.parse(JSON.stringify(ctx.planProgress([{ status: "completed" }, { status: "ready" }]))),
                  { done: 1, total: 2, label: "1 of 2 tasks done" });
 assert.equal(ctx.planProgress([]).label, "No tasks yet");

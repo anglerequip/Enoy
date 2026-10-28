@@ -1,4 +1,8 @@
-"""Spending limits for API model providers.
+"""The ledger of Build model requests: tokens, what was sent, and cost.
+
+Build providers must run on this PC (config.py, providers.py), so every request is recorded as
+"local" at no cost. The pricing and limit logic below stays as a second safety net: should a
+provider ever be treated as remote, a request without prices is refused when a limit is set.
 
 Before a request, Enoy reserves the most it could cost (prompt plus the full output allowance
 at the configured prices). If that would pass a provider's daily or monthly limit, the request

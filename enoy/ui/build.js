@@ -31,10 +31,6 @@ function canApprove(detail, version) {
   const vs = (detail && detail.versions) || [];
   return !!(detail && detail.plan.approved_version == null && vs.length && vs[vs.length - 1].version === version && !detail.job.busy);
 }
-function usd(n) {
-  if (n == null) return "unknown";
-  return n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : `$${Number(n).toFixed(2)}`;
-}
 function planProgress(tasks) {
   const total = (tasks || []).length, done = (tasks || []).filter(t => t.status === "completed").length;
   return { done, total, label: total ? `${done} of ${total} tasks done` : "No tasks yet" };
@@ -261,18 +257,16 @@ function buildAgentsTab() {
 function buildMonitorTab() {
   const m = S.build.monitor, d = S.build.detail;
   if (!m) return loadingHtml();
-  const spend = Object.entries(m.spend).map(([pid, s]) => `<div class="proj-card static"><div class="pc-top"><span>${esc(pid)}</span></div>
-    <div class="pc-name">${usd(s.today)} today</div><div class="pc-meta">${s.daily_limit ? `limit ${usd(s.daily_limit)} · ` : "no daily limit · "}${usd(s.month)} this month${s.monthly_limit ? ` of ${usd(s.monthly_limit)}` : ""}${s.reserved ? ` · ${usd(s.reserved)} reserved` : ""}</div></div>`).join("");
   const tests = d ? d.tasks.filter(t => t.evidence && t.evidence.tests).map(t => `<div class="plist-row static"><span class="pl-title"><b>${esc(t.task_key)}</b> ${esc(t.evidence.tests)}</span>${buildBadge(t.status)}</div>`).join("") : "";
-  return `<div class="psec"><h2>Spending</h2><div class="card-grid">${spend}</div>
-      <div class="small muted">${m.totals.calls} API request${m.totals.calls === 1 ? "" : "s"} · ${m.totals.input.toLocaleString()} input tokens (${m.totals.cached.toLocaleString()} cached) · ${m.totals.output.toLocaleString()} output tokens.
-        Costs marked “estimate” use the prices you entered; the provider's bill is what counts. Requests through the signed-in Claude and Codex apps use your plans and are not listed here.</div></div>
+  return `<div class="psec"><h2>Usage</h2>
+      <div class="small muted">${m.totals.calls} request${m.totals.calls === 1 ? "" : "s"} · ${m.totals.input.toLocaleString()} input tokens (${m.totals.cached.toLocaleString()} cached) · ${m.totals.output.toLocaleString()} output tokens.
+        Build's own models run on this PC and cost nothing. Requests through the signed-in Claude and Codex apps use your plans and are not listed here.</div></div>
     ${m.attention.length ? `<div class="psec"><h2>Needs attention</h2><div class="plist">${m.attention.map(t => `<div class="plist-row static"><span class="pl-title"><b>${esc(t.task_key)}</b> ${esc(t.title)}<span class="pl-sub">${esc((t.blocker || "").slice(0, 200))}</span></span>${buildBadge(t.status)}</div>`).join("")}</div></div>` : ""}
     ${tests ? `<div class="psec"><h2>Test results</h2><div class="plist">${tests}</div></div>` : ""}
     <div class="psec"><h2>Model requests</h2>${m.calls.length ? `<div class="plist">${m.calls.map(c => `<div class="plist-row static">
       <span class="pl-title">${esc(c.provider)} · ${esc(c.model)} · ${esc(c.role || c.purpose)}${c.error ? `<span class="pl-sub">${esc(c.error.slice(0, 160))}</span>` : ""}</span>
-      <span class="pl-meta">${c.input_tokens ?? "?"} in${c.cached_tokens ? ` (${c.cached_tokens} cached)` : ""} · ${c.output_tokens ?? "?"} out · ${usd(c.cost_usd)} ${esc(c.cost_source)} · ${esc(ago(c.created))}</span>
-      <span class="pl-tag ${c.status === "done" ? "" : "muted"}">${esc(c.status)}</span></div>`).join("")}</div>` : `<div class="small muted">No API requests yet.</div>`}</div>
+      <span class="pl-meta">${c.input_tokens ?? "?"} in${c.cached_tokens ? ` (${c.cached_tokens} cached)` : ""} · ${c.output_tokens ?? "?"} out · ${esc(ago(c.created))}</span>
+      <span class="pl-tag ${c.status === "done" ? "" : "muted"}">${esc(c.status)}</span></div>`).join("")}</div>` : `<div class="small muted">No requests yet.</div>`}</div>
     <div class="psec"><h2>Recent events</h2>${m.activity.length ? `<div class="plist">${m.activity.map(a => `<div class="plist-row static"><span class="pl-title">${esc(a.text)}</span><span class="pl-meta">${esc(ago(a.created))}</span></div>`).join("")}</div>` : `<div class="small muted">Nothing yet.</div>`}</div>`;
 }
 
@@ -284,39 +278,35 @@ async function settingsProviders() {
   const models = b.models;
   const choose = role => `<label class="field">${ROLE_LABEL[role]}<select data-build-role="${role}"><option value="">None</option>${models.filter(m => (m.roles || []).includes(role)).map(m =>
     `<option value="${esc(m.id)}" ${b.roles[role] === m.id ? "selected" : ""}>${esc(m.id)}${m.model ? ` (${esc(m.model)})` : ""}</option>`).join("")}</select></label>`;
-  const stateText = { disabled: "Off", no_key: "No API key", no_connection: "No connection", key_refused: "Key refused", error: "Error", ready: "Ready (not yet verified)", verified: "Verified with a real request" };
+  const stateText = { disabled: "Off", no_connection: "No connection", key_refused: "Key refused", error: "Error", ready: "Ready (not yet verified)", verified: "Verified with a real request" };
   const card = st => {
     const p = b.providers[st.id];
     return `<div class="set-section prov-card" data-pid="${esc(st.id)}"><div class="psec-head"><h3>${esc(st.id)}</h3>
-        <span class="pl-tag">${p.local ? "Local · works offline" : "Cloud · needs internet"}</span><div class="grow"></div>
+        <span class="pl-tag">On this PC · free</span><div class="grow"></div>
         <span class="bstat ${st.state === "verified" || st.state === "ready" ? "ok" : st.state === "disabled" ? "muted" : "warn"}">${esc(stateText[st.state] || st.state)}</span>
         <input type="checkbox" data-bp="enabled" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(st.id)}"></div>
-      ${st.id === "anthropic" ? `<div class="small warn-text">The Anthropic API is billed separately from your Claude Pro plan. Leave it off unless you have decided to pay for API use.</div>` : ""}
       <div class="grid2"><label class="field">Address<input type="text" data-bp="base_url" value="${esc(p.base_url)}"></label>
-        <label class="field">Requests at once<input type="number" min="1" max="8" data-bp="max_concurrency" value="${esc(p.max_concurrency)}"></label>
-        ${p.local ? "" : `<label class="field">Daily limit (US$)<input type="number" min="0" step="any" data-bp="daily_limit_usd" value="${esc(p.daily_limit_usd)}"></label>
-        <label class="field">Monthly limit (US$)<input type="number" min="0" step="any" data-bp="monthly_limit_usd" value="${esc(p.monthly_limit_usd)}"></label>`}</div>
+        <label class="field">Requests at once<input type="number" min="1" max="8" data-bp="max_concurrency" value="${esc(p.max_concurrency)}"></label></div>
+      <div class="small muted">The address must be on this PC (localhost or 127.0.0.1). Build never sends work to paid online services.</div>
       ${p.kind === "ollama" ? localModelsHtml(st) : ""}
-      ${p.local ? "" : `<label class="field">API key<div class="row"><input type="password" autocomplete="off" id="bkey-${esc(st.id)}" placeholder="${st.key_set ? "Saved in Windows Credential Manager" : "Not set"}">
+      ${p.kind !== "openai" ? "" : `<label class="field">Access key (optional)<div class="row"><input type="password" autocomplete="off" id="bkey-${esc(st.id)}" placeholder="${st.key_set ? "Saved in Windows Credential Manager" : "Not set"}">
         <button class="btn" data-action="build-key" data-pid="${esc(st.id)}">Save</button>
         ${st.key_set ? `<button class="btn ghost" data-action="build-key" data-pid="${esc(st.id)}" data-clear="1">Remove</button>` : ""}</div>
-        <span class="small">Kept in Windows Credential Manager; never shown again, logged or sent to a model.</span></label>`}
-      <div class="row"><button class="btn small" data-action="build-test" data-pid="${esc(st.id)}" ${p.enabled && (p.local || st.key_set) ? "" : "disabled"}>Test connection (free)</button>
-        <button class="btn small ghost" data-action="build-paid-test" data-pid="${esc(st.id)}" ${p.enabled && (p.local || st.key_set) ? "" : "disabled"}>Send a test request…</button>
+        <span class="small">Only if your local server asks for one. Kept in Windows Credential Manager; never shown again, logged or sent to a model.</span></label>`}
+      <div class="row"><button class="btn small" data-action="build-test" data-pid="${esc(st.id)}" ${p.enabled ? "" : "disabled"}>Test connection</button>
         <span class="small muted">${st.models.length ? `${st.models.length} models listed${st.verified_at ? ` · verified ${esc(ago(st.verified_at))}` : ""}` : ""}</span></div>
-      ${p.local ? "" : `<div class="small muted">Spent today ${usd(st.spend.today)}, this month ${usd(st.spend.month)}.</div>`}</div>`;
+</div>`;
   };
   $("set-body").innerHTML = `
     <div class="set-section"><h3>Roles</h3>
       <div class="small muted">The planner writes plans and never edits code. Implementers write one approved task at a time through Enoy's
-        limited tools, so they must be API or local models. The reviewer must differ from the implementer.</div>
+        limited tools, so they must be free models that run on this PC. The reviewer must differ from the implementer.</div>
       <div class="grid2">${choose("planner")}${choose("implementer")}${choose("reviewer")}</div>
       <div class="set-row"><div class="lbl"><span>Run independent tasks in parallel</span><span class="d">Off by default. Only tasks that share no files run together; merges still happen one at a time.</span></div>
         <input type="checkbox" id="build-parallel" ${b.parallel ? "checked" : ""}></div></div>
     <div class="set-section"><h3>Models</h3>
-      <div class="small muted">Prices are per million tokens, from the provider's price list. With a spending limit set, a model without prices cannot be used.</div>
       <div class="plist">${models.map(m => `<div class="plist-row static"><span class="pl-title"><b>${esc(m.id)}</b> · ${esc(m.provider)}${m.model ? ` · ${esc(m.model)}` : ""}
-        <span class="pl-sub">${esc((m.roles || []).join(", "))}${m.price_in != null ? ` · $${m.price_in} in / $${m.price_cached ?? m.price_in} cached / $${m.price_out} out` : ""}</span></span>
+        <span class="pl-sub">${esc((m.roles || []).join(", "))}</span></span>
         ${["claude-cli", "codex-cli"].includes(m.id) ? "" : `<button class="btn small ghost" data-action="build-model-remove" data-id="${esc(m.id)}">Remove</button>`}</div>`).join("")}</div>
       <button class="btn small" data-action="build-model-add">Add a model…</button></div>
     ${info.providers.map(card).join("")}`;
@@ -349,13 +339,10 @@ function localModelsHtml(st) {
 function addModelDialog() {
   const pids = Object.keys(S.config.build.providers);
   openModal(`<h2>Add a model</h2>
-    <label class="field">Name in Enoy<input type="text" id="bm-id" maxlength="60" placeholder="e.g. deepseek-flash"></label>
+    <label class="field">Name in Enoy<input type="text" id="bm-id" maxlength="60" placeholder="e.g. qwen-coder"></label>
     <label class="field">Provider<select id="bm-provider">${pids.map(p => `<option>${esc(p)}</option>`).join("")}</select></label>
     <label class="field">Model ID at the provider<input type="text" id="bm-model" list="bm-known" placeholder="exactly as the provider lists it"><datalist id="bm-known"></datalist></label>
     <div class="row">${["planner", "implementer", "reviewer"].map(r => `<label class="pl-check"><input type="checkbox" data-role="${r}" ${r === "implementer" ? "checked" : ""}> ${ROLE_LABEL[r]}</label>`).join("")}</div>
-    <div class="grid2"><label class="field">Input $/M tokens<input type="number" min="0" step="any" id="bm-in"></label>
-      <label class="field">Cached input $/M<input type="number" min="0" step="any" id="bm-cached"></label>
-      <label class="field">Output $/M tokens<input type="number" min="0" step="any" id="bm-out"></label></div>
     <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" id="bm-ok">Add</button></div>`);
   const fillKnown = () => guarded(async () => {
     const st = (await api("GET", "/api/build/providers")).providers.find(x => x.id === $("bm-provider").value);
@@ -365,10 +352,8 @@ function addModelDialog() {
   fillKnown();
   const ok = $("bm-ok");
   ok.onclick = submitOnce(ok, async () => {
-    const num = id => $(id).value === "" ? null : Number($(id).value);
     const m = { id: $("bm-id").value.trim(), provider: $("bm-provider").value, model: $("bm-model").value.trim(),
-                roles: [...document.querySelectorAll("#modal [data-role]:checked")].map(x => x.dataset.role),
-                price_in: num("bm-in"), price_cached: num("bm-cached"), price_out: num("bm-out") };
+                roles: [...document.querySelectorAll("#modal [data-role]:checked")].map(x => x.dataset.role) };
     if (!m.id || !m.model) { toast("Give the model a name and its provider model ID.", true); return; }
     S.config = (await api("POST", "/api/config", { config: { build: { models: [...S.config.build.models, m] } } })).config;
     toast("Model added");
@@ -475,28 +460,14 @@ Object.assign(actions, {
   "build-key": el => guarded(async () => {
     const pid = el.dataset.pid, input = $(`bkey-${pid}`);
     const value = el.dataset.clear ? "" : input.value.trim();
-    if (!el.dataset.clear && !value) { toast("Paste the API key first.", true); return; }
+    if (!el.dataset.clear && !value) { toast("Paste the access key first.", true); return; }
     await api("POST", `/api/build/providers/${pid}/key`, { value });
     toast(value ? "Key saved in Windows Credential Manager." : "Key removed."); settingsProviders();
   }),
   "build-test": el => guarded(async () => {
     el.disabled = true;
     const r = await api("POST", `/api/build/providers/${el.dataset.pid}/test`, {});
-    toast(r.ok ? `Connected: ${r.models.length} models listed. No tokens were used.` : r.error, !r.ok); settingsProviders();
-  }),
-  "build-paid-test": el => guarded(async () => {
-    const pid = el.dataset.pid, ms = S.config.build.models.filter(m => m.provider === pid);
-    if (!ms.length) { toast("Add a model for this provider first.", true); return; }
-    openModal(`<h2>Send a test request to ${esc(pid)}?</h2><p>This sends one short real request (“Reply with OK”). The provider charges for it,
-      usually a fraction of a cent, and it counts toward your limit.</p>
-      <label class="field">Model<select id="pt-model">${ms.map(m => `<option value="${esc(m.id)}">${esc(m.id)} (${esc(m.model)})</option>`).join("")}</select></label>
-      <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" id="pt-ok">Send test request</button></div>`);
-    const ok = $("pt-ok");
-    ok.onclick = submitOnce(ok, async () => {
-      const r = await api("POST", `/api/build/providers/${pid}/paid-test`, { model: $("pt-model").value, confirm: true });
-      toast(r.ok ? `It works: ${r.model} answered.` : r.error, !r.ok);
-      S.settingsTab = "providers"; renderSettings();
-    });
+    toast(r.ok ? `Connected: ${r.models.length} models listed.` : r.error, !r.ok); settingsProviders();
   }),
   "build-model-add": () => addModelDialog(),
   "build-model-remove": el => guarded(async () => {

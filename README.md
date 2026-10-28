@@ -42,7 +42,7 @@ models implement it one task at a time.
    acceptance criteria. Planners cannot edit anything, and plans containing code are rejected.
 2. **Approve.** You review versions, ask for changes and approve one. The approved version is locked, archived with
    its SHA-256 and written to `planning.md` in the project (never over your own edits without asking).
-3. **Implement.** An implementer model (DeepSeek, Fireworks, the Anthropic API or a local Ollama model) gets one task
+3. **Implement.** A free implementer model that runs on this PC (Ollama, or another local server such as LM Studio) gets one task
    with a fresh context, in its own Git worktree outside your project. It writes the tests first; Enoy runs them,
    requires them to fail for the expected reason and freezes them. It then implements; Enoy re-checks the frozen
    tests byte for byte and runs them and the regression commands itself.
@@ -50,9 +50,13 @@ models implement it one task at a time.
    optional reviewer (by default ChatGPT through Codex) must be a different model. Passing work is merged into the
    plan's own branch. **Your branch changes only when you click Merge**, and that can be undone with `git revert -m 1`.
 
-Set it up in **Settings → Providers**: roles, models and their prices, API keys (kept in Windows Credential Manager,
-never shown again), spending limits (US$1 a day and US$10 a month per provider by default) and a free connection
-test. Cloud providers are off until you turn them on; the Anthropic API is billed separately from a Claude Pro plan.
+**Build never costs money beyond your Claude and ChatGPT plans.** Implementers must run on this PC: a provider
+whose address is not `localhost`, `127.0.0.1` or `[::1]` is refused when settings are saved, removed from older
+settings files, and refused again before any request is sent. Paid APIs such as DeepSeek, Fireworks or the
+Anthropic API cannot be added.
+
+Set it up in **Settings → Providers**: roles, models, an optional access key for a local server that asks for one
+(kept in Windows Credential Manager, never shown again) and a connection test.
 Ollama only uses models you have already installed, and Enoy keeps them within a memory mode (Chill 1,200,
 Middle 1,600 or Full 1,900 MiB).
 

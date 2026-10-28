@@ -52,10 +52,11 @@ The approved plan is in `planning.md` (repository root). Modules:
 - `devgate.py`: Enoy's own checks in a fresh checkout, the independent review, merge and completion, and
   `record_if_merged` for recovery.
 - `devrunner.py`: manual, sequential and optional parallel scheduling, retries, offline waits, stop, resume.
-- `providers.py`, `spend.py`, `backends/http.py`, `backends/openai_compat.py`, `backends/anthropic_api.py`,
-  `backends/ollama.py`, `localguard.py`: API and local model access, spending limits, memory limits.
+- `providers.py`, `spend.py`, `backends/http.py`, `backends/openai_compat.py`, `backends/ollama.py`,
+  `localguard.py`: access to free models on this PC (Ollama or an OpenAI-compatible local server), the request
+  ledger, memory limits. Providers off this PC are refused in `config.py` and again in `Providers.backend()`.
 - `buildservice.py` and the `/api/build/*` routes; `ui/build.js` and Settings → Providers.
 
 Rules that matter for safety are enforced in code rather than prompts: implementers use only Enoy's tools; writes
 are limited to the phase's files; frozen tests are checked by hash; commands go through the command policy; every
-request checks the spending limit first and is redacted and recorded; the user's branch changes only on request.
+request goes only to a model on this PC and is redacted and recorded; the user's branch changes only on request.

@@ -385,23 +385,6 @@ class App:
                      "system", "settings", outcome="" if result["ok"] else "failed")
             return result | {"provider": prov.status(pid)}
 
-        @r("POST", "/api/build/providers/([a-z0-9_-]{1,40})/paid-test")
-        def build_provider_paid_test(q, body, pid):
-            provider_id(pid)
-            model_id = str(body.get("model") or "")
-            try:
-                if prov.model(model_id)["provider"] != pid:
-                    raise ApiError(400, "That model belongs to another provider.")
-                result = prov.paid_test(model_id, confirm=body.get("confirm") is True)
-            except KeyError:
-                raise ApiError(400, "Unknown model.") from None
-            except PermissionError as exc:
-                raise ApiError(400, str(exc)) from None
-            orc._act(None, "provider.test", f"Paid test request to {pid} ({model_id}): " +
-                     ("succeeded." if result["ok"] else result["error"]), "user", "settings",
-                     outcome="" if result["ok"] else "failed")
-            return result | {"provider": prov.status(pid)}
-
         @r("POST", "/api/build/roles")
         def build_roles(q, body):
             roles = body.get("roles")

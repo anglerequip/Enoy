@@ -1,7 +1,8 @@
 """Build workspace model providers: status, connection tests, discovery and metered requests.
 
-`complete()` is the only way Build code sends a request to an API provider. It reserves the
-spending limit first, holds a concurrency slot, and records what the request cost.
+`complete()` is the only way Build code sends a request to a provider. It holds a concurrency
+slot and records the request. Providers must run on this PC, so they never cost money: config
+validation removes any that do not, and `backend()` refuses them again before anything is sent.
 """
 
 from __future__ import annotations
@@ -11,11 +12,10 @@ import time
 from dataclasses import replace
 from typing import Callable
 
-from .backends.anthropic_api import AnthropicBackend
 from .backends.base import BackendError, ChatMessage, ChatRequest, ChatResult
 from .backends.ollama import OllamaBackend
 from .backends.openai_compat import OpenAICompatBackend
-from .config import CLI_PROVIDERS
+from .config import CLI_PROVIDERS, url_host, runs_on_this_pc
 from .localguard import LocalGuard
 from .redact import redact
 from .spend import Spend, estimate_tokens
@@ -62,10 +62,12 @@ class Providers:
 
     def backend(self, pid: str, model: str = ""):
         p = self.settings(pid)
+        if not runs_on_this_pc(p.get("base_url", "")) or p.get("kind") not in ("ollama", "openai"):
+            raise BackendError("budget", f"{pid} points at {url_host(p.get('base_url', '')) or 'an unknown address'}, "
+                                         "not this PC. Build only uses free models that run on this PC; nothing was sent.")
         if p["kind"] == "ollama":
             return OllamaBackend(pid, p, model, options=self.local_guard.request_options)
-        cls = AnthropicBackend if p["kind"] == "anthropic" else OpenAICompatBackend
-        return cls(pid, p, model, key=lambda: keystore.get("provider:" + pid))
+        return OpenAICompatBackend(pid, p, model, key=lambda: keystore.get("provider:" + pid))
 
     def _verified(self, pid: str) -> dict | None:
         v = self.db.kv_get("build.verified." + pid)
@@ -78,8 +80,6 @@ class Providers:
         last = self._last.get(pid)
         if not p["enabled"]:
             state = "disabled"
-        elif not p["local"] and not key_set:
-            state = "no_key"
         elif last == "unavailable":
             state = "no_connection"
         elif last == "auth":
@@ -127,13 +127,13 @@ class Providers:
         # Every request is redacted before it leaves Enoy (tool results already are), and recorded.
         messages = [replace(x, content=redact(x.content)) for x in messages]
         prompt = sum(estimate_tokens(x.content) + 20 for x in messages) + sum(estimate_tokens(str(t)) for t in tools or [])
+        backend = self.backend(m["provider"], m.get("model", ""))  # Refuses anything not on this PC.
         call = self.spend.reserve(m, prompt, max_output, role=role, purpose=purpose, sent=_transcript(messages),
                                   chars=sum(len(x.content) for x in messages), **ids)
         request = ChatRequest(messages, purpose=purpose or "chat", num_predict=max_output, tools=tools,
                               cancel=cancel or threading.Event())
         try:
             with self.slot(m["provider"]):
-                backend = self.backend(m["provider"], m.get("model", ""))
                 result = self._local_chat(backend, request) if isinstance(backend, OllamaBackend) else backend.chat(request)
         except BackendError as exc:
             self.spend.fail(call, str(exc))
@@ -142,6 +142,9 @@ class Providers:
             self.spend.fail(call, f"{type(exc).__name__}: {exc}")
             raise
         self.spend.finish(call, result.usage)
+        self._last[m["provider"]] = "ok"
+        self.db.kv_set("build.verified." + m["provider"], {"at": time.time(), "model": m.get("model", ""),
+                                                           "base_url": self.settings(m["provider"])["base_url"]})
         return result
 
     def _local_chat(self, backend: OllamaBackend, request: ChatRequest) -> ChatResult:
@@ -168,20 +171,3 @@ class Providers:
         finally:
             done.set()
             request.cancel = outer
-
-    def paid_test(self, model_id: str, confirm: bool = False) -> dict:
-        """One tiny real request. The provider charges for it, so the caller must confirm."""
-        if not confirm:
-            raise PermissionError("This sends a real request that the provider charges for. Confirm it first.")
-        m = self.model(model_id)
-        try:
-            r = self.complete(model_id, [ChatMessage("user", "Reply with the single word OK.")], max_output=200,
-                              role="test", purpose="connection test")
-        except BackendError as exc:
-            if m["provider"] in self.build["providers"]:
-                self._last[m["provider"]] = exc.kind
-            return {"ok": False, "kind": exc.kind, "error": str(exc)}
-        self._last[m["provider"]] = "ok"
-        self.db.kv_set("build.verified." + m["provider"], {"at": time.time(), "model": m.get("model", ""),
-                                                           "base_url": self.settings(m["provider"])["base_url"]})
-        return {"ok": True, "reply": r.text.strip()[:200], "usage": r.usage, "model": r.model}

@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from conftest import FakeBackend
+from conftest import FakeBackend, local_server
 from enoy.backends.base import CLAUDE, CODEX
 from enoy.orchestrator import EventBus, Orchestrator
 from enoy.server import App, Server
@@ -87,11 +87,10 @@ def api():
 
 @pytest.fixture
 def server(cfg, tmp_path, vault, api):
-    cfg["build"]["providers"]["deepseek"].update(enabled=True, base_url=api.url)
-    cfg["build"]["models"].append({"id": "ds", "provider": "deepseek", "model": "deepseek-flash",
-                                   "roles": ["implementer"], "price_in": 0.5, "price_out": 2.0})
+    cfg["build"]["providers"]["lmstudio"] = local_server(api.url)
+    cfg["build"]["models"].append({"id": "ds", "provider": "lmstudio", "model": "qwen-coder", "roles": ["implementer"]})
     cfg["build"]["roles"]["implementer"] = "ds"
-    keystore.put("provider:deepseek", SECRET)
+    keystore.put("provider:lmstudio", SECRET)
     plan_reply = "```json\n" + json.dumps(PLAN) + "\n```"
     backends = {CLAUDE: FakeBackend(CLAUDE, [plan_reply]),
                 CODEX: FakeBackend(CODEX, ['```json\n{"verdict": "approve", "findings": []}\n```'])}
@@ -127,7 +126,7 @@ def test_full_flow_plan_approve_run_monitor_merge(server, repo, api):
     plan = ok(server, "POST", "/api/build/plans", {"project_id": pid, "goal": "Add multiply"})["plan"]
     detail = ok(server, "GET", f"/api/build/plans/{plan['id']}")
     assert detail["versions"][0]["body"] == PLAN and detail["job"]["error"] == ""
-    assert detail["roles"]["planner"]["id"] == "claude-cli" and detail["roles"]["implementer"]["local"] is False
+    assert detail["roles"]["planner"]["id"] == "claude-cli" and detail["roles"]["implementer"]["local"] is True
 
     ok(server, "POST", f"/api/build/plans/{plan['id']}/approve", {"version": 1})
     assert "T1 Add multiply" in (repo / "planning.md").read_text(encoding="utf-8")
@@ -144,9 +143,9 @@ def test_full_flow_plan_approve_run_monitor_merge(server, repo, api):
     assert "multiply" not in (repo / "calc.py").read_text()  # Not merged into the user's branch yet.
 
     mon = ok(server, "GET", "/api/build/monitor")
-    calls = [c for c in mon["calls"] if c["provider"] == "deepseek"]
+    calls = [c for c in mon["calls"] if c["provider"] == "lmstudio"]
     assert len(calls) == 4 and all(c["status"] == "done" for c in calls)
-    assert mon["spend"]["deepseek"]["today"] == pytest.approx(4 * (1000 * 0.5 + 50 * 2.0) / 1e6)
+    assert all(c["cost_usd"] == 0.0 and c["cost_source"] == "local" for c in calls)  # Free: it runs on this PC.
     assert any(r["status"] == "completed" for r in mon["runs"])
 
     assert call(server, "POST", f"/api/build/plans/{plan['id']}/merge", {})[0] == 400
@@ -175,7 +174,7 @@ def test_runs_need_a_suitable_implementer(server, repo):
     server.app.orc.cfg["build"]["models"][0]["roles"] = ["planner", "reviewer", "implementer"]
     server.app.orc.cfg["build"]["roles"]["implementer"] = "claude-cli"
     status, body = call(server, "POST", f"/api/build/plans/{plan['id']}/run", {"mode": "all"})
-    assert status == 400 and "API or local" in body["error"]
+    assert status == 400 and "free models that run on this PC" in body["error"]
 
 
 def test_local_only_project_refuses_a_cloud_implementer(server, repo):

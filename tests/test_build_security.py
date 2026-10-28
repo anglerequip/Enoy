@@ -43,7 +43,7 @@ def test_private_globs_hide_files_from_the_implementer(tmp_path):
     assert "secret.cfg" not in scope.ws.index
 
 
-def test_secrets_never_reach_the_cloud_implementer(server, repo, api):
+def test_secrets_never_reach_the_implementer(server, repo, api):
     """A committed .env and a private file exist; the implementer tries to read them and even writes a
     test that prints .env. No request to the provider may contain either secret."""
     server.app.orc.cfg["privacy"]["cloud_excluded_globs"] = ["*.cfg"]
@@ -77,7 +77,7 @@ def test_every_api_request_is_recorded_with_what_was_sent(server, repo, api):
     ok(server, "POST", f"/api/build/plans/{plan['id']}/approve", {"version": 1})
     api.add("/chat/completions", *IMPLEMENTER)
     ok(server, "POST", f"/api/build/plans/{plan['id']}/run", {"mode": "all"})
-    rows = server.app.orc.db._all("SELECT * FROM model_calls WHERE provider = 'deepseek' ORDER BY id")
+    rows = server.app.orc.db._all("SELECT * FROM model_calls WHERE provider = 'lmstudio' ORDER BY id")
     assert len(rows) == len(api.requests) == 4
     for row, req in zip(rows, api.requests):
         assert row["chars"] == sum(len(m.get("content") or "") for m in req["body"]["messages"])

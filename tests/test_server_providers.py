@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from conftest import FakeBackend
+from conftest import FakeBackend, local_server
 from enoy.backends.base import CLAUDE, CODEX
 from enoy.orchestrator import EventBus, Orchestrator
 from enoy.server import App, Server
@@ -34,7 +34,7 @@ def api():
 
 @pytest.fixture
 def server(cfg, tmp_path, vault, api):
-    cfg["build"]["providers"]["deepseek"].update(enabled=True, base_url=api.url)
+    cfg["build"]["providers"]["lmstudio"] = local_server(api.url)
     backends = {CODEX: FakeBackend(CODEX), CLAUDE: FakeBackend(CLAUDE)}
     orc = Orchestrator(Storage(tmp_path / "enoy.db"), cfg, backends, EventBus(), backups_dir=tmp_path / "bk",
                        synchronous=True)
@@ -47,17 +47,17 @@ def test_provider_list_has_status_but_no_secrets(server):
     status, data = call(server, "GET", "/api/build/providers")
     assert status == 200
     rows = {p["id"]: p for p in data["providers"]}
-    assert rows["deepseek"]["state"] == "no_key" and rows["ollama"]["local"]
+    assert rows["lmstudio"]["state"] == "ready" and rows["lmstudio"]["local"] and rows["ollama"]["local"]
     assert data["roles"]["planner"] == "claude-cli" and "spend" in data
 
 
 def test_key_round_trip_never_echoes_the_key(server, vault, api, caplog):
     caplog.set_level(logging.DEBUG)
     responses = []
-    responses.append(call(server, "POST", "/api/build/providers/deepseek/key", {"value": SECRET}))
-    assert vault == {"Enoy/provider:deepseek": SECRET}
+    responses.append(call(server, "POST", "/api/build/providers/lmstudio/key", {"value": SECRET}))
+    assert vault == {"Enoy/provider:lmstudio": SECRET}
     api.add("/models", (200, {"data": [{"id": "deepseek-flash"}]}))
-    responses.append(call(server, "POST", "/api/build/providers/deepseek/test", {}))
+    responses.append(call(server, "POST", "/api/build/providers/lmstudio/test", {}))
     responses.append(call(server, "GET", "/api/build/providers"))
     responses.append(call(server, "GET", "/api/config"))
     responses.append(call(server, "GET", "/api/activity"))
@@ -69,22 +69,22 @@ def test_key_round_trip_never_echoes_the_key(server, vault, api, caplog):
     for table in ("activity", "kv", "model_calls", "transmissions", "events"):
         assert SECRET not in str(db._all(f"SELECT * FROM {table}"))
     assert SECRET not in caplog.text
-    call(server, "POST", "/api/build/providers/deepseek/key", {"value": ""})
+    call(server, "POST", "/api/build/providers/lmstudio/key", {"value": ""})
     assert vault == {}
 
 
 def test_unknown_provider_and_bad_key_are_rejected(server):
     assert call(server, "POST", "/api/build/providers/ghost/key", {"value": SECRET})[0] == 404
-    status, body = call(server, "POST", "/api/build/providers/deepseek/key", {"value": "x" * 3000})
+    status, body = call(server, "POST", "/api/build/providers/lmstudio/key", {"value": "x" * 3000})
     assert status == 400 and "x" * 50 not in str(body)
 
 
-def test_paid_test_route_requires_confirmation(server, vault, api):
-    call(server, "POST", "/api/build/providers/deepseek/key", {"value": SECRET})
-    server.app.orc.cfg["build"]["models"].append({"id": "ds", "provider": "deepseek", "model": "deepseek-flash",
-                                                  "roles": ["implementer"], "price_in": 0.5, "price_out": 2.0})
-    assert call(server, "POST", "/api/build/providers/deepseek/paid-test", {"model": "ds"})[0] == 400
-    assert api.requests == []
+def test_there_is_no_paid_test_route_and_online_providers_cannot_be_saved(server, api):
+    assert call(server, "POST", "/api/build/providers/lmstudio/paid-test", {"model": "ds"})[0] == 404
+    providers = {"lmstudio": local_server("https://api.deepseek.com")}
+    status, body = call(server, "POST", "/api/config", {"config": {"build": {"providers": providers}}})
+    assert status == 400 and "this PC" in body["error"]
+    assert server.app.orc.cfg["build"]["providers"]["lmstudio"]["base_url"] == api.url and api.requests == []
 
 
 def test_roles_are_validated_and_saved(server):

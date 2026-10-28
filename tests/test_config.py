@@ -63,12 +63,14 @@ def build(**over):
     return {"build": {**cfg, **over}}
 
 
-def test_build_defaults_have_no_keys_and_cloud_providers_off():
+LOCAL = {"kind": "openai", "base_url": "http://127.0.0.1:1234/v1"}
+
+
+def test_build_defaults_have_no_keys_and_only_free_local_providers():
     b = config_mod.validate({})[0]["build"]
-    assert set(b["providers"]) >= {"deepseek", "fireworks", "anthropic", "ollama"}
+    assert set(b["providers"]) == {"ollama"}
     assert not any(p["enabled"] for p in b["providers"].values())
-    assert b["providers"]["ollama"]["local"] and not b["providers"]["deepseek"]["local"]
-    assert b["providers"]["deepseek"]["daily_limit_usd"] == 1.0 and b["providers"]["deepseek"]["monthly_limit_usd"] == 10.0
+    assert b["providers"]["ollama"]["local"] and b["providers"]["ollama"]["base_url"] == "http://127.0.0.1:11434"
     assert b["roles"] == {"planner": "claude-cli", "implementer": "", "reviewer": "codex-cli"}
     assert b["parallel"] is False
     assert "key" not in json.dumps(b).lower().replace("api_version", "")
@@ -83,27 +85,52 @@ def test_old_config_without_build_section_loads_unchanged():
 @pytest.mark.parametrize("field", ["api_key", "key", "secret", "token", "password", "Authorization"])
 def test_provider_settings_refuse_secret_fields(field):
     raw = build()
-    raw["build"]["providers"]["deepseek"][field] = "sk-123"
+    raw["build"]["providers"]["lmstudio"] = dict(LOCAL, **{field: "sk-123"})
     cfg, warnings = config_mod.validate(raw)
     assert any("Credential Manager" in w for w in warnings)
-    assert field not in cfg["build"]["providers"]["deepseek"]
+    assert "lmstudio" not in cfg["build"]["providers"]
 
 
-def test_cloud_provider_needs_https_but_local_may_use_http():
+def test_local_server_is_accepted_with_defaults_filled_in():
     raw = build()
-    raw["build"]["providers"]["deepseek"]["base_url"] = "http://api.deepseek.com"
-    assert any("https" in w for w in config_mod.validate(raw)[1])
-    raw = build()
-    raw["build"]["providers"]["custom"] = {"kind": "openai", "base_url": "http://127.0.0.1:8080/v1", "local": True}
+    raw["build"]["providers"]["custom"] = {"kind": "openai", "base_url": "http://127.0.0.1:8080/v1"}
     cfg, warnings = config_mod.validate(raw)
     assert not warnings and cfg["build"]["providers"]["custom"]["max_concurrency"] == 1
+    assert cfg["build"]["providers"]["custom"]["local"] is True
+
+
+@pytest.mark.parametrize("url", ["https://api.deepseek.com", "http://api.deepseek.com", "https://localhost.example.com",
+                                 "http://127.0.0.1@api.example.com/v1", "https://127.0.0.1.example.com/v1"])
+def test_providers_off_this_pc_are_removed_because_they_could_cost_money(url):
+    raw = build()
+    raw["build"]["providers"]["paid"] = {"kind": "openai", "base_url": url, "local": True}  # The flag is not trusted.
+    raw["build"]["models"] = raw["build"]["models"] + [{"id": "p", "provider": "paid", "model": "m", "roles": ["implementer"]}]
+    raw["build"]["roles"] = {"planner": "claude-cli", "implementer": "p", "reviewer": "codex-cli"}
+    cfg, warnings = config_mod.validate(raw)
+    assert "paid" not in cfg["build"]["providers"] and "ollama" in cfg["build"]["providers"]
+    assert any("does not run on this PC" in w for w in warnings)
+    assert all(m["id"] != "p" for m in cfg["build"]["models"]) and cfg["build"]["roles"]["implementer"] == ""
+    with pytest.raises(config_mod.ConfigError, match="this PC"):
+        config_mod.validate_strict(raw)
+
+
+def test_old_paid_presets_are_dropped_and_local_settings_kept():
+    old = {"build": {"providers": {
+        "deepseek": {"kind": "openai", "base_url": "https://api.deepseek.com", "enabled": True, "local": False},
+        "anthropic": {"kind": "anthropic", "base_url": "https://api.anthropic.com", "enabled": False, "local": False},
+        "ollama": {"kind": "ollama", "base_url": "http://127.0.0.1:11434", "enabled": True, "local": True}}}}
+    cfg, warnings = config_mod.validate(old)
+    assert set(cfg["build"]["providers"]) == {"ollama"} and cfg["build"]["providers"]["ollama"]["enabled"]
+    assert len(warnings) == 2
+    cfg, _ = config_mod.validate({"build": {"providers": {"deepseek": old["build"]["providers"]["deepseek"]}}})
+    assert set(cfg["build"]["providers"]) == {"ollama"}  # Nothing left: the defaults come back.
 
 
 def test_roles_pointing_at_unknown_or_unsuitable_models_are_reported():
     raw = build(roles={"planner": "nope", "implementer": "", "reviewer": "codex-cli"})
     cfg, warnings = config_mod.validate(raw)
     assert any("planner" in w and "nope" in w for w in warnings) and cfg["build"]["roles"]["planner"] == ""
-    raw = build(models=[{"id": "ds", "provider": "deepseek", "model": "deepseek-flash", "roles": ["implementer"]}],
+    raw = build(models=[{"id": "ds", "provider": "ollama", "model": "qwen3:1.7b", "roles": ["implementer"]}],
                 roles={"planner": "ds", "implementer": "ds", "reviewer": ""})
     cfg, warnings = config_mod.validate(raw)
     assert any("planner" in w for w in warnings) and cfg["build"]["roles"] == {"planner": "", "implementer": "ds", "reviewer": ""}
@@ -111,7 +138,7 @@ def test_roles_pointing_at_unknown_or_unsuitable_models_are_reported():
 
 def test_models_must_name_a_known_provider_and_valid_prices():
     raw = build(models=[{"id": "x", "provider": "ghost", "model": "m", "roles": ["implementer"]},
-                        {"id": "y", "provider": "deepseek", "model": "m", "roles": ["implementer"], "price_in": -1}])
+                        {"id": "y", "provider": "ollama", "model": "m", "roles": ["implementer"], "price_in": -1}])
     cfg, warnings = config_mod.validate(raw)
     assert len(warnings) >= 1
     assert all(m["id"] not in ("x", "y") for m in cfg["build"]["models"])

@@ -136,8 +136,7 @@ class BuildService:
                     "reason": "" if ok else (st.detail if st else "Not installed.")}
         st = self.providers.status(pid)
         ok = st["state"] in ("ready", "verified")
-        reasons = {"disabled": "The provider is turned off.", "no_key": "No API key saved.",
-                   "no_connection": "No connection.", "key_refused": "The provider refused the key."}
+        reasons = {"disabled": "The provider is turned off.", "no_connection": "No connection.", "key_refused": "The provider refused the key."}
         return {"id": mid, "provider": pid, "model": model.get("model", ""), "local": st["local"], "ok": ok,
                 "reason": "" if ok else reasons.get(st["state"], st["state"])}
 
@@ -211,12 +210,9 @@ class BuildService:
         if impl is None:
             raise BuildError("Choose an implementer model in Settings → Providers → Roles first.")
         if impl["provider"] in CLI_PROVIDERS:
-            raise BuildError("Implementers must be API or local models: Enoy has to run them through its own "
-                             "limited tools, which the signed-in Claude and Codex apps do not use.")
-        local = self.orc.cfg["build"]["providers"][impl["provider"]].get("local")
+            raise BuildError("Implementers must be free models that run on this PC: Enoy has to run them through "
+                             "its own limited tools, which the signed-in Claude and Codex apps do not use.")
         reason = privacy.local_only_reason(self.orc.cfg, project)
-        if reason and not local:
-            raise BuildError(f"The implementer runs in the cloud, but {reason}. Choose a local implementer.")
         root = Path(project["path"])
         if not is_repo(root):
             raise BuildError("This folder is not a Git repository. Set up Git for it on the Project tab first.")
@@ -242,10 +238,12 @@ class BuildService:
                                                dev_task_id=task["id"])
             return complete
 
-        online = (lambda: True) if local else (lambda: self.providers.test(impl["provider"])["ok"])
-        excluded = list(self.orc.cfg["permissions"]["extra_excluded_globs"])
-        if not local:  # Files the user keeps from cloud models stay out of a cloud implementer's worktree.
-            excluded += self.orc.cfg["privacy"]["cloud_excluded_globs"]
+        # The implementer runs on this PC (providers.py refuses anything else). "Online" means its local
+        # server answers; the check only lists models, so it is free.
+        online = lambda: self.providers.test(impl["provider"])["ok"]
+        # Files the user keeps from cloud models stay out of the worktree too: the implementer is local, but
+        # what it writes goes to the reviewer, which may be the cloud Codex.
+        excluded = self.orc.cfg["permissions"]["extra_excluded_globs"] + self.orc.cfg["privacy"]["cloud_excluded_globs"]
         runner = BuildRunner(self.store, GitWork(root), complete_for, self.orc.cfg["permissions"]["command_allowlist"],
                              review=review, sync=lambda pid: planfile.sync(self.orc, pid), venv_root=root,
                              online=online, parallel_allowed=bool(build["parallel"]),

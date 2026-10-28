@@ -8,7 +8,7 @@ context, a restart (new app on the same data) with settings and task state kept,
 
 import json
 
-from conftest import FakeBackend
+from conftest import FakeBackend, local_server
 from enoy import config as config_mod
 from enoy.backends.base import CLAUDE, CODEX
 from enoy.devstore import DevStore
@@ -52,12 +52,12 @@ def test_simulated_end_to_end_with_restart_and_offline(repo, vault, tmp_path):
     try:
         # Settings through the UI's own API: provider on, key, model with prices, implementer role.
         providers = json.loads(json.dumps(cfg["build"]["providers"]))
-        providers["deepseek"].update(enabled=True, base_url=api.url)
-        models = cfg["build"]["models"] + [{"id": "ds", "provider": "deepseek", "model": "deepseek-flash",
-                                             "roles": ["implementer"], "price_in": 0.5, "price_out": 2.0}]
+        providers["lmstudio"] = local_server(api.url)
+        models = cfg["build"]["models"] + [{"id": "ds", "provider": "lmstudio", "model": "qwen-coder",
+                                             "roles": ["implementer"]}]
         ok(srv, "POST", "/api/config", {"config": {"build": {"providers": providers, "models": models}}})
         ok(srv, "POST", "/api/build/roles", {"roles": {"implementer": "ds"}})
-        ok(srv, "POST", "/api/build/providers/deepseek/key", {"value": SECRET})
+        ok(srv, "POST", "/api/build/providers/lmstudio/key", {"value": SECRET})
 
         pid = ok(srv, "POST", "/api/projects/open", {"path": str(repo)})["project"]["id"]
         plan = ok(srv, "POST", "/api/build/plans", {"project_id": pid, "goal": "Add multiply and divide"})["plan"]
@@ -75,8 +75,8 @@ def test_simulated_end_to_end_with_restart_and_offline(repo, vault, tmp_path):
 
     # Restart: a new app on the same data folder.
     saved_cfg = config_mod.load()[0]
-    assert saved_cfg["build"]["roles"]["implementer"] == "ds" and saved_cfg["build"]["providers"]["deepseek"]["enabled"]
-    saved_cfg["build"]["providers"]["deepseek"]["base_url"] = "http://127.0.0.1:9"  # The provider is unreachable.
+    assert saved_cfg["build"]["roles"]["implementer"] == "ds" and saved_cfg["build"]["providers"]["lmstudio"]["enabled"]
+    saved_cfg["build"]["providers"]["lmstudio"]["base_url"] = "http://127.0.0.1:9"  # The provider is unreachable.
     srv = start(saved_cfg, db_path, tmp_path)
     try:
         detail = ok(srv, "GET", f"/api/build/plans/{plan['id']}")
@@ -90,7 +90,7 @@ def test_simulated_end_to_end_with_restart_and_offline(repo, vault, tmp_path):
         # The connection comes back.
         cfg2 = srv.app.orc.cfg
         providers = json.loads(json.dumps(cfg2["build"]["providers"]))
-        providers["deepseek"]["base_url"] = api.url
+        providers["lmstudio"]["base_url"] = api.url
         ok(srv, "POST", "/api/config", {"config": {"build": {"providers": providers}}})
         api.add("/models", (200, {"data": [{"id": "deepseek-flash"}]}))
         api.add("/chat/completions", *DIVIDE)
