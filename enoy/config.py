@@ -109,14 +109,16 @@ DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': T
                          'anthropic': {'kind': 'anthropic', 'base_url': 'https://api.anthropic.com', 'enabled': False,
                                        'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
                                        'monthly_limit_usd': 10.0, 'timeout_s': 600, 'api_version': '2026-10-21'},
-                         'ollama': {'kind': 'openai', 'base_url': 'http://127.0.0.1:11434/v1', 'enabled': False,
+                         'ollama': {'kind': 'ollama', 'base_url': 'http://127.0.0.1:11434', 'enabled': False,
                                     'local': True, 'max_concurrency': 1, 'daily_limit_usd': 0.0,
                                     'monthly_limit_usd': 0.0, 'timeout_s': 1800}},
            # "model": "" means the CLI's own configured model.
            'models': [{'id': 'claude-cli', 'provider': 'claude_cli', 'model': '', 'roles': ['planner', 'reviewer']},
                       {'id': 'codex-cli', 'provider': 'codex_cli', 'model': '', 'roles': ['planner', 'reviewer']}],
            'roles': {'planner': 'claude-cli', 'implementer': '', 'reviewer': 'codex-cli'},
-           'parallel': False}}
+           'parallel': False,
+           # Local models stay under 2,000 MiB: chill 1,200 / medium ("Middle") 1,600 / full 1,900 (localguard.py).
+           'local_memory': 'medium'}}
 
 BUILD_ROLES = ('planner', 'implementer', 'reviewer')
 CLI_PROVIDERS = ('claude_cli', 'codex_cli')
@@ -149,8 +151,8 @@ def _provider_problem(pid: str, p: Any) -> str | None:
             return f"provider '{pid}' has an unknown setting '{k}'"
         if not _is(v, _PROVIDER_FIELDS[k]):
             return f"provider '{pid}' setting '{k}' has the wrong type"
-    if p.get('kind') not in ('openai', 'anthropic'):
-        return f"provider '{pid}' kind must be openai or anthropic"
+    if p.get('kind') not in ('openai', 'anthropic', 'ollama'):
+        return f"provider '{pid}' kind must be openai, anthropic or ollama"
     m = re.fullmatch(r'(https?)://(\[[^\]]+\]|[^/:\s]+)(:\d+)?(/\S*)?', p.get('base_url', ''))
     if not m:
         return f"provider '{pid}' base_url is not a web address"
@@ -315,7 +317,7 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "extra_excluded_globs": (list, lambda v: None if all(isinstance(x, str) for x in v) else "must be a list of strings"),
     },
     "build": {"providers": (dict, _check_providers), "models": (list, _check_models), "roles": (dict, _check_roles),
-              "parallel": (bool, None)},
+              "parallel": (bool, None), "local_memory": (str, _choice(("chill", "medium", "full")))},
 }
 
 

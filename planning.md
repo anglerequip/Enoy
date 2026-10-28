@@ -359,7 +359,15 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
 Each UI task has a JS test where logic exists (`tests/js`), plus a preview check: light and dark mode, narrow window, offline state.
 
 ### Phase 10: Local models
-- [ ] **T10.1 Ollama.** Detect the service; list installed models; Local badge; works offline. It never pulls a model. Tests with a fake `/api/tags`. The memory guard follows your answer to Q3.
+- [x] **T10.1 Ollama.** *Done:*
+  - `enoy/backends/ollama.py` uses Ollama's native API (`/api/chat`, `/api/tags`), because its OpenAI-compatible endpoint ignores the context and batch sizes Enoy needs for memory limits. It lists installed models with their sizes, never calls `/api/pull`, and a missing model gives a clear "Enoy does not download models" error. Tool calls round-trip correctly.
+  - Memory guard (decision 3), `enoy/localguard.py`, a slim replacement for the removed 651-line `memory_guard`. The modes are Chill 1,200, Middle 1,600 (default) and Full 1,900 MiB, all under 2,000. Per mode it sets the context size (4k/8k/16k) and batch. Every Ollama runner process gets a Windows hard working-set cap at the mode's limit (`winproc.cap_working_set`). It measures Ollama's processes during each request; at 96 % of the limit it stops that request (not the whole run) and unloads the model, and after 8 s above the limit it ends the runner process. If memory cannot be read, the request still runs.
+  - Config: the provider kind is now `ollama` at `http://127.0.0.1:11434`, local and off by default, plus `build.local_memory`. `Providers` uses the guard for every local request; local requests need no key and cost 0.
+  - Settings → Providers: the Ollama card has a memory mode picker and lists installed models with their size on disk, flagging models larger than the limit. "Add a model" suggests the model names a provider has listed.
+  - `tests/test_cloud_only.py` now checks that Ollama is off by default, instead of checking that its file is absent, because decision 3 brings it back.
+  - Not verified with a real Ollama: it is not installed on this PC, and installing it needs permission. All tests use a fake Ollama server and injected memory readings.
+  - Full suite: 573 passed.
+  *Original spec:* Detect the service; list installed models; Local badge; works offline. It never pulls a model. Tests with a fake `/api/tags`. The memory guard follows your answer to Q3.
 
 ### Phase 11: Security hardening
 - [ ] **T11.1** Redaction, privacy filters and transmission logging on every new provider path. Test: a `.env` sentinel never appears in any captured request.

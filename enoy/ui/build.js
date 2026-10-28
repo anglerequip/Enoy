@@ -296,6 +296,7 @@ async function settingsProviders() {
         <label class="field">Requests at once<input type="number" min="1" max="8" data-bp="max_concurrency" value="${esc(p.max_concurrency)}"></label>
         ${p.local ? "" : `<label class="field">Daily limit (US$)<input type="number" min="0" step="any" data-bp="daily_limit_usd" value="${esc(p.daily_limit_usd)}"></label>
         <label class="field">Monthly limit (US$)<input type="number" min="0" step="any" data-bp="monthly_limit_usd" value="${esc(p.monthly_limit_usd)}"></label>`}</div>
+      ${p.kind === "ollama" ? localModelsHtml(st) : ""}
       ${p.local ? "" : `<label class="field">API key<div class="row"><input type="password" autocomplete="off" id="bkey-${esc(st.id)}" placeholder="${st.key_set ? "Saved in Windows Credential Manager" : "Not set"}">
         <button class="btn" data-action="build-key" data-pid="${esc(st.id)}">Save</button>
         ${st.key_set ? `<button class="btn ghost" data-action="build-key" data-pid="${esc(st.id)}" data-clear="1">Remove</button>` : ""}</div>
@@ -324,6 +325,8 @@ async function settingsProviders() {
     S.config.build.roles = d.roles; toast("Saved");
   }));
   $("build-parallel").onchange = e => saveCfg({ build: { parallel: e.target.checked } });
+  const mem = $("build-local-memory");
+  if (mem) mem.onchange = () => saveCfg({ build: { local_memory: mem.value } }).then(() => settingsProviders());
   document.querySelectorAll("#set-body .prov-card [data-bp]").forEach(el => el.addEventListener("change", () => {
     const pid = el.closest(".prov-card").dataset.pid, key = el.dataset.bp;
     const providers = JSON.parse(JSON.stringify(S.config.build.providers));
@@ -332,17 +335,34 @@ async function settingsProviders() {
   }));
 }
 
+const MEMORY_MODES = [["chill", "Chill", 1200, 4096], ["medium", "Middle", 1600, 8192], ["full", "Full", 1900, 16384]];
+function localModelsHtml(st) {
+  const mode = S.config.build.local_memory || "medium";
+  const limit = (MEMORY_MODES.find(m => m[0] === mode) || MEMORY_MODES[1])[2];
+  return `<label class="field">Memory mode<select id="build-local-memory">${MEMORY_MODES.map(([k, l, mib, ctx]) =>
+      `<option value="${k}" ${k === mode ? "selected" : ""}>${l}: at most ${mib.toLocaleString()} MiB, ${(ctx / 1024)}k context</option>`).join("")}</select>
+      <span class="small">Enoy caps the model's memory to this and stops a request (and unloads the model) if it gets close.</span></label>
+    <div class="small">${st.installed.length ? `Installed in Ollama: ${st.installed.map(m => `<code>${esc(m.name)}</code> ${m.size_mib.toLocaleString()} MiB on disk${m.size_mib > limit ? " (larger than the memory limit; it will run slowly or be stopped)" : ""}`).join(" · ")}`
+      : "Test the connection to list the models installed in Ollama."} Enoy never downloads models.</div>`;
+}
+
 function addModelDialog() {
   const pids = Object.keys(S.config.build.providers);
   openModal(`<h2>Add a model</h2>
     <label class="field">Name in Enoy<input type="text" id="bm-id" maxlength="60" placeholder="e.g. deepseek-flash"></label>
     <label class="field">Provider<select id="bm-provider">${pids.map(p => `<option>${esc(p)}</option>`).join("")}</select></label>
-    <label class="field">Model ID at the provider<input type="text" id="bm-model" placeholder="exactly as the provider lists it"></label>
+    <label class="field">Model ID at the provider<input type="text" id="bm-model" list="bm-known" placeholder="exactly as the provider lists it"><datalist id="bm-known"></datalist></label>
     <div class="row">${["planner", "implementer", "reviewer"].map(r => `<label class="pl-check"><input type="checkbox" data-role="${r}" ${r === "implementer" ? "checked" : ""}> ${ROLE_LABEL[r]}</label>`).join("")}</div>
     <div class="grid2"><label class="field">Input $/M tokens<input type="number" min="0" step="any" id="bm-in"></label>
       <label class="field">Cached input $/M<input type="number" min="0" step="any" id="bm-cached"></label>
       <label class="field">Output $/M tokens<input type="number" min="0" step="any" id="bm-out"></label></div>
     <div class="row" style="justify-content:flex-end"><button class="btn ghost" data-action="close-modal">Cancel</button><button class="btn primary" id="bm-ok">Add</button></div>`);
+  const fillKnown = () => guarded(async () => {
+    const st = (await api("GET", "/api/build/providers")).providers.find(x => x.id === $("bm-provider").value);
+    $("bm-known").innerHTML = (st ? st.models : []).map(m => `<option value="${esc(m)}">`).join("");
+  });
+  $("bm-provider").onchange = fillKnown;
+  fillKnown();
   const ok = $("bm-ok");
   ok.onclick = submitOnce(ok, async () => {
     const num = id => $(id).value === "" ? null : Number($(id).value);

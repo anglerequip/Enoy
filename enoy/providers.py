@@ -12,8 +12,10 @@ from typing import Callable
 
 from .backends.anthropic_api import AnthropicBackend
 from .backends.base import BackendError, ChatMessage, ChatRequest, ChatResult
+from .backends.ollama import OllamaBackend
 from .backends.openai_compat import OpenAICompatBackend
 from .config import CLI_PROVIDERS
+from .localguard import LocalGuard
 from .spend import Spend, estimate_tokens
 from .storage import Storage
 from .tools import keystore
@@ -27,6 +29,7 @@ class Providers:
         self._last: dict[str, str] = {}   # Result kind of the last connection test this session.
         self._slots: dict[tuple[str, int], threading.BoundedSemaphore] = {}
         self._lock = threading.Lock()
+        self.local_guard = LocalGuard(lambda: self._cfg()["build"].get("local_memory", "medium"))
 
     @property
     def build(self) -> dict:
@@ -46,6 +49,8 @@ class Providers:
 
     def backend(self, pid: str, model: str = ""):
         p = self.settings(pid)
+        if p["kind"] == "ollama":
+            return OllamaBackend(pid, p, model, options=self.local_guard.request_options)
         cls = AnthropicBackend if p["kind"] == "anthropic" else OpenAICompatBackend
         return cls(pid, p, model, key=lambda: keystore.get("provider:" + pid))
 
@@ -73,7 +78,8 @@ class Providers:
         return {"id": pid, "kind": p["kind"], "base_url": p["base_url"], "enabled": p["enabled"], "local": p["local"],
                 "key_set": key_set, "state": state, "verified": bool(verified),
                 "verified_at": verified["at"] if verified else None,
-                "models": self.db.kv_get("build.models." + pid, []), "spend": self.spend.totals(pid)}
+                "models": self.db.kv_get("build.models." + pid, []), "spend": self.spend.totals(pid),
+                "installed": self.db.kv_get("build.installed." + pid, []) if p["kind"] == "ollama" else []}
 
     def statuses(self) -> list[dict]:
         return [self.status(pid) for pid in self.build["providers"]]
@@ -87,6 +93,12 @@ class Providers:
             return {"ok": False, "kind": exc.kind, "error": str(exc)}
         self._last[pid] = "ok"
         self.db.kv_set("build.models." + pid, models[:500])
+        backend = self.backend(pid)
+        if isinstance(backend, OllamaBackend):  # Installed models with their sizes; nothing is downloaded.
+            try:
+                self.db.kv_set("build.installed." + pid, backend.models_info()[:200])
+            except BackendError:
+                pass
         return {"ok": True, "models": models}
 
     def slot(self, pid: str) -> threading.BoundedSemaphore:
@@ -105,7 +117,8 @@ class Providers:
                               cancel=cancel or threading.Event())
         try:
             with self.slot(m["provider"]):
-                result = self.backend(m["provider"], m.get("model", "")).chat(request)
+                backend = self.backend(m["provider"], m.get("model", ""))
+                result = self._local_chat(backend, request) if isinstance(backend, OllamaBackend) else backend.chat(request)
         except BackendError as exc:
             self.spend.fail(call, str(exc))
             raise
@@ -114,6 +127,31 @@ class Providers:
             raise
         self.spend.finish(call, result.usage)
         return result
+
+    def _local_chat(self, backend: OllamaBackend, request: ChatRequest) -> ChatResult:
+        """A local request under the memory guard. The guard cancels only this request, never the whole run."""
+        outer, inner, done = request.cancel, threading.Event(), threading.Event()
+
+        def follow():
+            while not done.is_set():
+                if outer.is_set():
+                    inner.set()
+                done.wait(0.05)
+
+        threading.Thread(target=follow, daemon=True).start()
+        guard = self.local_guard
+        guard.unload = lambda: backend.unload()
+        request.cancel = inner
+        try:
+            with guard.watch(inner):
+                return backend.chat(request)
+        except BackendError as exc:
+            if guard.stopped:
+                raise BackendError("limit", guard.stopped) from None
+            raise
+        finally:
+            done.set()
+            request.cancel = outer
 
     def paid_test(self, model_id: str, confirm: bool = False) -> dict:
         """One tiny real request. The provider charges for it, so the caller must confirm."""

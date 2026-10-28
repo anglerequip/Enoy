@@ -17,7 +17,9 @@ def test_app_registers_exactly_the_cloud_providers(app_home):
         patterns = [pattern.pattern for _, pattern, _ in app.routes]
         assert not any('ollama' in p or '/api/memory' in p for p in patterns)
         package = Path(__file__).resolve().parents[1] / 'enoy'
-        assert not (package / 'backends' / 'ollama.py').exists()
+        # Ollama is back only as an optional, off-by-default Build provider (planning.md, decision 3);
+        # chats still use the cloud providers only, and the old chat-wide memory supervisor stays removed.
+        assert cfg['build']['providers']['ollama']['enabled'] is False
         assert not (package / 'memory_guard.py').exists()
     finally:
         orc.db.close()
