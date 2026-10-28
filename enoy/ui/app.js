@@ -333,8 +333,19 @@ async function showTokenSavings() {
     if (version !== providerDialog || $("savings-loading") !== loading || $("modal").classList.contains("hidden")) return;
     openModal(`<h2>Estimated token savings</h2><div class="usage-total">≈ ${Number(data.estimated_tokens_saved).toLocaleString()}</div><p class="muted">History tokens avoided by Enoy</p>
       ${["codex", "claude"].map(p => `<div class="usage-window usage-heading"><span>${NAME[p]}</span><strong>≈ ${Number(data.providers.find(r => r.backend === p)?.estimated_tokens_saved || 0).toLocaleString()}</strong></div>`).join("")}
-      <p class="small muted">${esc(data.method)}</p><button class="btn" data-action="close-modal">Close</button>`);
+      <p class="small muted">${esc(data.method)}</p><div id="savings-audit" class="small muted" role="status"></div>
+      <div class="row"><button class="btn primary" data-action="audit-savings">Verify saved work</button><button class="btn" data-action="close-modal">Close</button></div>`);
   } catch (e) { if (version === providerDialog && $("savings-loading") === loading && !$("modal").classList.contains("hidden")) openModal(`<h2>Estimated token savings</h2><p role="alert">${esc(e.message)}</p><button class="btn" data-action="token-savings">Retry</button><button class="btn" data-action="close-modal">Close</button>`); }
+}
+
+async function auditTokenSavings() {
+  const target = $("savings-audit");
+  if (!target) return;
+  target.textContent = "Checking saved request records…";
+  try {
+    const data = await api("GET", "/api/usage/savings/audit");
+    if (target.isConnected) target.innerHTML = `<strong>${data.ok ? "✓ Accounting verified" : "Check needed"}</strong> · ${esc(data.detail)}<br>${data.completed_requests} completed model request(s), ${data.pending_requests} unfinished request(s), ${data.invalid_records} invalid record(s). ${data.applied_change_sets} applied change set(s); ${data.checks.passed || 0} passed and ${data.checks.failed || 0} failed command check(s). Native edits and provider caching are outside this estimate. No model request was sent.`;
+  } catch (e) { if (target.isConnected) target.textContent = `Could not verify: ${e.message}`; }
 }
 
 let launchedProvider = null;
@@ -557,7 +568,10 @@ function messageModelInfo(m) {
   return {};
 }
 function progressHtml(notes, id = "") {
-  return `<details class="thinking" open ${id ? `id="${id}-wrap"` : ""}><summary>Progress summary</summary><div ${id ? `id="${id}"` : ""} style="white-space:pre-wrap">${esc((notes || []).join("\n\n") || "Waiting for a provider progress update.")}</div></details>`;
+  const all = (notes || []).filter(Boolean);
+  const latest = all.at(-1) || "Working on your request…";
+  const brief = latest.replace(/\s+/g, " ").trim().slice(0, 135);
+  return `<details class="thinking" ${id ? `id="${id}-wrap"` : ""}><summary><strong>Progress</strong><span class="thinking-brief">${esc(brief)}</span></summary><div ${id ? `id="${id}"` : ""}>${esc(all.join("\n\n") || "Waiting for a provider progress update.")}</div></details>`;
 }
 function messageHtml(m, isLast) {
   if (m.role === "user") {
@@ -762,11 +776,13 @@ function renderLive(now = false) {
     const agent = S.chat.task.state.active_agent || {};
     const model = $("live-model");
     if (model) model.textContent = modelLabel(agent);
-    const think = (agent.progress || []).join("\n\n") || S.thinking[id] || "Waiting for a provider progress update.";
+    const think = (agent.progress || []).join("\n\n") || S.thinking[id] || "Working on your request…";
     const wrap = $("live-thinking-wrap");
     if (wrap) {
       const th = $("live-thinking");
       if (th.textContent !== think) th.textContent = think;
+      const brief = wrap.querySelector(".thinking-brief");
+      if (brief) brief.textContent = think.split("\n").filter(Boolean).at(-1)?.replace(/\s+/g, " ").slice(0, 135) || "Working on your request…";
     }
     if (stick) toBottom();
   };
@@ -798,6 +814,7 @@ function renderComposer() {
       ${S.attached.length ? `<div class="chips">${S.attached.map(p => `<span class="chip">📄 ${esc(p)}<button data-action="unattach" data-path="${esc(p)}" title="Remove">✕</button></span>`).join("")}</div>` : ""}
       <textarea id="prompt" rows="1" placeholder="${esc(placeholder)}"></textarea>
       <input type="file" id="img-input" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" multiple hidden>
+      <input type="file" id="file-input" multiple hidden>
       <div class="bar">
         <button class="round-btn plus" data-action="plus-menu" title="Add images or files, run tests…" aria-label="Add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         ${mode() === "code" && !S.chat ? `<button class="comp-chip" data-action="project-menu" title="${esc(S.project ? S.project.path : "Choose the folder Enoy works in")}">${FOLDER_ICON}<span class="t">${S.project ? esc(S.project.name) : "Choose folder"}</span>${CHEV}</button>` : ""}
@@ -822,6 +839,7 @@ function renderComposer() {
     if (files.length) { e.preventDefault(); addImages(files); }
   });
   $("img-input").addEventListener("change", e => { addImages([...e.target.files]); e.target.value = ""; });
+  $("file-input").addEventListener("change", e => { addDroppedFiles([...e.target.files]); e.target.value = ""; });
   ta.addEventListener("keydown", e => {
     if (e.key === "Tab" && ta.value.trimStart().startsWith("/") && !$("menu").classList.contains("hidden")) {
       const first = $("menu").querySelector('[data-action="insert-command"]');
@@ -1030,7 +1048,9 @@ function renderSettings() {
 
 function settingsAbout() {
   $("set-body").innerHTML = `<div class="set-section"><h3>About Enoy</h3>
-    <p class="small muted">Enoy brings chat and coding into one desktop app. Ask questions in Chat, or open a project in Code and work with Codex and Claude Code. Review progress in Activity and manage your accounts, models, appearance, privacy, and updates in Settings.</p></div>`;
+    <p class="small muted">Enoy uses the lowest cost model that fits each step, then checks recorded results.</p>
+    <div class="stack-map"><div><strong>1 · Plan</strong><span>Codex reads a bounded project snapshot and chooses tasks.</span></div><div><strong>2 · Build</strong><span>Luna handles routine work; specialist tasks route to Sol, Terra, Astra, or Claude when useful and available.</span></div><div><strong>3 · Check</strong><span>Local syntax and test commands run without model tokens. Larger or risky changes get a model review.</span></div><div><strong>4 · Reuse</strong><span>Later requests receive short shared records instead of the entire conversation.</span></div></div>
+    <p class="small muted">The savings number compares omitted conversation characters with a full-history baseline. It is an estimate, not billed tokens. Open Estimated token savings and press <strong>Verify saved work</strong> to audit the stored records without a model call.</p></div>`;
 }
 
 function toggleRow(sec, key, label, desc) {
@@ -1190,12 +1210,12 @@ async function settingsModels() {
     ${toggleRow("coordinator","claude_reviews","GPT plans, Claude reviews","Claude checks implementation plans before execution and reviews the final results. Unavailable reviews and GPT fallbacks are shown in Activity.")}
     ${toggleRow("coordinator","claude_complex","Claude handles complex work and repairs","Bounded routine implementation stays with the economical GPT execution model. Claude gets broad, risky or complex work and repair tasks when available.")}
     ${toggleRow("agent","native_tools","Native tools for ChatGPT and Claude","Inspect files, edit code, and run commands. Native edits are direct and are not Enoy undoable patches. Private file filters keep requests in filtered context mode.")}
+    ${toggleRow("agent","self_check","Check Enoy's usage during work","Local, token-free review when a task completes. Actionable usage issues appear in Activity; no model request is added.")}
     <label class="field">Agent permission mode<select data-cfg="agent.access_mode">
       <option value="workspace" ${c.agent.access_mode === "workspace" ? "selected" : ""}>Workspace Access</option>
       <option value="full" ${c.agent.access_mode === "full" ? "selected" : ""}>Full Access</option>
     </select><span class="small">Workspace: work in the selected project. Full Access: explicitly authorize work across your PC using Enoy's Windows account, including from a general chat. Provider approval checks and Windows permissions still apply. This setting does not grant administrator privileges.</span></label>
     ${toggleRow("claude","enabled","Enable Claude","Uses your Claude Code sign-in.")}
-    ${toggleRow("claude","confirm_before_send","Ask before sending to Claude","Approve Claude once per delegated run.")}
     ${inputRow("claude","model","Claude default model","Default: claude-opus-5-5")}
     ${inputRow("claude","effort","Claude default reasoning effort","Default: medium; difficult debugging and final review route at high")}
     ${inputRow("routing","max_attempts","Attempts per task","","number")}
@@ -1419,7 +1439,7 @@ const actions = {
   "send": () => send(),
   "stop": () => chatAction("cancel"),
   "project-menu": el => openMenu(el, [
-    ...codeProjects().slice(0, 8).map(p => ({ title: `📁 ${esc(p.name)}`, desc: p.path, action: "switch-project", data: { id: p.id }, checked: S.project && p.id === S.project.id })),
+    ...codeProjects().slice(0, 8).map(p => ({ title: `${FOLDER_ICON} ${esc(p.name)}`, desc: p.path, action: "switch-project", data: { id: p.id }, checked: S.project && p.id === S.project.id })),
     ...(codeProjects().length ? ["-"] : []),
     { title: "Open folder…", desc: "Let the AI read and change code in a folder", action: "pick-folder" },
     ...(S.project && !S.project.is_default ? ["-", { title: "🔒 Keep this project on my PC", desc: "Nothing from it is ever sent to Claude", action: "toggle-project-local", checked: !!S.project.local_only }] : []),
@@ -1524,6 +1544,7 @@ const actions = {
     if (!S.project) { openMenu(el, [{ title: "📁 Open a project folder…", action: "pick-folder" }]); return; }
     const general = S.project.is_default;
     const items = [];
+    items.push({ title: "Add files from device", desc: "Attach a local file to this chat, or drop it into the composer", action: "add-files" });
     if (!general) {
       items.push({ title: "📄 Add a project file", desc: "Make sure the AI reads it", action: "toggle-files" });
       testCommands().slice(0, 3).forEach(c => items.push({ title: `▶ Run <code>${esc(c)}</code>`, action: "run-cmd", data: { cmd: c } }));
@@ -1548,6 +1569,7 @@ const actions = {
   },
   "summarize": () => { closeMenu(); guarded(async () => { const d = await api("POST", `/api/projects/${S.project.id}/summarize`); await loadChat(d.task.id); await loadChats(); renderAll(true); }); },
   "toggle-files": () => { closeMenu(); S.drawer = !S.drawer; renderDrawer(); },
+  "add-files": () => { closeMenu(); $("file-input")?.click(); },
   "preview-file": el => guarded(async () => {
     S.preview = { path: el.dataset.path };
     renderDrawer();
@@ -1650,6 +1672,7 @@ const actions = {
   "usage-edit": () => editClaudeUsage(),
   "usage-save": () => saveClaudeUsage(),
   "token-savings": () => showTokenSavings(),
+  "audit-savings": () => auditTokenSavings(),
   "settings-tab": el => { S.settingsTab = el.dataset.tab; renderSettings(); },
   "check-updates": () => checkUpdates(),
   "install-providers": async el => {
@@ -1707,11 +1730,35 @@ $("main").addEventListener("dragover", e => { if ([...e.dataTransfer.types].incl
 $("main").addEventListener("dragleave", e => { if (e.target === $("main") || !$("main").contains(e.relatedTarget)) $("main").classList.remove("dropping"); });
 $("main").addEventListener("drop", e => {
   $("main").classList.remove("dropping");
-  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith("image/"));
+  const files = [...e.dataTransfer.files];
   if (!files.length) return;
   e.preventDefault();
-  addImages(files);
+  addDroppedFiles(files);
 });
+
+async function addDroppedFiles(files) {
+  if (!S.project) { toast("Open a project folder first.", true); return; }
+  if (regularChat()) { toast("Switch to integrated chat to attach files here.", true); return; }
+  const images = files.filter(f => f.type.startsWith("image/"));
+  const others = files.filter(f => !f.type.startsWith("image/"));
+  if (images.length) await addImages(images);
+  if (!others.length) return;
+  S.uploading = true;
+  try {
+    for (const file of others) {
+      try {
+        const response = await fetch(`/api/projects/${S.project.id}/attachment`, {
+          method: "POST", headers: { "X-Enoy-Token": TOKEN, "X-Enoy-Filename": encodeURIComponent(file.name),
+            "Content-Type": "application/octet-stream" }, body: file,
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Upload failed (${response.status}).`);
+        if (!S.attached.includes(result.path)) S.attached.push(result.path);
+      } catch (e) { toast(`${file.name}: ${e.message}`, true); }
+    }
+  } finally { S.uploading = false; renderComposer(); }
+  $("prompt")?.focus();
+}
 
 // ---------------------------------------------------------------- images
 

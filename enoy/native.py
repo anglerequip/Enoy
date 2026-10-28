@@ -84,10 +84,12 @@ def instructions(orc, task_id, provider, purpose):
     return folders + "\n\n" + scope + "\n" + """You have your native agent tools: inspect directories,
 search and read real files, edit files, and execute commands and tests. Use them to do the work.
 Find information yourself before asking the user to find folders or paste files.
+If the requested source clips, music, or other inputs are missing, search the selected folder and known locations first. Continue any independent work, then ask for the specific missing files or access needed. Never claim timing, rendering, or media copying was verified without the actual files and a real check.
 Enoy's source path above is authoritative even if its folder has an older name.
 Inspect the existing application before making changes; never invent a replacement app.
 Run relevant checks. Report actual results and failures. Native tools use the CLI's approval policy.
 Give brief public progress updates explaining the next action and its purpose. Do not expose private internal reasoning.
+Lead the final answer with one short bold result sentence, followed by concise sections or bullets.
 Native edits change files directly; do not also return patch blocks for edits already applied.
 The coordinator may delegate substantial tasks before editing. An assigned worker completes its task directly.
 Publishing, messaging and destructive actions require specific authorization.

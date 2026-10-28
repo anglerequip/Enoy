@@ -155,7 +155,17 @@ class Orchestrator:
                 summary = summary[:139].rstrip() + "…"
             self._act(task_id, f"task.{status}", text + (f" {summary}" if summary else ""), "system", "done",
                       outcome=status)
+            if status == "completed" and self.cfg["agent"].get("self_check"):
+                self._self_check_usage(task_id)
         self._task_changed(task_id)
+
+    def _self_check_usage(self, task_id: int) -> None:
+        """Cheap local usage review. Only actionable patterns produce Activity notes."""
+        rows = self.db.transmissions(task_id=task_id, limit=100)
+        complete = [r for r in rows if r.get("usage")]
+        if (len(complete) >= 4 and sum(r.get("chars", 0) for r in complete) > 20_000
+                and not any(r.get("history_saved_chars", 0) for r in complete)):
+            self._event(task_id, "usage.check", "Usage check: four or more model requests recorded no context savings. Review Activity for repeated context or tool calls.")
 
     def _set_owner(self, task_id: int, backend: str, why: str) -> None:
         task = self.db.get_task(task_id)

@@ -1,6 +1,7 @@
 """Application startup and the local HTTP API (fake backends, real server)."""
 
 import http.client
+import io
 import json
 
 import pytest
@@ -48,6 +49,24 @@ def test_ui_is_served_with_token(server):
     assert status == 200 and server.app.token in html and "Enoy" in html
     status, _ = call(server, "GET", "/static/app.js", token=False)
     assert status == 200
+
+
+def test_chat_attachment_upload_is_bounded_and_stays_in_project(server, tmp_path):
+    folder = tmp_path / "code"
+    folder.mkdir()
+    opened = server.app.dispatch("POST", "/api/projects/open", {}, {"path": str(folder)})
+    pid = opened['project']['id']
+    payload = b"example attachment"
+    result = server.app.store_attachment(pid, "notes.txt", io.BytesIO(payload), len(payload))
+    assert result['path'] == 'enoy-uploads/notes.txt'
+    assert (folder / 'enoy-uploads' / 'notes.txt').read_bytes() == b"example attachment"
+    from enoy.server import ApiError
+    with pytest.raises(ApiError):
+        server.app.store_attachment(pid, "../.env", io.BytesIO(payload), len(payload))
+    second = server.app.store_attachment(pid, "notes.txt", io.BytesIO(payload), len(payload))
+    assert second['path'] == 'enoy-uploads/notes-1.txt'
+    with pytest.raises(ApiError):
+        server.app.store_attachment(pid, "huge.mp4", io.BytesIO(payload), 2_000_000_001)
 
 
 def test_provider_launch_endpoint(server, monkeypatch):

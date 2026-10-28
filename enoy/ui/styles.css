@@ -1051,3 +1051,62 @@ body, #sidebar, #main, #topbar, .workspace-context { transition:background-color
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation:none!important; }
   body, #sidebar, #main, #topbar, .workspace-context, #mode-switch::before, #mode-switch button, .code-spark { transition:none!important; }
 }
+
+/* Compact reading and navigation. Keep detailed provider notes one click away. */
+.thinking { margin-top: 2px; }
+.thinking summary { display: flex; align-items: baseline; gap: 8px; list-style: none; min-width: 0; padding: 5px 0; }
+.thinking summary::-webkit-details-marker { display: none; }
+.thinking summary strong { color: var(--text); font-size: 12px; flex: none; }
+.thinking-brief { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.thinking summary::after { content: "⌄"; margin-left: auto; }
+.thinking[open] summary::after { transform: rotate(180deg); }
+.thinking > div { max-height: 170px; line-height: 1.5; }
+.ai-body > p:first-child { font-size: 16px; line-height: 1.48; }
+.ai-body > p:first-child strong { font-weight: 750; }
+.ai-body h2, .ai-body h3 { color: var(--text); font-weight: 700; }
+#sidebar { gap: 3px; }
+.sb-head { row-gap: 8px; padding-bottom: 2px; }
+.sb-head #mode-switch { padding: 3px; }
+#mode-switch button { height: 30px; font-size: 12px; }
+.mode-caption { padding: 0 9px 5px; }
+.new-chat { padding: 5px 9px; font-size: 12.5px; min-height: 29px; }
+.new-chat > span:first-child { width: 17px; }
+.new-chat svg { width: 15px; height: 15px; }
+#project-switch { margin: 6px 0 2px; }
+#project-switch button { background: transparent; box-shadow: none; border-color: var(--border); padding: 6px 9px; }
+.sb-foot { padding-top: 7px; }
+#status-line { gap: 4px; padding: 3px 0; }
+.provider-button { padding: 7px 9px; border-radius: 9px; }
+.provider-mark { width: 27px; height: 27px; font-size: 18px; }
+.provider-label { gap: 1px; font-size: 12px; }
+.provider-settings { padding: 6px 9px; border-radius: 7px; font-size: 12px; }
+.menu { max-width: 330px; padding: 5px; }
+.menu button { gap: 8px; padding: 8px 9px; border-radius: 7px; }
+.menu .mi-title { font-size: 13px; font-weight: 600; }
+.menu .mi-desc { font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; }
+.menu .check { width: 13px; }
+.menu button > span:last-child { flex: 1; min-width: 0; }
+.workspace-context { min-height: 35px; gap: 9px; }
+.workspace-path { color: var(--text); font-size: 11px; }
+.workspace-label { font-size: 9px; }
+:root[data-mode="code"] #main.empty #scroll { margin-top: clamp(10px, 4vh, 34px); }
+:root[data-mode="code"] .code-spark { font-size: 36px; margin-bottom: 8px; }
+:root[data-mode="code"] .code-home h1.serif { font-size: clamp(26px, 3vw, 36px); margin-bottom: 7px; }
+:root[data-mode="code"] .code-home p { font-size: 12.5px; line-height: 1.5; }
+.code-project-label { margin-bottom: 9px; }
+:root[data-mode="code"] .suggest { margin-top: 17px; gap: 7px; }
+:root[data-mode="code"] .suggest button { min-height: 53px; padding: 10px 11px; font-size: 12px; }
+:root[data-mode="code"] .composer { padding: 11px 11px 8px 14px; }
+:root[data-mode="code"] .composer textarea { min-height: 33px; font-size: 14px; }
+:root[data-mode="chat"] #main.empty #scroll { margin-top: clamp(24px, 8vh, 75px); }
+:root[data-mode="chat"] .hello h1.serif { font-size: clamp(29px, 3.7vw, 39px); margin-bottom: 10px; }
+:root[data-mode="chat"] .hello p { font-size: 13px; line-height: 1.55; }
+:root[data-mode="chat"] .suggest { margin-top: 18px; gap: 8px; }
+:root[data-mode="chat"] .suggest button { min-height: 58px; padding: 11px; font-size: 12px; }
+:root[data-mode="chat"] .composer { padding: 13px 12px 9px 17px; }
+:root[data-mode="chat"] .composer textarea { min-height: 34px; font-size: 14px; }
+.stack-map { display: grid; gap: 7px; margin: 15px 0; }
+.stack-map > div { display: flex; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--raised); }
+.stack-map strong { flex: 0 0 78px; color: var(--accent); }
+.stack-map span { color: var(--muted); font-size: 12px; }
+@media (max-width: 700px) { .stack-map > div { flex-direction: column; gap: 3px; } }

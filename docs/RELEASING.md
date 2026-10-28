@@ -17,11 +17,10 @@ The output is the installer and `Enoy-Setup-x64.exe.sha256` under `dist/`.
 Only packaged app files are copied into the installer. Dependency notices are
 included under `THIRD-PARTY-NOTICES`.
 
-For a new release, update `enoy/__init__.py`, `pyproject.toml` and the fallback
-version in `launch/installer.iss`, commit, then push a matching `vX.Y.Z` tag.
-The Windows release workflow runs the tests, builds and smoke-tests the package,
-and publishes both assets. A manual workflow run produces a downloadable artifact
-without publishing a release. The updater accepts stable numeric versions only,
+Push a reviewed commit to `main` to trigger the Windows release workflow. It
+generates a stable `0.6.<run number>` version, runs offline checks, builds and
+smoke-tests the package, then publishes the installer and checksum under the
+matching tag. The updater accepts stable numeric versions only,
 requires the exact asset names, and verifies release checksums before execution.
 
 Run installer smoke checks in an isolated folder with

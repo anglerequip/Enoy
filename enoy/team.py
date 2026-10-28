@@ -705,32 +705,8 @@ class TeamRunner:
             self.msg('orchestrator', 'developer', 'assignment', f"{p.key} {p.title} → {PROVIDER_LABEL[row['provider']]}", row['id'])
 
     def _gate(self, batch: list[dict]) -> bool:
-        """Ask once per run before the team's first Claude request, if Settings say to ask.
-
-        Returns True when the run must wait for the answer. The question lists every
-        Claude use planned so far; the answer covers this run only, within its budget.
-        """
-        if not any(t["provider"] == CLAUDE for t in batch):
-            return False
-        run = self.run
-        if run.get("claude_ok") or not self.orc.cfg["claude"]["confirm_before_send"]:
-            return False
-        blocked = self._claude_allowed()
-        if blocked:
-            for t in self.tasks:
-                if t["provider"] == CLAUDE and t["status"] in TEAM_OPEN:
-                    self.db.update_team_task(t["id"], provider=CODEX if self.cooperative else CODEX, route_reason=f"Moved to an available provider: {blocked}.")
-            return False
-        planned = [t for t in self.tasks if t["provider"] == CLAUDE and t["status"] in TEAM_OPEN]
-        self._save_run(status="awaiting_claude", claude_request={
-            "tasks": [f"{t['plan_key']} {ROLE_LABEL[t['role']]}: {t['title'][:80]}" for t in planned],
-            "budget": self.cfg["max_claude_calls"]})
-        self.msg("orchestrator", "user", "question", f"May the team use Claude for {len(planned)} task(s) in this run "
-                 f"(at most {self.cfg['max_claude_calls']} requests)?")
-        self.orc._act(self.task_id, "approval.requested", f"Waiting for your OK to use Claude in this run "
-                      f"({len(planned)} task(s)).", "user", "team", reason="Settings: ask before sending anything to Claude.")
-        self.orc._set(self.task_id, status="awaiting_claude")
-        return True
+        """A requested team run may use its selected providers without a second prompt."""
+        return False
 
     def answer_claude(self, allow: bool) -> None:
         if allow:
@@ -822,7 +798,9 @@ class TeamRunner:
             system = ("You are an assigned development agent in Enoy. Use your native file and command tools to "
                       "implement this assigned task directly and run its relevant checks. Inspect existing code first. "
                       "Preserve unrelated user changes. Coordinate through the shared task and activity snapshot. "
-                      "Do not delegate, return patch proposals, commit, or publish. Report real commands and results.")
+                      "Do not delegate, return patch proposals, commit, or publish. Report real commands and results. "
+                      "If source assets are missing, search available folders, finish independent work, and request "
+                      "the exact missing files; never claim timing or output was verified without them.")
             if tt["specialty"]:
                 system += "\nSpecialist focus: " + SPECIALISTS[tt["specialty"]][2]
             brief = (tt["title"] + "\n" + tt["description"] + "\nAssigned files: " + ", ".join(tt["files"]) +
@@ -1113,8 +1091,6 @@ class TeamRunner:
         if model_review:
             why = f"{added} added lines" if added >= self.cfg["review_min_lines"] else "a high-risk change"
             provider, reason = self.route("Review a risky multi-file change for correctness and security", "reviewer", len(files))
-            if provider == CLAUDE and orc.cfg["claude"]["confirm_before_send"] and not self.run.get("claude_ok"):
-                provider, reason = (CODEX if self.cooperative else CODEX), "Reviewed by the available provider: Claude was not approved for this run, and asking now would pause after the tests already ran."
             self.db.update_team_task(tt["id"], provider=provider, route_reason=f"Model review because of {why}. {reason}")
             step = orc._step(self.task_id, "Reviewer: independent code review", provider, "review", f"Model review because of {why}.")
             res = dict(self.db.get_team_task(tt["id"])["result"])

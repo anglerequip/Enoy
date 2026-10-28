@@ -958,6 +958,37 @@ class Storage:
         return {"providers": rows, "estimated_tokens_saved": sum(r["estimated_tokens_saved"] for r in rows),
                 "method": "Conversation characters omitted per completed Enoy request, divided by 3, compared with sending the full conversation each time. Tracking starts with this update; older requests contribute zero. This is a history-only estimate, not billed tokens, money saved or extra subscription quota. Native tool traffic and provider caching are excluded."}
 
+    def audit_context_savings(self) -> dict:
+        """Recount persisted requests independently; no provider call or extra tokens."""
+        rows = self._all("SELECT backend, usage, content, history_saved_chars FROM transmissions "
+                         "WHERE backend IN ('codex', 'claude')")
+        complete = [r for r in rows if r['usage'] != '']
+        invalid = [r for r in complete if not isinstance(r['history_saved_chars'], int)
+                   or r['history_saved_chars'] < 0]
+        marker = "Shared state snapshot (recent records; any omissions are marked):\n"
+        for row in complete:
+            if row['history_saved_chars'] <= 0:
+                continue
+            try:
+                snapshot, _ = json.JSONDecoder().raw_decode(row['content'].split(marker, 1)[1])
+                if not isinstance(snapshot['conversation'], list):
+                    invalid.append(row)
+            except (IndexError, ValueError, KeyError, TypeError):
+                invalid.append(row)
+        by_provider = {provider: sum(max(0, r['history_saved_chars'] or 0) for r in complete
+                                     if r['backend'] == provider) // 3 for provider in ('codex', 'claude')}
+        displayed = self.context_savings()
+        applied = self._one("SELECT COUNT(*) AS n FROM changesets WHERE status = 'applied'")['n']
+        checks = self._all("SELECT status, COUNT(*) AS n FROM command_runs GROUP BY status")
+        matches = not invalid and displayed['estimated_tokens_saved'] == sum(by_provider.values())
+        return {'ok': matches, 'completed_requests': len(complete),
+                'pending_requests': len(rows) - len(complete), 'invalid_records': len(invalid),
+                'applied_change_sets': applied, 'checks': {r['status']: r['n'] for r in checks},
+                'estimated_tokens_saved': displayed['estimated_tokens_saved'],
+                'detail': ('The saved estimate matches completed request records.' if matches else
+                           'The saved estimate did not match its source records. Treat it as unreliable.')
+                          if complete else 'No completed model requests are recorded yet; there is nothing to verify.'}
+
     def set_transmission_usage(self, transmission_id: int, usage: str) -> None:
         self._exec("UPDATE transmissions SET usage = ? WHERE id = ?", (usage, transmission_id))
 

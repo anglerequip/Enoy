@@ -58,9 +58,13 @@ def test_savings_only_completed_requests(tmp_path):
     assert db.context_savings()["estimated_tokens_saved"] == 0
     db.set_transmission_usage(tx, '{}')
     assert db.context_savings()["estimated_tokens_saved"] == 30
+    audit = db.audit_context_savings()
+    assert audit['ok'] and audit['completed_requests'] == 1 and audit['pending_requests'] == 0
+    assert audit['estimated_tokens_saved'] == 30
     tx2 = db.add_transmission(task["id"], "claude", "ask", [], "Older format")
     db.set_transmission_usage(tx2, '{}')
     assert db.context_savings()["estimated_tokens_saved"] == 30
+    assert db.audit_context_savings()['completed_requests'] == 2
 
 
 def test_claude_control_protocol_sends_no_model_request(tmp_path):

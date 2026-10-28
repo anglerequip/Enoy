@@ -17,9 +17,9 @@ import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__, activity, artifacts as art_mod, config as config_mod, diagnostics, hardware, images, knowledge, paths
 from . import pccontrol as pc
@@ -67,6 +67,41 @@ class App:
         self.shutdown_requested.set()
         if self.shutdown_callback:
             self.shutdown_callback()
+
+    def store_attachment(self, project_id: int, raw_name: str, source, length: int) -> dict:
+        """Stream a dropped file into the selected project without loading it into RAM."""
+        self._project(str(project_id))
+        name = PureWindowsPath(str(raw_name)).name
+        if (not name or name in (".", "..") or len(name) > 180 or
+                re.search(r'[<>:"/\\|?*\x00-\x1f]', name) or knowledge.is_sensitive_name(name)):
+            raise ApiError(400, "Choose a file without a protected or invalid name.")
+        if length < 1 or length > 2_000_000_000:
+            raise ApiError(413, "Chat attachments must be between 1 byte and 2 GB.")
+        ws = self.orc.workspace(project_id)
+        folder = ws.resolve("enoy-uploads")
+        folder.mkdir(exist_ok=True)
+        base = Path(name)
+        for index in range(1000):
+            label = name if index == 0 else f"{base.stem}-{index}{base.suffix}"
+            rel = f"enoy-uploads/{label}"
+            target = ws.resolve(rel)
+            try:
+                with target.open("xb") as out:
+                    remaining = length
+                    while remaining:
+                        chunk = source.read(min(1_048_576, remaining))
+                        if not chunk:
+                            raise ApiError(400, "The file upload ended early.")
+                        out.write(chunk)
+                        remaining -= len(chunk)
+                ws.invalidate()
+                return {"path": rel, "bytes": length}
+            except FileExistsError:
+                continue
+            except Exception:
+                target.unlink(missing_ok=True)
+                raise
+        raise ApiError(409, "Too many files with this name in enoy-uploads.")
 
     def route(self, method: str, pattern: str):
         def deco(fn):
@@ -131,6 +166,10 @@ class App:
         @r("GET", "/api/usage/savings")
         def token_savings(q, body):
             return db.context_savings()
+
+        @r("GET", "/api/usage/savings/audit")
+        def token_savings_audit(q, body):
+            return db.audit_context_savings()
 
         @r("GET", "/api/status")
         def status(q, body):
@@ -881,6 +920,19 @@ def make_handler(app: App):
                     self._json(404, {"error": "Image not found"})
                     return
                 self._send(200, img.data, img.media_type, {"Cache-Control": "private, max-age=86400"})
+                return
+            upload = re.fullmatch(r"/api/projects/(\d+)/attachment", url.path)
+            if method == "POST" and upload and self.headers.get("Content-Type", "").startswith("application/octet-stream"):
+                try:
+                    if app.updates.snapshot()["status"] == "installing":
+                        raise ApiError(409, "Enoy is installing an update and will restart shortly.")
+                    length = int(self.headers.get("Content-Length") or 0)
+                    name = unquote(self.headers.get("X-Enoy-Filename", ""))
+                    self._json(200, app.store_attachment(int(upload.group(1)), name, self.rfile, length))
+                except ApiError as exc:
+                    self._json(exc.status, {"error": str(exc)})
+                except (TaskError, PathError, OSError, ValueError) as exc:
+                    self._json(400, {"error": str(exc)})
                 return
             body = {}
             if method == "POST":
