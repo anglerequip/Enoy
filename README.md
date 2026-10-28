@@ -32,6 +32,35 @@ In **Settings → General → Chat experience**, you can explicitly opt into int
 
 Choose a custom **Start** model before any integrated message. Integrated Chat model defaults can also be changed in **Settings → Models**. Regular ChatGPT's model is selected on ChatGPT's own page. Switching modes and pressing New chat stay inside Enoy. Only **Open ChatGPT** opens the browser.
 
+## Build: plan with a strong model, implement with cheaper ones
+
+The **Build** workspace (sidebar → Build) turns a goal into an approved, test-first plan and lets cheaper
+models implement it one task at a time.
+
+1. **Plan.** The planner (by default Claude through your signed-in Claude app) reads the project and writes small
+   tasks. Each task names its allowed files, the tests to write first, the commands that verify it and its
+   acceptance criteria. Planners cannot edit anything, and plans containing code are rejected.
+2. **Approve.** You review versions, ask for changes and approve one. The approved version is locked, archived with
+   its SHA-256 and written to `planning.md` in the project (never over your own edits without asking).
+3. **Implement.** An implementer model (DeepSeek, Fireworks, the Anthropic API or a local Ollama model) gets one task
+   with a fresh context, in its own Git worktree outside your project. It writes the tests first; Enoy runs them,
+   requires them to fail for the expected reason and freezes them. It then implements; Enoy re-checks the frozen
+   tests byte for byte and runs them and the regression commands itself.
+4. **Verify and merge.** Enoy re-runs everything in a fresh checkout and checks scope, syntax and unfinished code; an
+   optional reviewer (by default ChatGPT through Codex) must be a different model. Passing work is merged into the
+   plan's own branch. **Your branch changes only when you click Merge**, and that can be undone with `git revert -m 1`.
+
+Set it up in **Settings → Providers**: roles, models and their prices, API keys (kept in Windows Credential Manager,
+never shown again), spending limits (US$1 a day and US$10 a month per provider by default) and a free connection
+test. Cloud providers are off until you turn them on; the Anthropic API is billed separately from a Claude Pro plan.
+Ollama only uses models you have already installed, and Enoy keeps them within a memory mode (Chill 1,200,
+Middle 1,600 or Full 1,900 MiB).
+
+Plans, tasks, results and costs stay on this PC and remain readable offline; cloud models pause while offline and
+continue afterwards. Implementers only reach the project through Enoy's tools: they can write only the task's files,
+run only its verification commands or allowlisted ones, and never see secrets files or files you keep private.
+Running independent tasks in parallel is off by default.
+
 ## Colours and motion
 
 **Settings → Colours** offers 12 presets (Clay, Sage, Graphite, Ocean, Lavender, Rose, Amber, Teal, Forest, Indigo, Coffee and High contrast), with separate choices for Chat and Code. Customize the accent, background, sidebar and cards/composer, or reset a workspace to its defaults. Preferences and the light/dark/system setting are saved in app data and survive restarts and updates.
