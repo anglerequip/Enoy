@@ -21,7 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import __version__, config as config_mod, paths, winshell
+from . import __version__, config as config_mod, devstore, paths, winshell
 from .backends.base import CLAUDE, CODEX
 from .backends.codex import CodexBackend
 from .backends.claude_code import ClaudeCodeBackend
@@ -59,6 +59,9 @@ def build(cfg: dict | None = None, cfg_warnings: list[str] | None = None, synchr
     interrupted = storage.mark_interrupted()
     if interrupted:
         log.info("Marked %d interrupted task(s) for resume: %s", len(interrupted), interrupted)
+    build_interrupted = devstore.DevStore(storage).recover()
+    if build_interrupted:
+        log.info("Marked %d interrupted Build task(s): %s", len(build_interrupted), build_interrupted)
     backends = {CLAUDE: ClaudeCodeBackend(cfg["claude"])}
     backends[CODEX] = CodexBackend(cfg["codex"])
     last = storage.kv_get("claude_last_verified")

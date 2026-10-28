@@ -230,6 +230,118 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
 CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
+
+-- Build workspace (planning.md, Phase 1). Plans are versioned; an approved version is the
+-- contract the implementers work from, so the database refuses to change it.
+CREATE TABLE IF NOT EXISTS dev_plans (
+    id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    approved_version INTEGER,
+    integration_branch TEXT NOT NULL DEFAULT '',
+    base_commit TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL,
+    updated REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS dev_plans_project ON dev_plans(project_id, id);
+CREATE TABLE IF NOT EXISTS dev_plan_versions (
+    id INTEGER PRIMARY KEY,
+    plan_id INTEGER NOT NULL REFERENCES dev_plans(id),
+    version INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    author TEXT NOT NULL DEFAULT '',
+    comment TEXT NOT NULL DEFAULT '',
+    approved REAL,
+    created REAL NOT NULL,
+    UNIQUE(plan_id, version)
+);
+CREATE TRIGGER IF NOT EXISTS dev_plan_version_locked_update BEFORE UPDATE ON dev_plan_versions
+WHEN OLD.approved IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'An approved plan version cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS dev_plan_version_locked_delete BEFORE DELETE ON dev_plan_versions
+WHEN OLD.approved IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'An approved plan version cannot be deleted.'); END;
+CREATE TABLE IF NOT EXISTS dev_tasks (
+    id INTEGER PRIMARY KEY,
+    plan_id INTEGER NOT NULL REFERENCES dev_plans(id),
+    version INTEGER NOT NULL,
+    task_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    spec TEXT NOT NULL DEFAULT '{}',
+    depends_on TEXT NOT NULL DEFAULT '[]',
+    allowed_files TEXT NOT NULL DEFAULT '[]',
+    test_files TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claim TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    commit_id TEXT NOT NULL DEFAULT '',
+    evidence TEXT NOT NULL DEFAULT '{}',
+    blocker TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL,
+    updated REAL NOT NULL,
+    finished REAL,
+    UNIQUE(plan_id, version, task_key)
+);
+CREATE INDEX IF NOT EXISTS dev_tasks_plan ON dev_tasks(plan_id, status);
+CREATE TABLE IF NOT EXISTS dev_runs (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES dev_tasks(id),
+    attempt INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    phase TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    worktree TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    test_commit TEXT NOT NULL DEFAULT '',
+    impl_commit TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    started REAL NOT NULL,
+    finished REAL
+);
+CREATE INDEX IF NOT EXISTS dev_runs_task ON dev_runs(task_id, id);
+-- Fingerprints of a task's approved tests, taken right after the test phase. Never rewritten.
+CREATE TABLE IF NOT EXISTS dev_frozen_files (
+    id INTEGER PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES dev_tasks(id),
+    run_id INTEGER REFERENCES dev_runs(id),
+    path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    frozen REAL NOT NULL,
+    UNIQUE(task_id, path)
+);
+CREATE TRIGGER IF NOT EXISTS dev_frozen_locked_update BEFORE UPDATE ON dev_frozen_files
+BEGIN SELECT RAISE(ABORT, 'A frozen test fingerprint cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS dev_frozen_locked_delete BEFORE DELETE ON dev_frozen_files
+BEGIN SELECT RAISE(ABORT, 'A frozen test fingerprint cannot be deleted.'); END;
+-- One row per API model request: tokens reported by the provider and what it cost (spend limits).
+CREATE TABLE IF NOT EXISTS model_calls (
+    id INTEGER PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT '',
+    purpose TEXT NOT NULL DEFAULT '',
+    plan_id INTEGER,
+    dev_task_id INTEGER,
+    run_id INTEGER,
+    status TEXT NOT NULL,
+    reserved_usd REAL NOT NULL DEFAULT 0,
+    input_tokens INTEGER,
+    cached_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd REAL,
+    cost_source TEXT NOT NULL DEFAULT 'unknown',
+    error TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL,
+    finished REAL
+);
+CREATE INDEX IF NOT EXISTS model_calls_provider ON model_calls(provider, created);
 """
 
 # Task statuses.

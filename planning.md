@@ -186,17 +186,20 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* Files: tests named in §1 and the code they cover (`team.py` plan-review confirmation, the image approval path, the `server.py` permission-modes API). Tests first: the existing failing tests are the specification. Verify: `python -m pytest -q`. Accept: 0 failures. Production behaviour changes only where a test shows a real bug. Blocker: a test's expectation contradicts a decision you made later. If so, ask you.
 
 ### Phase 1: Data and persistence
-- [ ] **T1.1 Schema.** Files: `enoy/storage.py`, `tests/test_devstore.py`.
+- [x] **T1.1 Schema.** *Done:* 6 tables added to `SCHEMA`. SQLite triggers refuse to change or delete an approved plan version or a frozen test fingerprint. Tests: a 0.6.14 database keeps every row; opening it twice is harmless; both locks hold.
+  *Original spec:* Files: `enoy/storage.py`, `tests/test_devstore.py`.
   - Adds the tables `dev_plans`, `dev_plan_versions`, `dev_tasks`, `dev_runs`, `dev_frozen_files` and `model_calls`.
   - Additive only: nothing existing is altered.
   - Tests first: a copy of a 0.6.14 database migrates with every row count unchanged; running the migration twice is harmless.
   - Verify: `python -m pytest -q tests/test_devstore.py tests/test_migration.py`. Accept: those tests pass; existing tests unchanged.
-- [ ] **T1.2 Store API and state machine.** Files: `enoy/devstore.py`, `tests/test_devstore.py`.
+- [x] **T1.2 Store API and state machine.** *Done:* `enoy/devstore.py`. Plan versions get a SHA-256 fingerprint. Approving a version locks it and creates its tasks: tasks with no dependencies start as `ready`, the rest as `pending` (the spec's `draft` is called `pending`), and `refresh_ready` releases them. A claim token comes from one conditional UPDATE: 8 threads, 1 winner. A stale token cannot change a task. `completed` needs a commit ID. Also covers runs and frozen files.
+  *Original spec:* Files: `enoy/devstore.py`, `tests/test_devstore.py`.
   - Task states: `draft → ready → claimed → testing → implementing → verifying → reviewing → merging → completed`, plus `blocked`, `failed`, `waiting_network`, `interrupted`, `cancelled`.
   - The claim is a single conditional UPDATE.
   - Tests first: an illegal transition raises an error; two claims at the same time give exactly one winner; an approved plan version cannot be updated.
   - Accept: tests pass.
-- [ ] **T1.3 Startup recovery.** Files: `enoy/app.py` (one call), `enoy/devstore.py`.
+- [x] **T1.3 Startup recovery.** *Done:* `DevStore.recover()` runs in `app.build()` after `mark_interrupted`. Runs that were running become `interrupted` with a reason, active tasks become `interrupted` with their claim released, and completed and pending tasks are untouched. Full suite: 377 passed.
+  *Original spec:* Files: `enoy/app.py` (one call), `enoy/devstore.py`.
   - Tests first: runs left running become `interrupted`; claims are released; completed tasks stay completed.
   - Accept: tests pass, and `storage.mark_interrupted` behaviour is unchanged.
 
