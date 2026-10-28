@@ -41,6 +41,30 @@ def test_routing_can_be_disabled_and_does_not_mutate_settings():
     assert model_policy.choose(cfg, 'edit', 'Rename a label', 1)['model'] == 'gpt-6.1-sol'
 
 
+@pytest.mark.parametrize('objective,expected_model,expected_effort', [
+    ('Write daily Luau scripts', 'gpt-6.1-sol', 'medium'),
+    ('Blender Python automation', 'gpt-6.1-sol', 'medium'),
+    ('Roblox VFX scripting', 'gpt-6.1-sol', 'medium'),
+    ('VFX art direction and visual feedback', 'sonnet', 'medium'),
+    ('Difficult Geometry Nodes procedural modeling', 'claude-opus-5-5', 'high'),
+])
+def test_specialty_routes_follow_model_stack(objective, expected_model, expected_effort):
+    cfg, _ = config.validate({})
+    selected = model_policy.choose(cfg, 'native_edit', objective, 1)
+    assert (selected['model'], selected['effort']) == (expected_model, expected_effort)
+
+
+@pytest.mark.parametrize('objective,expected_model,expected_effort', [
+    ('Game concept, mechanics and progression', 'claude-opus-5-5', 'medium'),
+    ('Complex game architecture', 'claude-opus-5-5', 'high'),
+    ('Difficult debugging final review', 'claude-opus-5-5', 'high'),
+])
+def test_claude_profiles_follow_model_stack(objective, expected_model, expected_effort):
+    cfg, _ = config.validate({})
+    selected = model_policy.claude_profile(cfg, objective, purpose='review' if 'review' in objective else 'edit')
+    assert (selected['model'], selected['effort']) == (expected_model, expected_effort)
+
+
 def test_cli_receives_request_model_and_effort_without_global_mutation():
     settings = {'model':'gpt-6.1-sol', 'effort':'medium'}
     request = ChatRequest([], model='gpt-6-luna', effort='high')

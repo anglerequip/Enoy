@@ -15,6 +15,11 @@ def choose(cfg, purpose, objective="", file_count=0, repair=False):
     if settings.get('adaptive_routing', True) and routable and not repair:
         task = classify(objective, file_count)
         lowered = objective.lower()
+        if re.search(r"\b(game concept|game mechanics|progression|game architecture|game design|mechanics design)\b", lowered):
+            return {'model': 'claude-opus-5-5', 'effort': 'high' if re.search(r"\b(complex|difficult|large|multiple systems)\b", lowered) else 'medium',
+                    'reason': 'Game design, mechanics and progression use Claude Opus at medium effort; complex architecture uses high effort.'}
+        if re.search(r"\b(difficult debugging|debugging|final review|difficult review)\b", lowered):
+            return {'model': 'claude-opus-5-5', 'effort': 'high', 'reason': 'Difficult debugging and final review use Claude Opus at high effort.'}
         # Role stack supplied in Enoy's recommended model matrix. These explicit
         # specialties take precedence over the generic small-edit optimization.
         if re.search(r"\b(blender|geometry nodes|procedural model)\b", lowered) and re.search(r"\b(visual|inspect|look|screenshot|feedback|scene)\b", lowered):
@@ -27,12 +32,15 @@ def choose(cfg, purpose, objective="", file_count=0, repair=False):
             model, effort = 'gpt-6-luna', 'low'
             reason = 'Quick review and routing use GPT-6 Luna at low effort.'
         elif re.search(r"\b(difficult|complex|advanced)\b", lowered) and re.search(r"\b(procedural model|geometry nodes|procedural modeling)\b", lowered):
-            model, effort = settings.get('model', 'gpt-6.1-sol'), 'high'
-            reason = 'Difficult procedural modeling uses GPT-6.1 Sol at high effort.'
-        elif re.search(r"\b(luau|roblox|blender|geometry nodes|vfx|visual effects)\b", lowered):
+            model, effort = 'claude-opus-5-5', 'high'
+            reason = 'Difficult procedural modeling uses Claude Opus or GPT-6.1 Sol at high effort.'
+        elif re.search(r"\b(luau|roblox|blender python|python automation|vfx scripting|vfx script)\b", lowered):
             model, effort = settings.get('model', 'gpt-6.1-sol'), 'medium'
-            reason = 'Specialty scripting and procedural work use GPT-6.1 Sol at medium effort.'
-        elif (task.kind == 'edit' and task.complexity == 'low' and task.risk != 'high'
+            reason = 'Daily Luau, Blender Python and Roblox VFX scripting use GPT-6.1 Sol at medium effort.'
+        elif re.search(r"\b(vfx|visual effects|art direction|visual feedback)\b", lowered):
+            model, effort = 'sonnet', 'medium'
+            reason = 'VFX art direction and visual feedback use Claude Sonnet at medium effort.'
+        elif (purpose in ('edit', 'native_edit') and task.kind == 'edit' and task.complexity == 'low' and task.risk != 'high'
                 and file_count <= 2 and task.scope != 'multiple modules' and not task.needs.get('multi_step')):
             model = settings.get('execution_model', 'gpt-6-luna')
             effort = settings.get('execution_effort', 'low')
