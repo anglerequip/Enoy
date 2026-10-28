@@ -152,3 +152,23 @@ def test_missing_final_review_verdict_cannot_claim_completion(orc_factory, proje
     task=orc.start_task(pid,'Add a simple multiply function')
     assert task['status']=='failed'
     assert 'explicit completion verdict' in task['summary']
+
+
+def test_every_claude_and_gpt_request_carries_the_self_reliance_rule(orc_factory, project):
+    from enoy.native import SELF_RELIANCE
+    orc, pid = setup(orc_factory, project, [delegate(plan_task(model=CODEX)), edit(project, [], CODEX)],
+                     ['PLAN_VERDICT: APPROVE\nScoped.', 'Claude reviewed.\nNEXT: done'])
+    task = orc.start_task(pid, 'Add a simple multiply function')
+    assert task['status'] == 'completed', task['summary']
+    sent = orc.backends[CODEX].requests + orc.backends[CLAUDE].requests
+    assert {r.purpose for r in orc.backends[CLAUDE].requests} >= {'plan_review'}
+    for request in sent:
+        assert request.messages[0].content.count(SELF_RELIANCE) == 1, request.purpose
+
+
+def test_team_claude_requests_outside_the_coordinator_get_the_rule(orc_factory, project):
+    from enoy.native import SELF_RELIANCE
+    orc = orc_factory(claude=['MODE: answer\nOk.', 'Done.'])
+    t = orc.start_task(open_project(orc, project), 'Is divide thread-safe? Explain.', backend=CLAUDE)
+    orc._claude_direct(t['id'], None, 'edit', 'Make the change.', 'Task: ...', [], set())
+    assert orc.backends[CLAUDE].requests[-1].messages[0].content.count(SELF_RELIANCE) == 1

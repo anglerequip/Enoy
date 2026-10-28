@@ -664,7 +664,8 @@ class TeamRunner:
             self.db.update_team_task(tt['id'], status='running', result={'step':step})
             system = ('You are Claude, independently reviewing GPT\'s proposed implementation plan. '
                       'Check requirements, correctness, dependencies, scope, missing tests and task complexity. '
-                      'Do not edit files. Return PLAN_VERDICT: APPROVE with a short explanation, or '
+                      'Do not edit files, but check the plan against the project itself, not only the plan text. '
+                      'Return PLAN_VERDICT: APPROVE with a short explanation, or '
                       'PLAN_VERDICT: REVISE followed by a complete corrected plan in one JSON code block. '
                       'The plan must contain acceptance, architecture and tasks with id, title, description, '
                       'files, depends_on, model (codex or claude), and why. Keep within the user\'s objective. '

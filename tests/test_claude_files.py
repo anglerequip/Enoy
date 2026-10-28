@@ -93,3 +93,23 @@ def test_no_file_tools_without_files_local_only_or_when_switched_off(orc_factory
     orc.set_task_local_only(t["id"], False)
     orc.cfg["tools"]["claude_files"] = False
     assert orc._claude_file_tools(t["id"]) == []
+
+
+def test_review_requests_ask_claude_to_check_the_project(orc_factory, project, tmp_path):
+    from enoy.tools import CLAUDE_REVIEW_NOTE
+    orc = orc_factory(claude=["MODE: answer\nOk.", "PLAN_VERDICT: APPROVE", "Fine."])
+    t = orc.start_task(open_project(orc, project), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
+    orc._claude_direct(t["id"], None, "plan_review", "Review the plan.", "Plan: ...", [], set())
+    review = orc.backends[CLAUDE].requests[-1]
+    assert CLAUDE_FILES_NOTE in review.messages[0].content and CLAUDE_REVIEW_NOTE in review.messages[0].content
+    orc._claude_direct(t["id"], None, "plan", "Plan it.", "Task: ...", [], set())
+    assert CLAUDE_REVIEW_NOTE not in orc.backends[CLAUDE].requests[-1].messages[0].content
+
+
+def test_no_file_note_when_only_folder_search_is_offered(orc_factory, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    orc = orc_factory(claude=["MODE: answer\nOk."])
+    orc.start_task(open_project(orc, empty), "Is divide thread-safe? Explain the race conditions.", backend=CLAUDE)
+    req = orc.backends[CLAUDE].requests[-1]
+    assert req.enoy_tools == ["find_folders"] and CLAUDE_FILES_NOTE not in req.messages[0].content

@@ -771,7 +771,7 @@ class Orchestrator:
             for e in events[:20]]
         self.db.update_task_state(task_id, tool_calls=calls[-20:], live_info=bool(state.get("live_info") or events))
         if not events:
-            self._act(task_id, "tool.finished", "Claude had web tools available but did not use them.", CLAUDE, "tools",
+            self._act(task_id, "tool.finished", "Claude had Enoy's tools available but did not use them.", CLAUDE, "tools",
                       outcome="unused", step_id=step_id)
 
     @staticmethod
@@ -1527,10 +1527,14 @@ class Orchestrator:
         native_options.setdefault('model', profile['model'])
         native_options.setdefault('effort', profile['effort'])
         files = [] if native_active else self._claude_file_tools(task_id)
-        if not native_active and self.cfg.get("tools", {}).get("enabled", True):
-            files = files + ["find_folders"]
+        if native.SELF_RELIANCE not in system:  # Team requests that skip the coordinator still get the rule.
+            system += "\n\n" + native.SELF_RELIANCE
         if files:
             system += "\n\n" + tools_mod.CLAUDE_FILES_NOTE
+            if purpose in tools_mod.CLAUDE_REVIEW_PURPOSES:
+                system += "\n\n" + tools_mod.CLAUDE_REVIEW_NOTE
+        if not native_active and self.cfg.get("tools", {}).get("enabled", True):
+            files = files + ["find_folders"]
         system = redact(system)
         self._act(task_id, "privacy.checked", check.summary(), "system", outcome="passed", step_id=step_id)
         trans = self.db.add_transmission(task_id, CLAUDE, purpose, allowed, f"[system]\n{system}\n\n[user]\n{prompt}")

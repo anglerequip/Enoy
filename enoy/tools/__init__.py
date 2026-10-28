@@ -115,6 +115,13 @@ the exact code: search first, then read only the lines you need (start_line/end_
 contains, and never ask the user for file contents. Files the user keeps private are not available. The tools \
 cannot change anything: write changes in the blocks Enoy asks for."""
 
+CLAUDE_REVIEW_PURPOSES = {"plan_review", "lead_review", "review"}
+CLAUDE_REVIEW_NOTE = """You are checking work, so check it against the project, not only against the text Enoy \
+sent. Before your verdict, use the tools to confirm what the plan or result relies on: that the files and folders \
+it names exist, and that the scripts, READMEs, manifests and validation files it builds on say what it assumes. \
+Start your reply with one line saying what you opened. Binary files (.blend, .fbx, images) cannot be read with \
+these tools: say so where it matters instead of guessing what they contain."""
+
 AGENT_SYSTEM = """You are Enoy's agent, running on the user's own PC. Enoy runs tools for you: {names}.
 Work like a capable engineer and assistant, not like a chatbot:
 - Do the task. Use the tools to look things up, change files, run the tests and check the result yourself.
