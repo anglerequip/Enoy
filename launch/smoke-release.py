@@ -7,9 +7,11 @@ import sys
 import tempfile
 import time
 import urllib.request
-from enoy import __version__
 
 root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root))
+from enoy import __version__
+
 app = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / 'dist' / 'Enoy'
 helper = app / 'Enoy-tools.exe'
 event = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}}
