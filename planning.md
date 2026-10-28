@@ -236,16 +236,24 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   - Tests first: no response, log or activity row ever contains the key (a sentinel key is scanned for).
 
 ### Phase 3: Planning engine
-- [ ] **T3.1 Plan schema and validator.** Files: `enoy/devplan.py`, `tests/test_devplan.py`.
+- [x] **T3.1 Plan schema and validator.** *Done:* `enoy/devplan.py` checks the plan format (15 required fields per task) with `validate_plan(body, ws, allowlist)`, which returns errors and warnings. It rejects: missing or wrong-type fields, empty required fields, duplicate IDs, unknown dependencies, circular dependencies, paths that are outside the project, secret or excluded, a file listed as both test and production file, tests outside `test_files`, commands not allowed by `commands.classify`, patch or diff markers, code blocks longer than 15 lines, and more than 10 files per task. Each of the 19 rejection tests was checked to fail for its own reason. Independent tasks that share files get a warning saying they cannot run in parallel.
+  *Original spec:* Files: `enoy/devplan.py`, `tests/test_devplan.py`.
   - Required fields per task: id, objective, depends_on, allowed_files, test_files, spec, inputs/outputs, edge_cases, tests (name and expected failure), verify_commands, regression_commands, acceptance, completion, blockers.
   - Rejects: cycles, unknown dependencies, paths outside the repo or sensitive paths, test files outside `test_files`, commands that are not `allowlisted` or `approval` under `commands.classify`, production code blocks, and more than N allowed files.
   - Tests first: one case for each rejection.
-- [ ] **T3.2 Planner context.** Files: `enoy/devplan.py`, `enoy/project.py` (read `planning.md` separately; `INSTRUCTION_FILES` unchanged).
+- [x] **T3.2 Planner context.** *Done:* `planner_context()` gives the planner the goal, the instruction files (ENOY.md, CLAUDE.md, AGENTS.md and the others), `planning.md` (read separately), project facts and test commands, and the file list. Sensitive and excluded files are left out, the text is redacted, and it stays within `max_chars`.
+  *Original spec:* Files: `enoy/devplan.py`, `enoy/project.py` (read `planning.md` separately; `INSTRUCTION_FILES` unchanged).
   - Tests first: the context includes instruction files, the result of `detect()` and a tree summary; it excludes sensitive files; it stays within the size limit.
-- [ ] **T3.3 Planner service.** Files: `enoy/devplan.py`.
+- [x] **T3.3 Planner service.** *Done:* `Planner.create()` asks the planner-role model:
+  - Claude CLI: Enoy's read-only MCP tools, scoped to the project and its privacy filters.
+  - Codex CLI: no native tools.
+  - API models: through `Providers.complete()`, so spending limits apply.
+  No request carries write tools. An invalid plan gets one correction round with the errors listed, and is reported (not stored) if it fails again. A cloud planner is refused for a local-only project before anything is sent.
+  *Original spec:* Files: `enoy/devplan.py`.
   - Calls the planner-role model with read-only tools. When validation fails, it sends one repair round with the errors. It stores a draft version.
   - Tests first, with a scripted backend: the request carries no write tools; invalid output is repaired once and then reported.
-- [ ] **T3.4 Revision and approval.** Tests first: a comment creates version N+1; approving locks the version (hash stored); only tasks of the approved version can become `ready`.
+- [x] **T3.4 Revision and approval.** *Done:* `revise()` sends the current version and your comment, and stores version N+1 with that comment. `approve()` accepts only the latest version, validates it again, then locks it and creates its tasks. An approved plan cannot be revised. Full suite: 472 passed.
+  *Original spec:* Tests first: a comment creates version N+1; approving locks the version (hash stored); only tasks of the approved version can become `ready`.
 
 ### Phase 4: `planning.md`, `CLAUDE.md` and archive
 - [ ] **T4.1 Renderer.** Files: `enoy/planfile.py`, golden-file test.
