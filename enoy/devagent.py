@@ -441,6 +441,21 @@ class TaskExecution:
         return PhaseResult(True, "passed", summary=lr.summary, commit=commit,
                            evidence={"tests_before": f"failed as expected (exit {code})"})
 
+    def _reuse_frozen(self, wt: Path) -> PhaseResult:
+        """A retry keeps the tests approved and frozen by an earlier attempt: copy that commit, never rewrite it."""
+        earlier = [r for r in self.store.runs(self.row["id"]) if r["test_commit"]]
+        if not earlier:
+            return PhaseResult(False, "failed", "Frozen tests are recorded but no attempt committed them.")
+        try:
+            commit = self.git.cherry_pick(wt, earlier[0]["test_commit"])
+        except GitError as exc:
+            return PhaseResult(False, "failed", str(exc))
+        changed = sorted(p for p, h in self.store.frozen(self.row["id"]).items() if _sha(wt / p) != h)
+        if changed:
+            return PhaseResult(False, "failed", "The frozen tests no longer match their fingerprints: " + ", ".join(changed))
+        return PhaseResult(True, "passed", commit=commit,
+                           evidence={"tests_before": f"reused the tests frozen in attempt {earlier[0]['attempt']}"})
+
     def _impl_phase(self, wt: Path) -> PhaseResult:
         t = self.spec
         frozen = self.store.frozen(self.row["id"])
@@ -506,7 +521,7 @@ class TaskExecution:
         run_id = self.store.start_run(tid, "implementer", self.provider, self.model, phase="tests")
         self.store.update_run(run_id, worktree=str(wt), branch=branch)
         self.store.transition(tid, "testing", claim=claim)
-        first = self._test_phase(wt, run_id)
+        first = self._reuse_frozen(wt) if self.store.frozen(tid) else self._test_phase(wt, run_id)
         if not first.ok:
             return self._stop(first, claim, run_id)
         self.store.update_run(run_id, test_commit=first.commit, phase="implement")

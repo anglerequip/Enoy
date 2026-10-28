@@ -76,6 +76,17 @@ class DevStore:
     def plans(self, project_id: int) -> list[dict]:
         return self.st._all("SELECT * FROM dev_plans WHERE project_id = ? ORDER BY id DESC", (project_id,))
 
+    PLAN_STATUSES = ("draft", "approved", "running", "completed")
+
+    def set_plan_status(self, plan_id: int, status: str) -> None:
+        if status not in self.PLAN_STATUSES:
+            raise ValueError(f"Unknown plan status {status}")
+        self.st._exec("UPDATE dev_plans SET status = ?, updated = ? WHERE id = ?", (status, time.time(), plan_id))
+
+    def set_plan_git(self, plan_id: int, branch: str, base_commit: str) -> None:
+        self.st._exec("UPDATE dev_plans SET integration_branch = ?, base_commit = ?, updated = ? WHERE id = ?",
+                      (branch, base_commit, time.time(), plan_id))
+
     def add_version(self, plan_id: int, body: dict, author: str = "", comment: str = "") -> dict:
         with self.st._tx():
             n = self.st._one("SELECT COALESCE(MAX(version), 0) + 1 AS n FROM dev_plan_versions WHERE plan_id = ?",

@@ -333,8 +333,16 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* Merge, commit ID, evidence, `planning.md` update. If the commit is already merged, completion is recorded without re-running. Tests first.
 
 ### Phase 8: Scheduler
-- [ ] **T8.1 Manual and automatic sequential runs.** Retries with a new worktree each time; `waiting_network` when offline; stop and cancel. Tests first.
-- [ ] **T8.2 Parallel runs (off by default).** Disjoint files, concurrency limits, spend reserved for every task in the batch, merges one at a time, a conflict sends the task back to ready for a new attempt. Tests first, with real temporary git and fake agents. It is enabled only after T12.1 passes.
+- [x] **T8.1 Manual and automatic sequential runs.** *Done:* `enoy/devrunner.py` `BuildRunner`.
+  - `run_task()` claims one task, runs both phases, then the gate, review and merge. It records the plan's integration branch and base commit, sets the plan to running, and later to completed.
+  - `run_all()` runs ready tasks in dependency order. It stops with `offline` when a task is `waiting_network`, `stopped` on `stop()`, `attention` when tasks are failed or blocked (independent tasks still run first), or `completed`.
+  - A failed attempt is retried up to `max_attempts` in a new worktree and branch (`-a2`). Bug found and fixed: a retry used to rewrite and re-freeze its tests, which the database correctly refused. A retry now cherry-picks the earlier frozen test commit, checks the fingerprints, and starts at the implementation phase.
+  - `resume()` records interrupted work that was already merged, requeues the rest, and requeues waiting tasks once `online()` is true.
+  - Unexpected errors fail the task instead of leaving it claimed.
+  - Tested: three threads claiming the same task produce one run. Each task's first request has only the system prompt and its own task.
+  *Original spec:* Retries with a new worktree each time; `waiting_network` when offline; stop and cancel. Tests first.
+- [x] **T8.2 Parallel runs (off by default).** *Done:* `run_parallel()` refuses unless `parallel_allowed` is on (config `build.parallel`, default off). `pick_batch()` takes ready tasks with no shared files, up to `max_parallel`. Each task runs in its own thread; spending limits apply per request through `Providers.complete`. Merges are serialized with a lock, and git commands that change branches or worktrees are serialized per repository (`_locked`). A conflict sends the task back to ready (T7.3). Tested: two independent tasks started within 0.6 s of each other, and all three merges landed. Full suite: 550 passed.
+  *Original spec:* Disjoint files, concurrency limits, spend reserved for every task in the batch, merges one at a time, a conflict sends the task back to ready for a new attempt. Tests first, with real temporary git and fake agents. It is enabled only after T12.1 passes.
 
 ### Phase 9: UI
 - [ ] **T9.1** Build nav entry and Project tab.

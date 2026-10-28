@@ -10,10 +10,12 @@ run programs from the repository. Branches are kept after their worktree is remo
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +25,17 @@ from .project import EXCLUDED_DIRS, SENSITIVE_GLOBS
 
 AGENT = ("Enoy agent", "enoy-agent@localhost")
 TIMEOUT_S = 120
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _locked(method):
+    """Commands that change branches or worktrees run one at a time per repository (parallel tasks share it)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class GitError(RuntimeError):
@@ -104,6 +117,8 @@ class GitWork:
         self.repo = Path(repo).resolve()
         key = hashlib.sha1(os.path.normcase(str(self.repo)).encode()).hexdigest()[:8]
         self.base = (Path(root) if root else paths.sub_dir("worktrees")).resolve() / f"{self.repo.name}-{key}"
+        with _LOCKS_GUARD:
+            self._lock = _LOCKS.setdefault(os.path.normcase(str(self.repo)), threading.RLock())
 
     def _branch_exists(self, branch: str) -> bool:
         return _git(self.repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", check=False).returncode == 0
@@ -118,6 +133,7 @@ class GitWork:
     def integration_branch(plan_id: int) -> str:
         return f"enoy/plan-{plan_id}"
 
+    @_locked
     def ensure_integration(self, plan_id: int) -> tuple[str, str]:
         """The plan's integration branch, created at HEAD if needed, and the commit it started from."""
         branch = self.integration_branch(plan_id)
@@ -127,6 +143,7 @@ class GitWork:
             return branch, base
         return branch, _git(self.repo, "merge-base", branch, "HEAD").stdout.strip()
 
+    @_locked
     def integration_worktree(self, plan_id: int) -> Path:
         branch, _ = self.ensure_integration(plan_id)
         path = self.base / f"plan-{plan_id}"
@@ -136,6 +153,7 @@ class GitWork:
             _git(self.repo, "worktree", "add", "-q", str(path), branch)
         return path
 
+    @_locked
     def create_task_worktree(self, plan_id: int, task_key: str, attempt: int) -> tuple[Path, str]:
         start, _ = self.ensure_integration(plan_id)
         branch = f"enoy/p{plan_id}/{task_key}-a{attempt}"
@@ -182,6 +200,7 @@ class GitWork:
     def diff_text(self, a: str, b: str) -> str:
         return _git(self.repo, "-c", "core.quotepath=false", "diff", a, b).stdout
 
+    @_locked
     def temp_worktree(self, commit: str, name: str) -> Path:
         """A detached, clean checkout of a commit, for re-running checks without leftovers."""
         path = self.base / name
@@ -190,6 +209,15 @@ class GitWork:
         self.base.mkdir(parents=True, exist_ok=True)
         _git(self.repo, "worktree", "add", "-q", "--detach", str(path), commit)
         return path
+
+    def cherry_pick(self, worktree: Path, commit: str) -> str:
+        """Copy one earlier commit onto the worktree's branch (used to reuse frozen tests on a retry)."""
+        out = _git(worktree, "cherry-pick", "--allow-empty", commit, check=False, agent=True)
+        if out.returncode != 0:
+            _git(worktree, "cherry-pick", "--abort", check=False)
+            raise GitError("The frozen tests could not be applied to the latest integration branch: " +
+                           (out.stderr or out.stdout).strip()[:300])
+        return self.head(worktree)
 
     def diff_names(self, a: str, b: str) -> list[str]:
         out = _git(self.repo, "-c", "core.quotepath=false", "diff", "--name-only", a, b).stdout
@@ -207,6 +235,7 @@ class GitWork:
                   (out.stderr or out.stdout).strip()[:500])
         return MergeResult(False, conflicts=conflicts, reason=reason)
 
+    @_locked
     def merge(self, plan_id: int, branch: str, message: str) -> MergeResult:
         """Merge a task branch into the plan's integration branch. A conflict is aborted; both branches stay."""
         return self._merge(self.integration_worktree(plan_id), branch, message, agent=True)
@@ -230,6 +259,7 @@ class GitWork:
                           "exists": exists, "dirty": dirty})
         return found
 
+    @_locked
     def remove_worktree(self, path: Path, confirm: bool = False) -> None:
         """Remove a task worktree. One with uncommitted changes is removed only with confirm=True."""
         path = Path(path).resolve()
@@ -239,11 +269,13 @@ class GitWork:
             raise GitError("This worktree has uncommitted changes. Confirm to discard them.")
         _git(self.repo, "worktree", "remove", *(["--force"] if confirm else []), str(path))
 
+    @_locked
     def prune(self) -> None:
         _git(self.repo, "worktree", "prune")
 
     # The user's branch -------------------------------------------------------------------------
 
+    @_locked
     def merge_into_current(self, plan_id: int) -> MergeResult:
         """Merge the plan's integration branch into the branch the user has checked out. Only on request.
 
