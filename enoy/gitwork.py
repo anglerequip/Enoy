@@ -153,6 +153,17 @@ class GitWork:
         _git(worktree, "commit", "-q", "--no-verify", "-m", message, agent=True)
         return self.head(worktree)
 
+    def commit_paths(self, worktree: Path, paths: list[str], message: str) -> str:
+        """Commit only these paths (created, changed or deleted), never whatever else a command left behind."""
+        keep = [p for p in paths if (worktree / p).exists() or
+                _git(worktree, "ls-files", "--", p, check=False).stdout.strip()]
+        if keep:
+            _git(worktree, "add", "-A", "--", *keep)
+        if _git(worktree, "diff", "--cached", "--quiet", check=False).returncode == 0:
+            raise GitError("There is nothing to commit.")
+        _git(worktree, "commit", "-q", "--no-verify", "-m", message, agent=True)
+        return self.head(worktree)
+
     def diff_names(self, a: str, b: str) -> list[str]:
         out = _git(self.repo, "-c", "core.quotepath=false", "diff", "--name-only", a, b).stdout
         return sorted(line.strip() for line in out.splitlines() if line.strip())

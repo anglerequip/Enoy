@@ -285,13 +285,33 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* An explicit action. It refuses when your working tree has changes in overlapping files. Tests first.
 
 ### Phase 6: Implementer execution
-- [ ] **T6.1 Scoped tools.** Files: `enoy/devagent.py` (wraps `AgentFiles`), tests.
+- [x] **T6.1 Scoped tools.** *Done:* `enoy/devagent.py` `Scope`:
+  - Reads stay inside the worktree, with secrets and excluded folders refused.
+  - Writes only go to the phase's writable files, are refused for frozen tests, and are syntax-checked first.
+  - Commands: blocked and high-risk ones are never run; the task's own verification commands and allowlisted commands are run; anything else is refused unattended as needing approval.
+  - `commands.run(..., venv_root=)` lets worktree commands use the project's own `.venv`.
+  - The model is offered seven tools: list, read, search, write, edit, run_command and report_blocker.
+  *Original spec:* Files: `enoy/devagent.py` (wraps `AgentFiles`), tests.
   - Tests first: writing outside the allowed files is refused; writing a frozen test is refused; reading `.env` is refused; a high-risk command is refused when unattended.
-- [ ] **T6.2 API tool loop.** Limits on steps, tokens and spend (checked every round), plus cancel. Tests first: a scripted fake model; the loop stops at each limit with a clear reason.
-- [ ] **T6.3 Context packer.** Tests first: the context contains this task only, plus completion summaries of its dependencies. It contains no chat history and no other task's spec, and it stays within size.
-- [ ] **T6.4 Test phase.** The run must fail for the expected reason: named tests fail, with no syntax, import or collection error. Then commit and freeze the hashes. Tests first: a test that passes before the change counts as a blocker; a test that errors on collection counts as a blocker.
-- [ ] **T6.5 Implementation phase.** Tests first: tampering with a frozen test means rejection, even when the tests pass; a failing frozen test means a retry, then `failed`.
-- [ ] **T6.6 Blocker reporting.** `report_blocker` tool. "Test spec wrong" sets `blocked` and asks for a plan revision. Tests first.
+- [x] **T6.2 API tool loop.** *Done:* `ToolLoop` passes model calls through a `complete(messages, tools)` callable; real runs use `Providers.complete`, which checks spending limits before every round. It stops at:
+  - an answer with no tool calls;
+  - the step or output-token limit;
+  - cancel;
+  - `budget`/`limit` errors (status limit), `unavailable`/`timeout` errors (status network), and any other error (status error).
+  Denied tool calls go back to the model as error results. Each assistant turn is kept exactly as the provider returned it. Tool output is redacted and capped at 8,000 characters.
+  *Original spec:* Limits on steps, tokens and spend (checked every round), plus cancel. Tests first: a scripted fake model; the loop stops at each limit with a clear reason.
+- [x] **T6.3 Context packer.** *Done:* `task_context()` takes only the task, its finished dependencies' summaries, the instruction files (capped at a quarter of the budget) and the current content of the task's files, within `max_chars`. There is no plan, no other task and no chat history, by construction.
+  *Original spec:* Tests first: the context contains this task only, plus completion summaries of its dependencies. It contains no chat history and no other task's spec, and it stays within size.
+- [x] **T6.4 Test phase.** *Done:* Only the test files can be written. Enoy runs the verification commands itself, and `check_expected_failure` handles the result:
+  - passing already means the task is blocked;
+  - a syntax error or zero tests collected means broken, and the model gets a correction round;
+  - otherwise each test must fail by name or with the error type from its spec.
+  It allows at most `max_fix_rounds` corrections. Then `commit_paths` commits only the test files (`T1 tests: …`) and `freeze` stores their SHA-256.
+  *Original spec:* The run must fail for the expected reason: named tests fail, with no syntax, import or collection error. Then commit and freeze the hashes. Tests first: a test that passes before the change counts as a blocker; a test that errors on collection counts as a blocker.
+- [x] **T6.5 Implementation phase.** *Done:* Only the allowed files can be written. After the loop, Enoy re-hashes the frozen tests; any change is rejected even when the tests pass. The tampering test bypasses the tools, the way a script would. Enoy then runs the frozen tests and the regression commands itself; a failure gets a correction round with the output, then the task fails. Only the allowed files are committed. The run records `test_commit` and `impl_commit`, and the task moves to `verifying` with its evidence.
+  *Original spec:* Tests first: tampering with a frozen test means rejection, even when the tests pass; a failing frozen test means a retry, then `failed`.
+- [x] **T6.6 Blocker reporting.** *Done:* `report_blocker(kind, details)` stops the run. `test_spec_wrong` marks the task `blocked` with a blocker that asks for a plan revision. A spending or step limit also marks it `blocked`; no network marks it `waiting_network`; cancel returns it to `ready`; anything else marks it `failed`. The run is closed with the matching status. Full suite: 523 passed.
+  *Original spec:* `report_blocker` tool. "Test spec wrong" sets `blocked` and asks for a plan revision. Tests first.
 
 ### Phase 7: Verification and review
 - [ ] **T7.1 Fixed gate.** Scope, hashes, a fresh re-run of the tests, syntax and lost-content checks, unfinished markers. Tests first: one failing case for each check.

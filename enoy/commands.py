@@ -179,10 +179,15 @@ def resolve_program(program: str, cwd: Path) -> str:
     return shutil.which(program) or program
 
 
-def run(argv: list[str], cwd: Path, timeout_s: float, cancel: threading.Event | None = None) -> RunResult:
-    """Run a program without a shell. Never raises for process failures."""
+def run(argv: list[str], cwd: Path, timeout_s: float, cancel: threading.Event | None = None,
+        venv_root: Path | None = None) -> RunResult:
+    """Run a program without a shell. Never raises for process failures.
+
+    venv_root is where to look for the project's virtual environment when cwd is a Build worktree,
+    which has the project's files but not its untracked .venv.
+    """
     start = time.monotonic()
-    exe = resolve_program(argv[0], Path(cwd))
+    exe = resolve_program(argv[0], Path(venv_root or cwd))
     try:
         proc = subprocess.Popen(
             [exe, *argv[1:]], cwd=str(cwd), env=safe_env(), stdin=subprocess.DEVNULL,
