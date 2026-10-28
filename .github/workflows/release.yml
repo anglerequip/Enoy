@@ -75,5 +75,17 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release/* --clobber
           else
-            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_TARGET" --title "Enoy $RELEASE_VERSION" --generate-notes
+            previous_tag=$(gh release list --repo "$GH_REPO" --limit 1 --json tagName --jq '.[0].tagName')
+            changes=$(gh api "repos/$GH_REPO/compare/$previous_tag...$RELEASE_TARGET" --jq '[.commits[] | .commit.message | split("\n")[0]] | unique | .[]')
+            {
+              echo "### What's changed"
+              if [ -n "$changes" ]; then
+                while IFS= read -r line; do printf -- '- %s\n' "$line"; done <<< "$changes"
+              else
+                echo "- Maintenance and fixes in this Enoy release."
+              fi
+              echo
+              printf '[Full changelog](https://github.com/%s/compare/%s...%s)\n' "$GH_REPO" "$previous_tag" "$RELEASE_TARGET"
+            } > release-notes.md
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_TARGET" --title "Enoy $RELEASE_VERSION" --notes-file release-notes.md
           fi

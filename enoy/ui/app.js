@@ -1151,7 +1151,7 @@ function releaseSummaryItems(notes) {
     if (item && !/^full changelog/i.test(item)) result.push(item);
     if (result.length >= 5) break;
   }
-  if (!result.length) return ["Release notes are not available for this version yet."];
+  if (!result.length) return ["Updates and fixes in the latest Enoy release."];
   return result;
 }
 
