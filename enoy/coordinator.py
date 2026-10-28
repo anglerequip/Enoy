@@ -10,7 +10,7 @@ import json
 import threading
 import time
 
-from . import context as ctx, privacy, team, native, model_policy, blender
+from . import context as ctx, privacy, team, native, model_policy, blender, context_usage
 from .backends.base import CODEX, CLAUDE, BackendError, ChatMessage, ChatRequest
 
 SYSTEM = """You are ChatGPT, the coordinator of Enoy. Evaluate the user's latest
@@ -202,8 +202,12 @@ def call(orc, task_id: int, provider: str, system: str, user: str, purpose: str,
         native.remember(orc, task_id, CODEX, request_options, result)
     orc._count_work(task_id, CODEX, result)
     info = orc.db.get_task(task_id)['state'].get('active_agent', {})
-    orc.db.set_transmission_usage(trans, json.dumps({**result.usage, 'model':result.model,
-        'effort':profile['effort'], 'progress':info.get('progress', []), 'reason':profile['reason']}))
+    usage_record = {**result.usage, 'model':result.model,
+        'effort':profile['effort'], 'progress':info.get('progress', []), 'reason':profile['reason']}
+    reading = context_usage.context_reading(CODEX, result.model, result.usage)
+    if reading:
+        usage_record['context'] = reading
+    orc.db.set_transmission_usage(trans, json.dumps(usage_record))
     requested = ctx.read_requests(result.text)
     if requested:
         if read_round >= 3:

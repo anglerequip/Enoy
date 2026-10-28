@@ -109,6 +109,10 @@ summary beneath the response shows routing explanations, public assistant update
 and actual tool activity. These are public progress summaries, not private internal
 chain of thought. No additional model request is made to generate that panel.
 Completed-message model and progress metadata persist in transmission records.
+The composer also shows an approximate context percentage after a model response,
+based on provider-reported input tokens for the latest Enoy request and the known
+context size of that model. Unknown model capacities are left unreported; this
+meter is not a subscription-usage or billing estimate.
 
 Native edits are direct filesystem changes and do not create Enoy undo backups.
 Delegated development tasks also use native tools, with observed filesystem diffs

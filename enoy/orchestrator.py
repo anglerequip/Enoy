@@ -31,6 +31,7 @@ from . import paths
 from . import pccontrol as pc
 from . import patches
 from . import privacy
+from . import context_usage
 from . import team as team_mod
 from . import tools as tools_mod
 from .tools import folders as folders_mod
@@ -1559,8 +1560,12 @@ class Orchestrator:
         if result.usage:
             note = ", ".join(f"{k}={v}" for k, v in result.usage.items())
             self._act(task_id, "backend.usage", f"Reported by Claude Code: {note}", CLAUDE, step_id=step_id)
-        self.db.set_transmission_usage(trans, json.dumps({**result.usage, 'model':result.model,
-            'effort':profile['effort'], 'progress':self.db.get_task(task_id)['state'].get('active_agent', {}).get('progress', [])}))
+        usage_record = {**result.usage, 'model':result.model, 'effort':profile['effort'],
+            'progress':self.db.get_task(task_id)['state'].get('active_agent', {}).get('progress', [])}
+        reading = context_usage.context_reading(CLAUDE, result.model, result.usage)
+        if reading:
+            usage_record['context'] = reading
+        self.db.set_transmission_usage(trans, json.dumps(usage_record))
         self.db.kv_set("claude_last_verified", time.time())
         return result
 

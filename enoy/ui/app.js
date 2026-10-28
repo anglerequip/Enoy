@@ -567,6 +567,29 @@ function messageModelInfo(m) {
   }
   return {};
 }
+function latestContextReading() {
+  for (const m of [...(S.chat?.messages || [])].reverse()) {
+    if (m.role !== "assistant" || !["codex", "claude"].includes(m.backend)) continue;
+    const info = messageModelInfo(m);
+    if (info.context && Number.isFinite(Number(info.context.used_percent)) &&
+        Number.isFinite(Number(info.context.used_tokens)) && Number(info.context.window_tokens) > 0) {
+      return { ...info.context, provider: m.backend };
+    }
+  }
+  return null;
+}
+function contextMeterHtml() {
+  const c = latestContextReading();
+  if (!c) return "";
+  const pct = Math.max(0, Math.min(100, Number(c.used_percent)));
+  const used = Number(c.used_tokens).toLocaleString();
+  const size = Number(c.window_tokens).toLocaleString();
+  const provider = NAME[c.provider] || c.provider;
+  const title = `${provider} reported ${used} input tokens of a ${size}-token context window for its latest Enoy request. This is an estimate of that request; internal CLI/tool context may differ.`;
+  return `<span class="context-meter" title="${esc(title)}" aria-label="Estimated context used: ${pct}%">
+    <span class="context-meter-track" aria-hidden="true"><span style="width:${pct}%"></span></span>
+    <span>Context ≈${pct}%</span></span>`;
+}
 function progressHtml(notes, id = "") {
   const all = (notes || []).filter(Boolean);
   const latest = all.at(-1) || "Working on your request…";
@@ -819,6 +842,7 @@ function renderComposer() {
         <button class="round-btn plus" data-action="plus-menu" title="Add images or files, run tests…" aria-label="Add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         ${mode() === "code" && !S.chat ? `<button class="comp-chip" data-action="project-menu" title="${esc(S.project ? S.project.path : "Choose the folder Enoy works in")}">${FOLDER_ICON}<span class="t">${S.project ? esc(S.project.name) : "Choose folder"}</span>${CHEV}</button>` : ""}
         <div id="team-toggle"></div><button class="team-pill" data-action="starting-model-menu" title="Starting Codex model for each message">Start: ${esc(S.startingModel ? S.startingModel.model : mode() === "chat" ? (S.config?.codex?.chat_model || "gpt-6-luna") : "Default")}${CHEV}</button>
+        ${contextMeterHtml()}
         <div class="grow"></div>
         <div id="model-picker"></div>
         ${busy ? `<button class="round-btn stop" data-action="stop" title="Stop" aria-label="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg></button>`
