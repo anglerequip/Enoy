@@ -1,7 +1,8 @@
 """Read-only Git facts about a project folder: which files have uncommitted changes.
 
-Enoy never commits, pushes or changes Git state. It only asks `git status` so
-team runs can leave your own uncommitted work alone.
+This module never commits, pushes or changes Git state. It only asks `git status`
+so team runs can leave your own uncommitted work alone. (The Build workspace's
+branches and worktrees are managed separately, in gitwork.py.)
 """
 
 from __future__ import annotations

@@ -268,11 +268,21 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* The planner drafts it, you see a preview, and it is written only if absent or you confirm, with a backup. Tests first: an existing `CLAUDE.md` is untouched without confirmation.
 
 ### Phase 5: Git isolation
-- [ ] **T5.1 Git service.** Files: `enoy/gitwork.py`, `tests/test_gitwork.py`, using real temporary repositories.
+- [x] **T5.1 Git service.** *Done:* `enoy/gitwork.py`:
+  - Every git call uses an argument list, no shell, `safe_env` with `GIT_*` variables removed, a timeout, `core.hooksPath` pointing at a folder that does not exist, and `core.fsmonitor=false`. Checked by hand: with hooks on, this PC's git runs a blocking pre-commit hook; with Enoy's settings it does not.
+  - Integration branch `enoy/plan-<id>` is created at HEAD without touching the user's checkout.
+  - Task worktrees live under `%LOCALAPPDATA%/Enoy/worktrees/<repo>-<hash>/`, on branch `enoy/p<id>/<task>-a<attempt>`.
+  - Commits are by "Enoy agent" with no signing prompt. An empty commit is an error.
+  - `diff_names` lists changed files.
+  - `merge()` merges into the integration worktree with `--no-ff`. A conflict is aborted and reports the conflicting files, and both branches stay intact.
+  - Decision 5: `init_repo(confirm=True)` creates a repository with secrets and excluded folders added to `.git/info/exclude`.
+  *Original spec:* Files: `enoy/gitwork.py`, `tests/test_gitwork.py`, using real temporary repositories.
   - Detect a repository; integration branch from HEAD; task worktree and branch; commit as "Enoy agent"; diff names; merge with conflict detection (abort on conflict); remove a worktree.
   - Tests first: a conflict leaves both branches intact; your working branch is never changed.
-- [ ] **T5.2 Cleanup.** Tests first: `prune` runs; a worktree with uncommitted changes is not removed without confirmation.
-- [ ] **T5.3 Final merge into your branch.** An explicit action. It refuses when your working tree has changes in overlapping files. Tests first.
+- [x] **T5.2 Cleanup.** *Done:* `worktrees()` lists Enoy's worktrees with exists and dirty flags. `remove_worktree()` refuses one with uncommitted changes unless confirmed, refuses paths Enoy did not create, and keeps the branch as evidence. `prune()` forgets deleted folders.
+  *Original spec:* Tests first: `prune` runs; a worktree with uncommitted changes is not removed without confirmation.
+- [x] **T5.3 Final merge into your branch.** *Done:* `merge_into_current()` runs only when explicitly called. It refuses a detached HEAD, a plan with no integration branch, and uncommitted user changes in files the plan changed. Unrelated uncommitted files are kept. It uses the user's git identity when one is set. A conflict is aborted and leaves HEAD and the working tree clean. The result can be undone with `git revert -m 1` (tested). Full suite: 499 passed.
+  *Original spec:* An explicit action. It refuses when your working tree has changes in overlapping files. Tests first.
 
 ### Phase 6: Implementer execution
 - [ ] **T6.1 Scoped tools.** Files: `enoy/devagent.py` (wraps `AgentFiles`), tests.
