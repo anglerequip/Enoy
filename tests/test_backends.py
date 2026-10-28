@@ -65,16 +65,16 @@ def test_claude_success_uses_no_tools_and_stdin(fake_claude):
     assert backend.verified
 
 
-def test_claude_defaults_to_opus_high_effort(fake_claude):
+def test_claude_defaults_to_opus_medium_effort(fake_claude):
     from enoy import config as config_mod
 
     cfg, _ = config_mod.validate({})
-    assert cfg["claude"]["model"] == "claude-opus-5-5" and cfg["claude"]["effort"] == "high"
+    assert cfg["claude"]["model"] == "claude-opus-5-5" and cfg["claude"]["effort"] == "medium"
     backend, log = fake_claude(model=cfg["claude"]["model"], effort=cfg["claude"]["effort"])
     backend.chat(req())
     args = json.loads(log.read_text(encoding="utf-8"))["args"]
     assert args[args.index("--model") + 1] == "claude-opus-5-5"
-    assert args[args.index("--effort") + 1] == "high"
+    assert args[args.index("--effort") + 1] == "medium"
     backend, log = fake_claude(model="", effort="")
     backend.chat(req())
     args = json.loads(log.read_text(encoding="utf-8"))["args"]

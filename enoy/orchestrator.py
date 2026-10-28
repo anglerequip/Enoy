@@ -1512,10 +1512,11 @@ class Orchestrator:
         profile = model_policy.claude_profile(self.cfg, task_objective, purpose)
         model_policy.announce(self, task_id, CLAUDE, purpose, profile)
         native_options = native.options(self, task_id, CLAUDE, purpose, profile)
+        native_active = bool(native_options.get('native_tools'))
         native_options.setdefault('model', profile['model'])
         native_options.setdefault('effort', profile['effort'])
-        files = [] if native_options else self._claude_file_tools(task_id)
-        if not native_options and self.cfg.get("tools", {}).get("enabled", True):
+        files = [] if native_active else self._claude_file_tools(task_id)
+        if not native_active and self.cfg.get("tools", {}).get("enabled", True):
             files = files + ["find_folders"]
         if files:
             system += "\n\n" + tools_mod.CLAUDE_FILES_NOTE

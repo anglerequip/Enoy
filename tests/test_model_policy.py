@@ -29,7 +29,7 @@ def test_execution_routes_by_scope_risk_and_repairs(description, files, repair, 
     cfg, _ = config.validate({})
     selected = model_policy.choose(cfg, 'native_edit', description, files, repair)
     assert selected['model'] == expected
-    assert selected['effort'] == ('high' if expected == 'gpt-6-luna' else 'medium')
+    assert selected['effort'] == ('low' if expected == 'gpt-6-luna' else 'medium')
 
 
 def test_routing_can_be_disabled_and_does_not_mutate_settings():
@@ -72,7 +72,7 @@ def test_real_orchestrator_routes_phases_and_records_visible_progress(orc_factor
     task = orc.start_task(open_project(orc, project), 'Add a simple multiply function')
     assert task['status'] == 'completed', task['summary']
     assert observed == [('gpt-6.1-sol','medium'),
-                        ('gpt-6.1-sol','medium') if fallback else ('gpt-6-luna','high'),
+                        ('gpt-6.1-sol','medium') if fallback else ('gpt-6-luna','low'),
                         ('gpt-6.1-sol','medium')]
     requests = orc.backends[CODEX].requests
     assert requests[1].model == 'gpt-6-luna'
@@ -84,12 +84,12 @@ def test_real_orchestrator_routes_phases_and_records_visible_progress(orc_factor
 def test_session_profiles_preserve_planner_and_worker_sessions(orc_factory, project):
     orc = orc_factory(qwen=['MODE: answer\nReady.'], agent__native_tools=True)
     task = orc.start_task(open_project(orc, project), 'Inspect')
-    for model, effort, sid in [('gpt-6.1-sol','medium','planner'), ('gpt-6-luna','high','worker')]:
+    for model, effort, sid in [('gpt-6.1-sol','medium','planner'), ('gpt-6-luna','low','worker')]:
         profile = {'model':model,'effort':effort}
         options = native.options(orc, task['id'], CODEX, 'native_edit', profile)
         native.remember(orc, task['id'], CODEX, options, ChatResult('Done', CODEX, model, session_id=sid))
     assert native.options(orc, task['id'], CODEX, 'ask')['resume_session'] == 'planner'
-    assert native.options(orc, task['id'], CODEX, 'native_edit', {'model':'gpt-6-luna','effort':'high'})['resume_session'] == 'worker'
+    assert native.options(orc, task['id'], CODEX, 'native_edit', {'model':'gpt-6-luna','effort':'low'})['resume_session'] == 'worker'
 
 
 def test_public_progress_excludes_raw_reasoning_items(tmp_path):

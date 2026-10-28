@@ -10,7 +10,9 @@ def choose(cfg, purpose, objective="", file_count=0, repair=False):
     settings = cfg['codex']
     model, effort = settings.get('model', ''), settings.get('effort', '')
     reason = 'Planning, analysis and review use the planning model.'
-    if settings.get('adaptive_routing', True) and purpose in ('edit', 'native_edit', 'ask', 'review', 'lead_review', 'plan', 'lead') and not repair:
+    quick_request = re.search(r"\b(quick review|quick code review|triage|route this task)\b", str(objective).lower())
+    routable = purpose in ('edit', 'native_edit', 'ask') or (quick_request and purpose in ('review', 'lead_review', 'plan', 'lead'))
+    if settings.get('adaptive_routing', True) and routable and not repair:
         task = classify(objective, file_count)
         lowered = objective.lower()
         # Role stack supplied in Enoy's recommended model matrix. These explicit
@@ -21,7 +23,7 @@ def choose(cfg, purpose, objective="", file_count=0, repair=False):
         elif re.search(r"\b(exceptional|unresolved|still failing|still broken|same error again)\b", lowered):
             model, effort = 'gpt-6-astra', 'high'
             reason = 'An unresolved technical problem uses GPT-6 Astra at high effort.'
-        elif re.search(r"\b(quick review|quick code review|triage|route this task)\b", lowered):
+        elif quick_request:
             model, effort = 'gpt-6-luna', 'low'
             reason = 'Quick review and routing use GPT-6 Luna at low effort.'
         elif re.search(r"\b(difficult|complex|advanced)\b", lowered) and re.search(r"\b(procedural model|geometry nodes|procedural modeling)\b", lowered):
