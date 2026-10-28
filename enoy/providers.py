@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from typing import Callable
 
 from .backends.anthropic_api import AnthropicBackend
@@ -16,9 +17,21 @@ from .backends.ollama import OllamaBackend
 from .backends.openai_compat import OpenAICompatBackend
 from .config import CLI_PROVIDERS
 from .localguard import LocalGuard
+from .redact import redact
 from .spend import Spend, estimate_tokens
 from .storage import Storage
 from .tools import keystore
+
+
+MAX_RECORDED = 60000
+
+
+def _transcript(messages: list[ChatMessage]) -> str:
+    """What a request sent, as readable text: start and end kept when it is long."""
+    text = "\n\n".join(f"[{m.role}{':' + m.tool_name if m.tool_name else ''}]\n{m.content}" for m in messages)
+    if len(text) <= MAX_RECORDED:
+        return text
+    return text[:10000] + f"\n\n[... {len(text) - MAX_RECORDED:,} characters not recorded ...]\n\n" + text[-(MAX_RECORDED - 10000):]
 
 
 class Providers:
@@ -111,8 +124,11 @@ class Providers:
         m = self.model(model_id)
         if m["provider"] in CLI_PROVIDERS:
             raise ValueError(f"{model_id} runs through a signed-in app, not an API key.")
+        # Every request is redacted before it leaves Enoy (tool results already are), and recorded.
+        messages = [replace(x, content=redact(x.content)) for x in messages]
         prompt = sum(estimate_tokens(x.content) + 20 for x in messages) + sum(estimate_tokens(str(t)) for t in tools or [])
-        call = self.spend.reserve(m, prompt, max_output, role=role, purpose=purpose, **ids)
+        call = self.spend.reserve(m, prompt, max_output, role=role, purpose=purpose, sent=_transcript(messages),
+                                  chars=sum(len(x.content) for x in messages), **ids)
         request = ChatRequest(messages, purpose=purpose or "chat", num_predict=max_output, tools=tools,
                               cancel=cancel or threading.Event())
         try:

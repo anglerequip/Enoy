@@ -243,11 +243,16 @@ class BuildService:
             return complete
 
         online = (lambda: True) if local else (lambda: self.providers.test(impl["provider"])["ok"])
+        excluded = list(self.orc.cfg["permissions"]["extra_excluded_globs"])
+        if not local:  # Files the user keeps from cloud models stay out of a cloud implementer's worktree.
+            excluded += self.orc.cfg["privacy"]["cloud_excluded_globs"]
         runner = BuildRunner(self.store, GitWork(root), complete_for, self.orc.cfg["permissions"]["command_allowlist"],
                              review=review, sync=lambda pid: planfile.sync(self.orc, pid), venv_root=root,
                              online=online, parallel_allowed=bool(build["parallel"]),
                              max_parallel=min(4, self.orc.cfg["team"]["max_parallel"]), provider=impl["provider"],
-                             model=impl.get("model", ""))
+                             model=impl.get("model", ""), excluded_globs=excluded,
+                             log=lambda text: self.orc._act(None, "build.task", f"Plan {plan['id']}: {text}", "system",
+                                                            "build"))
         holder["runner"] = runner
         return runner
 
@@ -302,6 +307,14 @@ class BuildService:
                       ("done (" + result.commit[:12] + ")." if result.ok else "refused: " + result.reason),
                       "user", "build", outcome="" if result.ok else "failed")
         return {"ok": result.ok, "commit": result.commit, "conflicts": result.conflicts, "reason": result.reason}
+
+    def call_detail(self, call_id: int) -> dict:
+        row = self.orc.db._one("SELECT id, provider, model, role, purpose, status, chars, content, input_tokens, "
+                               "cached_tokens, output_tokens, cost_usd, cost_source, error, created FROM model_calls "
+                               "WHERE id = ?", (call_id,))
+        if row is None:
+            raise BuildError("Unknown request.")
+        return row
 
     # Monitoring ----------------------------------------------------------------------------------------
 

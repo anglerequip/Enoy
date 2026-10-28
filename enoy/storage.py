@@ -333,6 +333,8 @@ CREATE TABLE IF NOT EXISTS model_calls (
     status TEXT NOT NULL,
     reserved_usd REAL NOT NULL DEFAULT 0,
     prices TEXT NOT NULL DEFAULT '',
+    chars INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER,
     cached_tokens INTEGER,
     output_tokens INTEGER,

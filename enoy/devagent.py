@@ -49,8 +49,9 @@ class Scope:
     """What one phase of one task may read, write and run. Enforced here, not by the prompt."""
 
     def __init__(self, root: Path, writable, frozen=(), commands=(), allowlist=(), unattended: bool = True,
-                 venv_root: Path | None = None, timeout_s: float = 300, cancel: threading.Event | None = None):
-        self.ws = Workspace(root)
+                 venv_root: Path | None = None, timeout_s: float = 300, cancel: threading.Event | None = None,
+                 excluded_globs=()):
+        self.ws = Workspace(root, list(excluded_globs))
         self.root = self.ws.root
         self.writable, self.frozen = set(writable), set(frozen)
         self.commands = [c.strip() for c in commands]
@@ -280,10 +281,11 @@ def _task_text(task: dict) -> str:
     return f"# Your task {task['id']}: {task['title']}\n" + "\n".join(_open_task(task)) + "\n"
 
 
-def task_context(task: dict, phase: str, root: Path, deps_done=(), max_chars: int = 60000) -> tuple[str, str]:
+def task_context(task: dict, phase: str, root: Path, deps_done=(), max_chars: int = 60000,
+                 excluded_globs=()) -> tuple[str, str]:
     """(system, user) for one phase of one task. Only this task, its finished dependencies' summaries,
     the project's instruction files and the files it may touch: no plan, no other tasks, no chat history."""
-    ws = Workspace(root)
+    ws = Workspace(root, list(excluded_globs))
     system = ROLE + "\n\n" + PHASE_RULES[phase]
     room = max_chars // 4
     for name, text in ws.instructions():
@@ -311,6 +313,27 @@ def task_context(task: dict, phase: str, root: Path, deps_done=(), max_chars: in
                 break
         shown += block
     return system[:max_chars], (user + shown)[:max(max_chars - len(system), 0)]
+
+
+def scrub_worktree(root: Path, excluded_globs=()) -> list[str]:
+    """Delete secrets files (.env, keys, ...) and files the user keeps private from a task's worktree.
+
+    The worktree is a disposable copy, so the user's own files are untouched, and only a task's allowed
+    files are ever committed, so these deletions never reach a commit. Without the files, nothing the
+    implementer runs (a test that prints .env, say) can show them to the model.
+    """
+    import fnmatch
+    import os
+    ws = Workspace(root, list(excluded_globs))
+    removed = []
+    for dirpath, dirnames, filenames in os.walk(ws.root):
+        dirnames[:] = [d for d in dirnames if d != ".git"]
+        for name in filenames:
+            rel = Path(dirpath, name).relative_to(ws.root).as_posix()
+            if ws.is_sensitive(rel) or any(fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(name, g) for g in excluded_globs):
+                Path(dirpath, name).unlink(missing_ok=True)
+                removed.append(rel)
+    return sorted(removed)
 
 
 # T6.4 Expected failure -----------------------------------------------------------------------------
@@ -375,7 +398,8 @@ class TaskExecution:
                  complete: Callable[[list[ChatMessage], list[dict]], ChatResult], allowlist,
                  unattended: bool = True, venv_root: Path | None = None, max_steps: int = 30, max_fix_rounds: int = 2,
                  max_output_tokens: int = 200_000, cancel: threading.Event | None = None, timeout_s: float = 300,
-                 deps_done=(), provider: str = "", model: str = ""):
+                 deps_done=(), provider: str = "", model: str = "", excluded_globs=(),
+                 log: Callable[[str], None] | None = None):
         self.store, self.row, self.git, self.complete = store, task, git, complete
         self.spec = task["spec"]
         self.plan_body = plan_body
@@ -386,13 +410,15 @@ class TaskExecution:
         self.timeout_s = timeout_s
         self.deps_done = list(deps_done)
         self.provider, self.model = provider, model
+        self.excluded_globs = list(excluded_globs)
+        self.log = log or (lambda text: None)
 
     def _scope(self, wt: Path, writable, frozen, cmds) -> Scope:
         return Scope(wt, writable, frozen, cmds, self.allowlist, self.unattended, self.venv_root, self.timeout_s,
-                     self.cancel)
+                     self.cancel, self.excluded_globs)
 
     def _loop(self, scope: Scope, phase: str) -> ToolLoop:
-        system, user = task_context(self.spec, phase, scope.root, self.deps_done)
+        system, user = task_context(self.spec, phase, scope.root, self.deps_done, excluded_globs=self.excluded_globs)
         return ToolLoop(self.complete, scope, system, user, self.max_steps, self.max_output_tokens, self.cancel)
 
     @staticmethod
@@ -493,6 +519,7 @@ class TaskExecution:
 
     def _stop(self, res: PhaseResult, claim: str, run_id: int) -> PhaseResult:
         tid = self.row["id"]
+        self.log(f"{self.spec['id']} stopped ({res.status}): {res.reason[:300]}")
         if res.status == "blocked" or res.status == "limit":
             if res.blocker_kind == "test_spec_wrong":
                 blocker = "The implementer reports that the test specification is wrong; this task needs a plan " \
@@ -518,12 +545,16 @@ class TaskExecution:
         """Run both phases for a claimed task. Leaves it verifying (success), or blocked, failed, waiting or ready."""
         t, tid = self.spec, self.row["id"]
         wt, branch = self.git.create_task_worktree(self.row["plan_id"], t["id"], self.row["attempts"])
+        removed = scrub_worktree(wt, self.excluded_globs)
+        self.log(f"{t['id']} attempt {self.row['attempts']} started with {self.model or self.provider or 'the implementer'}"
+                 + (f"; {len(removed)} secret or private file(s) removed from its worktree" if removed else "") + ".")
         run_id = self.store.start_run(tid, "implementer", self.provider, self.model, phase="tests")
         self.store.update_run(run_id, worktree=str(wt), branch=branch)
         self.store.transition(tid, "testing", claim=claim)
         first = self._reuse_frozen(wt) if self.store.frozen(tid) else self._test_phase(wt, run_id)
         if not first.ok:
             return self._stop(first, claim, run_id)
+        self.log(f"{t['id']} tests frozen ({first.evidence.get('tests_before', '')}).")
         self.store.update_run(run_id, test_commit=first.commit, phase="implement")
         self.store.transition(tid, "implementing", claim=claim)
         second = self._impl_phase(wt)

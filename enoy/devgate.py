@@ -17,7 +17,7 @@ from typing import Callable
 
 from . import patches
 from .backends.base import BackendError
-from .devagent import Scope, TaskExecution, content_sha
+from .devagent import Scope, TaskExecution, content_sha, scrub_worktree
 from .devstore import DevStore
 from .gitwork import GitError, GitWork
 
@@ -66,7 +66,7 @@ def _check(checks: list, name: str, problems: list[str], ok_detail: str) -> None
 # T7.1 -----------------------------------------------------------------------------------------
 
 def run_gate(store: DevStore, task: dict, git: GitWork, allowlist, venv_root: Path | None = None,
-             timeout_s: float = 300) -> GateResult:
+             timeout_s: float = 300, excluded_globs=()) -> GateResult:
     spec = task["spec"]
     run = store.runs(task["id"])[-1] if store.runs(task["id"]) else {}
     tc, ic = run.get("test_commit"), run.get("impl_commit")
@@ -109,8 +109,9 @@ def run_gate(store: DevStore, task: dict, git: GitWork, allowlist, venv_root: Pa
 
     fresh = git.temp_worktree(ic, f"gate-{task['id']}")
     try:
+        scrub_worktree(fresh, excluded_globs)
         scope = Scope(fresh, (), (), spec["verify_commands"] + spec["regression_commands"], allowlist, True,
-                      venv_root, timeout_s)
+                      venv_root, timeout_s, excluded_globs=excluded_globs)
         out, code = TaskExecution._run_all(scope, spec["verify_commands"])
         _check(checks, "tests", [] if code == 0 else [f"the frozen tests failed (exit {code}): " + out[-1500:]],
                "frozen tests pass in a fresh checkout")
@@ -171,12 +172,15 @@ def review_task(ask: Callable[[str, str], str], reviewer_id: str, implementer_id
 
 def finish_task(store: DevStore, task: dict, claim: str, git: GitWork, allowlist,
                 review: Callable[[dict, str, GateResult], ReviewResult] | None = None,
-                sync: Callable[[int], dict] | None = None, venv_root: Path | None = None) -> FinishResult:
+                sync: Callable[[int], dict] | None = None, venv_root: Path | None = None, excluded_globs=(),
+                log: Callable[[str], None] | None = None) -> FinishResult:
     """Gate, optional review, merge into the integration branch, record the result. Task must be verifying."""
+    log = log or (lambda text: None)
     tid, spec = task["id"], task["spec"]
     run = store.runs(tid)[-1]
-    gate = run_gate(store, task, git, allowlist, venv_root)
+    gate = run_gate(store, task, git, allowlist, venv_root, excluded_globs=excluded_globs)
     evidence = dict(gate.evidence)
+    log(f"{spec['id']} checks {'passed' if gate.ok else 'failed: ' + gate.failures()[:300]}.")
     if not gate.ok:
         reason = "Enoy's checks failed: " + gate.failures()
         store.transition(tid, "failed", claim=claim, blocker=reason[:2000], evidence=evidence)
@@ -205,11 +209,13 @@ def finish_task(store: DevStore, task: dict, claim: str, git: GitWork, allowlist
     store.transition(tid, "merging", claim=claim)
     merged = git.merge(task["plan_id"], run["branch"], f"{spec['id']}: {spec['title']}")
     if not merged.ok:
+        log(f"{spec['id']} could not be merged: conflict in {', '.join(merged.conflicts) or 'the integration branch'}.")
         reason = ("Merge conflict in " + (", ".join(merged.conflicts) or "the integration branch") +
                   ". The task will run again on top of the latest integration branch.")
         store.transition(tid, "ready", claim=claim, blocker=reason)
         return FinishResult(False, "conflict", reason)
     evidence["merge"] = merged.commit[:12]
+    log(f"{spec['id']} completed and merged into {git.integration_branch(task['plan_id'])} ({merged.commit[:12]}).")
     store.transition(tid, "completed", claim=claim, commit_id=run["impl_commit"], blocker="",
                      summary=(run["summary"] or spec["title"])[:2000], evidence=evidence)
     _after_completion(store, task["plan_id"], git, run, sync)

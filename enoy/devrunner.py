@@ -35,7 +35,8 @@ class BuildRunner:
     def __init__(self, store: DevStore, git: GitWork, complete_for: Callable[[dict], Callable], allowlist,
                  review: Callable | None = None, sync: Callable[[int], dict] | None = None, max_attempts: int = 2,
                  max_fix_rounds: int = 2, venv_root: Path | None = None, online: Callable[[], bool] | None = None,
-                 parallel_allowed: bool = False, max_parallel: int = 2, provider: str = "", model: str = ""):
+                 parallel_allowed: bool = False, max_parallel: int = 2, provider: str = "", model: str = "",
+                 excluded_globs=(), log: Callable[[str], None] | None = None):
         self.store, self.git, self.complete_for = store, git, complete_for
         self.allowlist = list(allowlist)
         self.review, self.sync = review, sync
@@ -43,6 +44,8 @@ class BuildRunner:
         self.venv_root, self.online = venv_root, online
         self.parallel_allowed, self.max_parallel = parallel_allowed, max_parallel
         self.provider, self.model = provider, model
+        self.excluded_globs = list(excluded_globs)
+        self.log = log or (lambda text: None)
         self.cancel = threading.Event()
         self._merge_lock = threading.Lock()
 
@@ -95,12 +98,14 @@ class BuildRunner:
             result = TaskExecution(store=self.store, task=task, plan_body=body, git=self.git,
                                    complete=self.complete_for(task), allowlist=self.allowlist,
                                    venv_root=self.venv_root, max_fix_rounds=self.max_fix_rounds, cancel=self.cancel,
-                                   deps_done=self._deps_done(task), provider=self.provider, model=self.model).run(claim)
+                                   deps_done=self._deps_done(task), provider=self.provider, model=self.model,
+                                   excluded_globs=self.excluded_globs, log=self.log).run(claim)
             reason = result.reason
             if result.ok:
                 with self._merge_lock:  # One merge at a time, each on top of the previous one.
                     finished = finish_task(self.store, self.store.get_task(task_id), claim, self.git, self.allowlist,
-                                           review=self.review, sync=self.sync, venv_root=self.venv_root)
+                                           review=self.review, sync=self.sync, venv_root=self.venv_root,
+                                           excluded_globs=self.excluded_globs, log=self.log)
                 reason = finished.reason
         except Exception as exc:  # Git or disk trouble: record it instead of leaving the task claimed.
             reason = f"{type(exc).__name__}: {exc}"
@@ -114,6 +119,9 @@ class BuildRunner:
                         continue
         self._retry_if_allowed(task_id)
         final = self.store.get_task(task_id)
+        if final["status"] not in ("completed",):
+            self.log(f"{task['task_key']} is now {final['status'].replace('_', ' ')}"
+                     + (f": {final['blocker'][:300]}" if final["blocker"] else "."))
         if self.store.tasks(task["plan_id"]) and all(t["status"] == "completed" for t in self.store.tasks(task["plan_id"])):
             self.store.set_plan_status(task["plan_id"], "completed")
         return {"task": task["task_key"], "status": final["status"], "reason": reason or final["blocker"]}

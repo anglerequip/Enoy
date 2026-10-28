@@ -57,7 +57,8 @@ class Spend:
         return row["s"]
 
     def reserve(self, model: dict, prompt_tokens: int, max_output: int, role: str = "", purpose: str = "",
-                plan_id: int | None = None, dev_task_id: int | None = None, run_id: int | None = None) -> int:
+                plan_id: int | None = None, dev_task_id: int | None = None, run_id: int | None = None,
+                sent: str = "", chars: int = 0) -> int:
         pid = model["provider"]
         p = self._provider(pid)
         caps = [(p.get("daily_limit_usd", 0), self.day_start(), "daily"),
@@ -84,9 +85,11 @@ class Spend:
                             "limit in Settings → Providers or wait for the next period.")
             return self.db._exec(
                 "INSERT INTO model_calls (provider, model, role, purpose, plan_id, dev_task_id, run_id, status, "
-                "reserved_usd, prices, cost_source, created) VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?)",
+                "reserved_usd, prices, cost_source, chars, content, created) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)",
                 (pid, model.get("model", ""), role, purpose, plan_id, dev_task_id, run_id, reserved,
-                 json.dumps(prices) if prices and source == "estimate" else "", source, time.time())).lastrowid
+                 json.dumps(prices) if prices and source == "estimate" else "", source, chars, sent,
+                 time.time())).lastrowid
 
     @staticmethod
     def _cost(call: dict, usage: dict | None) -> float | None:

@@ -498,6 +498,10 @@ class App:
         def build_task_retry(q, body, task_id):
             return {"task": built(build.retry, int(task_id))}
 
+        @r("GET", r"/api/build/calls/(\d+)")
+        def build_call(q, body, call_id):
+            return built(build.call_detail, int(call_id))
+
         @r("GET", "/api/build/monitor")
         def build_monitor(q, body):
             return build.monitor()
