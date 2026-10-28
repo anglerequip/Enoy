@@ -20,7 +20,9 @@ ctx.S.chat = { messages: [
 ] };
 const html = ctx.contextMeterHtml();
 assert(html.includes('Context ≈12.3%'));
-assert(html.replace(/\u00a0/g, ' ').includes('129 150 input tokens of a 1 050 000-token context window'));
+const title = html.match(/title="([^"]+)"/)[1];
+const titleDigits = title.replace(/\D/g, '');
+assert(titleDigits.includes('129150') && titleDigits.includes('1050000'), 'tooltip reports localized input and context token counts');
 assert(html.includes('context-meter-track'));
 
 ctx.S.chat.messages.push({ role: 'assistant', backend: 'claude', info: { context: { used_percent: 6, used_tokens: 60000, window_tokens: 1000000 } } });
