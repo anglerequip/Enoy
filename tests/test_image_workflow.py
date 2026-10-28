@@ -62,15 +62,14 @@ def test_workers_reads_and_final_review_keep_the_image(orc_factory, project):
     assert len(orc.backends[CLAUDE].requests) == 1
 
 
-def test_manual_claude_image_waits_for_approval(orc_factory, project):
+def test_manual_claude_image_is_sent_without_a_second_prompt(orc_factory, project):
+    # Choosing Claude is the approval; the retired confirm setting no longer pauses the request (090172b).
     content = png()
     image_id = images.store(content)['id']
     orc = make(orc_factory, [], ['Image description.'])
     orc.cfg['claude']['confirm_before_send'] = True
     task = orc.start_task(open_project(orc, project), 'Describe this image', backend=CLAUDE, images=[image_id])
-    assert task['status'] == 'awaiting_claude' and not orc.backends[CLAUDE].requests
-    orc.approve_claude(task['id'])
-    assert orc.db.get_task(task['id'])['status'] == 'completed'
+    assert task['status'] == 'completed', task['summary']
     assert orc.backends[CLAUDE].requests[0].messages[-1].images[0].data == content
 
 

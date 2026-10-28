@@ -87,19 +87,13 @@ def test_claude_quota_failure_is_visible_and_gpt_fallback_finishes(orc_factory, 
     assert orc.db.messages(task['id'])[-1]['backend']==CODEX
 
 
-@pytest.mark.parametrize('allow',[False,True])
-def test_plan_review_respects_claude_confirmation(orc_factory, project, allow):
-    codex=[delegate(plan_task(model=CODEX)), edit(project,[],CODEX)] + ([] if allow else ['GPT reviewed.\nNEXT: done'])
+def test_retired_confirm_setting_does_not_pause_plan_review(orc_factory, project):
+    # 090172b retired "Ask before sending to Claude": a requested run uses its providers without a second prompt.
+    codex=[delegate(plan_task(model=CODEX)), edit(project,[],CODEX)]
     orc,pid=setup(orc_factory,project,codex,['PLAN_VERDICT: APPROVE\nScoped.','Claude reviewed.\nNEXT: done'],claude__confirm_before_send=True)
     task=orc.start_task(pid,'Add a simple multiply function')
-    assert task['status']=='awaiting_claude'
-    assert not orc.backends[CLAUDE].requests
-    if allow:
-        orc.approve_claude(task['id'])
-    else:
-        orc.decline_claude(task['id'])
-    assert orc.db.get_task(task['id'])['status']=='completed'
-    assert len(orc.backends[CLAUDE].requests)==(2 if allow else 0)
+    assert task['status']=='completed', task['summary']
+    assert [r.purpose for r in orc.backends[CLAUDE].requests]==['plan_review','lead_review']
 
 
 def test_first_repair_moves_from_luna_to_claude(orc_factory, project, monkeypatch):

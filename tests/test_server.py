@@ -161,7 +161,7 @@ def test_api_requires_token_and_local_host(server):
 def test_agent_permission_modes_round_trip_through_api(server):
     assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "workspace"
     status, data = call(server, "POST", "/api/config", {"config": {"agent": {"native_tools": True, "access_mode": "full"}}})
-    assert status == 200 and data["config"]["agent"] == {"native_tools": True, "access_mode": "full"}
+    assert status == 200 and data["config"]["agent"] == {"native_tools": True, "access_mode": "full", "self_check": True}
     assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "full"
     assert call(server, "POST", "/api/config", {"config": {"agent": {"access_mode": "invalid"}}})[0] == 400
     assert call(server, "GET", "/api/status")[1]["agent"]["access_mode"] == "full"
