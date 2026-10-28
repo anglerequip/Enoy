@@ -53,6 +53,8 @@ class App:
         self.last_seen = time.time()
         from .usage import UsageMonitor
         self.usage_monitor = UsageMonitor()
+        from .providers import Providers
+        self.build_providers = Providers(lambda: self.orc.cfg, self.orc.db)
         self.appearance_lock = threading.Lock()
         self.shutdown_requested = threading.Event()
         self.shutdown_callback = None
@@ -343,6 +345,78 @@ class App:
             return {"windows": [w.as_dict() for w in pc.list_windows()]}
 
 
+
+        # Build workspace providers. Keys go to Windows Credential Manager and are never returned.
+        prov = self.build_providers
+
+        def provider_id(pid):
+            if pid not in orc.cfg["build"]["providers"]:
+                raise ApiError(404, "Unknown provider.")
+            return pid
+
+        @r("GET", "/api/build/providers")
+        def build_providers(q, body):
+            return {"providers": prov.statuses(), "models": orc.cfg["build"]["models"], "roles": orc.cfg["build"]["roles"],
+                    "spend": {pid: prov.spend.totals(pid) for pid in orc.cfg["build"]["providers"]}}
+
+        @r("POST", "/api/build/providers/([a-z0-9_-]{1,40})/key")
+        def build_provider_key(q, body, pid):
+            from .tools import keystore
+            provider_id(pid)
+            value = str(body.get("value") or "")
+            try:
+                if value:
+                    keystore.put("provider:" + pid, value)
+                else:
+                    keystore.delete("provider:" + pid)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ApiError(400, str(exc)) from None
+            orc._act(None, "settings.changed", f"{'Saved' if value else 'Removed'} the {pid} API key in Windows "
+                     "Credential Manager.", "user", "settings")
+            return {"provider": prov.status(pid)}
+
+        @r("POST", "/api/build/providers/([a-z0-9_-]{1,40})/test")
+        def build_provider_test(q, body, pid):
+            result = prov.test(provider_id(pid))
+            orc._act(None, "provider.test", f"Connection test for {pid}: " +
+                     (f"reachable, {len(result['models'])} model(s) listed." if result["ok"] else result["error"]),
+                     "system", "settings", outcome="" if result["ok"] else "failed")
+            return result | {"provider": prov.status(pid)}
+
+        @r("POST", "/api/build/providers/([a-z0-9_-]{1,40})/paid-test")
+        def build_provider_paid_test(q, body, pid):
+            provider_id(pid)
+            model_id = str(body.get("model") or "")
+            try:
+                if prov.model(model_id)["provider"] != pid:
+                    raise ApiError(400, "That model belongs to another provider.")
+                result = prov.paid_test(model_id, confirm=body.get("confirm") is True)
+            except KeyError:
+                raise ApiError(400, "Unknown model.") from None
+            except PermissionError as exc:
+                raise ApiError(400, str(exc)) from None
+            orc._act(None, "provider.test", f"Paid test request to {pid} ({model_id}): " +
+                     ("succeeded." if result["ok"] else result["error"]), "user", "settings",
+                     outcome="" if result["ok"] else "failed")
+            return result | {"provider": prov.status(pid)}
+
+        @r("POST", "/api/build/roles")
+        def build_roles(q, body):
+            roles = body.get("roles")
+            if not isinstance(roles, dict):
+                raise ApiError(400, "Send roles as an object.")
+            merged = config_mod.merge_update(orc.cfg, {"build": {"roles": orc.cfg["build"]["roles"] | roles}})
+            try:
+                cfg = config_mod.validate_strict(merged)
+            except config_mod.ConfigError as exc:
+                raise ApiError(400, str(exc)) from None
+            if self.save_config:
+                config_mod.save(cfg)
+            orc.update_config(cfg)
+            orc._act(None, "settings.changed", "Build roles: " + ", ".join(f"{k} = {v or 'none'}"
+                                                                         for k, v in cfg["build"]["roles"].items()),
+                     "user", "settings")
+            return {"roles": cfg["build"]["roles"]}
 
         @r("POST", "/api/claude/test")
         def claude_test(q, body):

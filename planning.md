@@ -204,26 +204,34 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   - Accept: tests pass, and `storage.mark_interrupted` behaviour is unchanged.
 
 ### Phase 2: Providers
-- [ ] **T2.1 Key store names.** Files: `enoy/tools/keystore.py`, `tests/test_keystore.py`.
+- [x] **T2.1 Key store names.** *Done:* `provider:<id>` key names are accepted and the Brave key works as before. The Windows calls are split into `_read`/`_write`/`_remove` so tests never touch the real Credential Manager. Key values never appear in a status or an error.
+  *Original spec:* Files: `enoy/tools/keystore.py`, `tests/test_keystore.py`.
   - Allow `provider:<id>` where the ID matches `[a-z0-9_-]{1,40}`. `brave_search` still works.
   - Tests first: invalid names are rejected, and a key value never appears in `status()` or in an exception message. The Windows API is mocked.
-- [ ] **T2.2 Registry config.** Files: `enoy/config.py`, `tests/test_config.py`.
+- [x] **T2.2 Registry config.** *Done:* New `build` section with providers, models, roles and `parallel`. DeepSeek, Fireworks and Anthropic (API version `2026-10-21`) default to off with US$1/day and US$10/month limits. Ollama is local, off and has no limits. The planner is `claude-cli` and the reviewer `codex-cli`. Validation refuses: secret-like fields, plain `http` to anything but this PC, unknown providers, and roles that point at a model not allowed for that role. Old config files load unchanged.
+  *Original spec:* Files: `enoy/config.py`, `tests/test_config.py`.
   - Adds `providers`, `models` and `roles` to the schema, with no secrets and with defaults disabled and empty.
   - Tests first: old config files load unchanged; a config containing a field named like a key is rejected; a role that points to an unknown model is reported.
-- [ ] **T2.3 HTTP client.** Files: `enoy/backends/http.py`, `tests/test_http_client.py`.
+- [x] **T2.3 HTTP client.** *Done:* `enoy/backends/http.py`, standard library only. Handles retries, Retry-After, cancel, and maps errors to kinds: `auth`, `limit` (429/402), `unavailable`, `timeout`, `malformed`, `failed`. Keys are removed from error text. Note: on Windows a connection to a closed port only times out, so any connect-stage failure counts as `unavailable` and only a slow answer counts as `timeout`.
+  *Original spec:* Files: `enoy/backends/http.py`, `tests/test_http_client.py`.
   - Tests first, against a fake server: timeout → `timeout`; 401/403 → `auth`; 429 with Retry-After → retried and then `limit`; 5xx → retried; connection refused → `unavailable`; cancel stops the request; the key never appears in the error text.
-- [ ] **T2.4 OpenAI-compatible adapter.** Files: `enoy/backends/openai_compat.py`, tests.
+- [x] **T2.4 OpenAI-compatible adapter.** *Done:* Chat, tool calls (invalid argument JSON is reported, not guessed), image data URLs and model listing. Usage is normalised to uncached input, cached input and output tokens. Each assistant turn is sent back exactly as the provider returned it, because DeepSeek requires `reasoning_content` back during tool use (checked in its docs, 2026-10-28). `temperature` is never sent.
+  *Original spec:* Files: `enoy/backends/openai_compat.py`, tests.
   - Chat, tool calls, usage (including DeepSeek cache-hit fields when present), `list_models()`.
   - Tests first, using recorded response shapes in a fake server.
-- [ ] **T2.5 Anthropic Messages adapter.** Files: `enoy/backends/anthropic_api.py`, tests.
+- [x] **T2.5 Anthropic Messages adapter.** *Done:* Raw HTTP, not the SDK, so that Enoy stays standard-library only and every provider shares one client. Headers: `x-api-key`, `anthropic-version: 2026-10-21`. No `temperature`/`top_p`/`top_k` and no forced `tool_choice`. Thinking blocks are sent back unchanged, and all tool results of a turn go in one user message. A refusal raises an error rather than returning an answer. Model listing follows every page. Still off by default.
+  *Original spec:* Files: `enoy/backends/anthropic_api.py`, tests.
   - Same coverage as T2.4, in the Messages format (tool_use and tool_result blocks), plus `GET /v1/models`.
   - The headers are checked against the docs again when this task is done.
-- [ ] **T2.6 Provider service.** Files: `enoy/providers.py`, tests.
+- [x] **T2.6 Provider service.** *Done:* `enoy/providers.py`. Status per provider: disabled, no_key, no_connection, key_refused, ready or verified. The free connection test lists models. A paid test needs `confirm=True`, and only a successful real request marks a provider verified. Concurrency limits are per provider. `complete()` is the only metered request path.
+  *Original spec:* Files: `enoy/providers.py`, tests.
   - Status per provider (no key / no connection / ready / verified); a connection test that costs nothing; discovery; a per-provider concurrency limit.
   - Tests first: offline maps to "No connection"; `verified` is set only after a real successful response; a "paid test" call without the confirm flag is refused.
-- [ ] **T2.7 Spend ledger and limits.** Files: `enoy/spend.py`, tests.
+- [x] **T2.7 Spend ledger and limits.** *Done:* `enoy/spend.py`. Before each request it reserves the most the request could cost, and checks it against the daily and monthly caps inside one transaction. When a request ends, the actual cost is calculated from the prices saved with the reservation. A cost reported by the provider wins. Local requests cost 0. A missing price blocks the request whenever a cap is set. A failed request without usage costs 0. After a restart, reservations that were cut off count as spent.
+  *Original spec:* Files: `enoy/spend.py`, tests.
   - Tests first: a request is refused when the reserved maximum cost would cross the daily or monthly cap; the actual cost is recorded from usage; missing prices give "cost unknown" and are not treated as zero for the cap (a request with unknown cost is blocked when a cap is set).
-- [ ] **T2.8 Provider API routes.** Files: `enoy/server.py`, `tests/test_server_providers.py`.
+- [x] **T2.8 Provider API routes.** *Done:* Five routes: `GET /api/build/providers`, plus `key`, `test`, `paid-test` (which needs `confirm: true`) and `roles`. A test scans every response, the logs and 5 database tables for a sentinel key. Full suite: 439 passed.
+  *Original spec:* Files: `enoy/server.py`, `tests/test_server_providers.py`.
   - `GET /api/build/providers`, `POST …/key`, `POST …/test`, `POST …/discover`, `POST /api/build/roles`.
   - Tests first: no response, log or activity row ever contains the key (a sentinel key is scanned for).
 

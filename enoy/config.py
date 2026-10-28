@@ -97,7 +97,124 @@ DEFAULTS: dict[str, Any] = {'coordinator': {'enabled': True, 'claude_reviews': T
                                        'selene .',
                                        'stylua --check .'],
                  'command_timeout_s': 300,
-                 'extra_excluded_globs': []}}
+                 'extra_excluded_globs': []},
+ # Build workspace (planning.md). Endpoints are editable settings; keys live only in Windows
+ # Credential Manager; cloud providers stay off until the user turns them on.
+ 'build': {'providers': {'deepseek': {'kind': 'openai', 'base_url': 'https://api.deepseek.com', 'enabled': False,
+                                      'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
+                                      'monthly_limit_usd': 10.0, 'timeout_s': 600},
+                         'fireworks': {'kind': 'openai', 'base_url': 'https://api.fireworks.ai/inference/v1',
+                                       'enabled': False, 'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
+                                       'monthly_limit_usd': 10.0, 'timeout_s': 600},
+                         'anthropic': {'kind': 'anthropic', 'base_url': 'https://api.anthropic.com', 'enabled': False,
+                                       'local': False, 'max_concurrency': 2, 'daily_limit_usd': 1.0,
+                                       'monthly_limit_usd': 10.0, 'timeout_s': 600, 'api_version': '2026-10-21'},
+                         'ollama': {'kind': 'openai', 'base_url': 'http://127.0.0.1:11434/v1', 'enabled': False,
+                                    'local': True, 'max_concurrency': 1, 'daily_limit_usd': 0.0,
+                                    'monthly_limit_usd': 0.0, 'timeout_s': 1800}},
+           # "model": "" means the CLI's own configured model.
+           'models': [{'id': 'claude-cli', 'provider': 'claude_cli', 'model': '', 'roles': ['planner', 'reviewer']},
+                      {'id': 'codex-cli', 'provider': 'codex_cli', 'model': '', 'roles': ['planner', 'reviewer']}],
+           'roles': {'planner': 'claude-cli', 'implementer': '', 'reviewer': 'codex-cli'},
+           'parallel': False}}
+
+BUILD_ROLES = ('planner', 'implementer', 'reviewer')
+CLI_PROVIDERS = ('claude_cli', 'codex_cli')
+_NUM = (int, float)
+_PROVIDER_FIELDS = {'kind': (str,), 'base_url': (str,), 'enabled': (bool,), 'local': (bool,), 'max_concurrency': (int,),
+                    'daily_limit_usd': _NUM, 'monthly_limit_usd': _NUM, 'timeout_s': _NUM,
+                    'api_version': (str,), 'account_id': (str,)}
+_MODEL_FIELDS = {'id': (str,), 'provider': (str,), 'model': (str,), 'roles': (list,),
+                 'price_in': _NUM + (type(None),), 'price_cached': _NUM + (type(None),),
+                 'price_out': _NUM + (type(None),), 'context': (int, type(None)), 'max_output': (int, type(None))}
+_SECRETISH = re.compile(r'(?i)key|secret|token|passw|credential|authoriz|bearer')
+_LOCAL_HOSTS = ('127.0.0.1', 'localhost', '[::1]')
+
+
+def _is(v: Any, types: tuple) -> bool:
+    if isinstance(v, bool) and bool not in types:
+        return False
+    return isinstance(v, types)
+
+
+def _provider_problem(pid: str, p: Any) -> str | None:
+    if not re.fullmatch(r'[a-z0-9_-]{1,40}', pid) or pid in CLI_PROVIDERS:
+        return f"provider id '{pid}' is not allowed"
+    if not isinstance(p, dict):
+        return f"provider '{pid}' must be an object"
+    for k, v in p.items():
+        if k != 'api_version' and _SECRETISH.search(k):
+            return f"provider '{pid}' must not contain '{k}'; keys are kept in Windows Credential Manager"
+        if k not in _PROVIDER_FIELDS:
+            return f"provider '{pid}' has an unknown setting '{k}'"
+        if not _is(v, _PROVIDER_FIELDS[k]):
+            return f"provider '{pid}' setting '{k}' has the wrong type"
+    if p.get('kind') not in ('openai', 'anthropic'):
+        return f"provider '{pid}' kind must be openai or anthropic"
+    m = re.fullmatch(r'(https?)://(\[[^\]]+\]|[^/:\s]+)(:\d+)?(/\S*)?', p.get('base_url', ''))
+    if not m:
+        return f"provider '{pid}' base_url is not a web address"
+    if m.group(1) == 'http' and m.group(2).lower() not in _LOCAL_HOSTS:
+        return f"provider '{pid}' must use https unless it runs on this PC"
+    if not 1 <= p.get('max_concurrency', 1) <= 8:
+        return f"provider '{pid}' max_concurrency must be 1-8"
+    if p.get('daily_limit_usd', 0) < 0 or p.get('monthly_limit_usd', 0) < 0:
+        return f"provider '{pid}' spending limits cannot be negative"
+    if not 10 <= p.get('timeout_s', 600) <= 7200:
+        return f"provider '{pid}' timeout_s must be 10-7200"
+    return None
+
+
+def _check_providers(v: dict) -> str | None:
+    for pid, p in v.items():
+        problem = _provider_problem(pid, p)
+        if problem:
+            return problem
+    return None
+
+
+def _check_models(v: list) -> str | None:
+    seen = set()
+    for m in v:
+        if not isinstance(m, dict) or not {'id', 'provider'} <= set(m):
+            return 'every model needs an id and a provider'
+        for k, val in m.items():
+            if k not in _MODEL_FIELDS or not _is(val, _MODEL_FIELDS[k]):
+                return f"model '{m.get('id')}' setting '{k}' is not allowed or has the wrong type"
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,60}', m['id']) or m['id'] in seen:
+            return f"model id '{m['id']}' is invalid or used twice"
+        seen.add(m['id'])
+        if not set(m.get('roles', [])) <= set(BUILD_ROLES):
+            return f"model '{m['id']}' roles must be from {', '.join(BUILD_ROLES)}"
+        if any((m.get(k) or 0) < 0 for k in ('price_in', 'price_cached', 'price_out')):
+            return f"model '{m['id']}' prices cannot be negative"
+    return None
+
+
+def _check_roles(v: dict) -> str | None:
+    if not set(v) <= set(BUILD_ROLES) or not all(isinstance(x, str) for x in v.values()):
+        return 'roles must map planner, implementer and reviewer to model ids'
+    return None
+
+
+def _check_build_links(cfg: dict, warnings: list[str]) -> None:
+    """Models must name a known provider; each role must name a model allowed to play it."""
+    b = cfg['build']
+    known = set(b['providers']) | set(CLI_PROVIDERS)
+    kept = []
+    for m in b['models']:
+        if m['provider'] in known:
+            kept.append(m)
+        else:
+            warnings.append(f"Model '{m['id']}' uses unknown provider '{m['provider']}'; it was removed.")
+    b['models'] = kept
+    models = {m['id']: m for m in kept}
+    roles = {r: '' for r in BUILD_ROLES} | b['roles']
+    for role, mid in roles.items():
+        if mid and (mid not in models or role not in models[mid].get('roles', [])):
+            warnings.append(f"Build role '{role}' points at '{mid}', which is not a model allowed for that role.")
+            roles[role] = ''
+    b['roles'] = roles
 
 LEAD_STYLES = ("claude_first", "balanced")
 
@@ -197,6 +314,8 @@ SCHEMA: dict[str, dict[str, tuple[type | tuple, Any]]] = {
         "command_timeout_s": ((int, float), _range(1, 7200)),
         "extra_excluded_globs": (list, lambda v: None if all(isinstance(x, str) for x in v) else "must be a list of strings"),
     },
+    "build": {"providers": (dict, _check_providers), "models": (list, _check_models), "roles": (dict, _check_roles),
+              "parallel": (bool, None)},
 }
 
 
@@ -249,6 +368,11 @@ def validate(raw: Any) -> tuple[dict, list[str]]:
         claude_raw = raw.get('claude', {}) if isinstance(raw.get('claude'), dict) else {}
         if claude_raw.get('model', 'claude-opus-5-5') == 'claude-opus-5-5' and claude_raw.get('effort', 'high') == 'high':
             cfg['claude']['effort'] = 'medium'
+    for p in cfg['build']['providers'].values():  # Fill settings a hand-written provider left out.
+        for k, v in (('enabled', False), ('local', False), ('max_concurrency', 1), ('daily_limit_usd', 0.0),
+                     ('monthly_limit_usd', 0.0), ('timeout_s', 600)):
+            p.setdefault(k, v)
+    _check_build_links(cfg, warnings)
     return cfg, warnings
 
 

@@ -28,6 +28,7 @@ from .backends.claude_code import ClaudeCodeBackend
 from .orchestrator import EventBus, Orchestrator
 from .redact import redact
 from .server import App, Server
+from .spend import Spend
 from .storage import Storage
 
 log = logging.getLogger("enoy")
@@ -59,6 +60,7 @@ def build(cfg: dict | None = None, cfg_warnings: list[str] | None = None, synchr
     interrupted = storage.mark_interrupted()
     if interrupted:
         log.info("Marked %d interrupted task(s) for resume: %s", len(interrupted), interrupted)
+    Spend(lambda: cfg, storage).recover()
     build_interrupted = devstore.DevStore(storage).recover()
     if build_interrupted:
         log.info("Marked %d interrupted Build task(s): %s", len(build_interrupted), build_interrupted)

@@ -15,9 +15,9 @@ CODEX = "codex"
 class BackendError(RuntimeError):
     """A backend call failed. `kind` lets the orchestrator decide what to do.
 
-    kinds: unavailable (service down / not installed / not signed in),
-    model_missing, timeout, cancelled, malformed, limit (usage limit reached),
-    failed (anything else).
+    kinds: unavailable (service down / not installed / not signed in / no connection),
+    auth (API key missing or refused), model_missing, timeout, cancelled, malformed,
+    limit (usage limit reached or out of credit), budget (Enoy's own spending limit), failed (anything else).
     """
 
     def __init__(self, kind: str, message: str):
@@ -41,6 +41,8 @@ class ChatMessage:
     images: list[ImageData] = field(default_factory=list)   # Only on user messages.
     tool_calls: list[dict] = field(default_factory=list)    # Assistant turn that asked for tools: [{name, arguments}].
     tool_name: str = ""                                     # role "tool": which tool this result belongs to.
+    tool_call_id: str = ""                                  # role "tool": the API provider's id for the call.
+    provider_content: object = None                         # Assistant turn exactly as an API provider returned it.
 
 
 @dataclass
@@ -80,6 +82,8 @@ class ChatResult:
     duration_s: float = 0.0
     tool_calls: list[dict] = field(default_factory=list)   # Local model asked for these tools: [{name, arguments}].
     tool_events: list[dict] = field(default_factory=list)  # Claude: tools Claude Code used ({tool, query|url}).
+    provider_content: object = None    # API providers: the raw assistant turn, sent back unchanged in tool loops.
+    stop_reason: str = ""              # API providers: why the model stopped (stop, tool_use, max_tokens, ...).
 
 
 @dataclass
