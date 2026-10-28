@@ -256,12 +256,16 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* Tests first: a comment creates version N+1; approving locks the version (hash stored); only tasks of the approved version can become `ready`.
 
 ### Phase 4: `planning.md`, `CLAUDE.md` and archive
-- [ ] **T4.1 Renderer.** Files: `enoy/planfile.py`, golden-file test.
+- [x] **T4.1 Renderer.** *Done:* `enoy/planfile.py` `render()`. The first line is a marker with the plan ID, version and short SHA. Then come the status, summary, architecture, risks, questions and tasks. Open tasks show their full spec. Completed tasks show `[x]` with summary, commit and evidence only. Blocked tasks show the blocker. Drafts render the latest version as waiting for approval. Approved plans end with the version's SHA-256. The golden test compares a hand-written expected file byte for byte.
+  *Original spec:* Files: `enoy/planfile.py`, golden-file test.
   - Open tasks show their full spec. Completed tasks show `[x]` with ID, summary, commit and evidence only.
   - There is a marker line with the plan ID and a hash. Output is byte-for-byte the same for the same input.
-- [ ] **T4.2 Archive.** Each approved version is written as JSON with a `.sha256` file, in the data folder (and in the repo if you choose that, see Q4). Tests first: tampering is detected when loading.
-- [ ] **T4.3 Safe writer.** The file is written only if it is absent, or marked by Enoy and unchanged since Enoy's last write. Otherwise Enoy shows a diff and asks. The write is atomic. Tests first: a file you edited is never overwritten without confirmation.
-- [ ] **T4.4 `CLAUDE.md` generation.** The planner drafts it, you see a preview, and it is written only if absent or you confirm, with a backup. Tests first: an existing `CLAUDE.md` is untouched without confirmation.
+- [x] **T4.2 Archive.** *Done:* On approval, `archive_version()` writes `plans/<id>/v<N>.json` and `.sha256` in Enoy's data folder, both read-only. `load_archive()` checks the body against the `.sha256` file and the database, so any edit raises `ArchiveError`. Unapproved versions are refused. Per decision 4, nothing is written into the repository.
+  *Original spec:* Each approved version is written as JSON with a `.sha256` file, in the data folder (and in the repo if you choose that, see Q4). Tests first: tampering is detected when loading.
+- [x] **T4.3 Safe writer.** *Done:* `sync()` writes `planning.md` only when the file is absent or is exactly what Enoy last wrote (the SHA is kept in kv). Otherwise it returns `changed` or `not_enoy` with a diff and leaves the file alone. With `confirm=True` it backs the file up under `file-backups/planning` and then writes. Writes are atomic. `Planner.approve()` archives the version and then syncs.
+  *Original spec:* The file is written only if it is absent, or marked by Enoy and unchanged since Enoy's last write. Otherwise Enoy shows a diff and asks. The write is atomic. Tests first: a file you edited is never overwritten without confirmation.
+- [x] **T4.4 `CLAUDE.md` generation.** *Done:* `draft_instructions()` asks the planner model, with read-only tools only, for a draft that is redacted and never written. `save_instructions()` writes `CLAUDE.md` if it is absent. An existing file raises `FileExistsError` unless confirmed, and is backed up under `file-backups/instructions` first. Full suite: 485 passed.
+  *Original spec:* The planner drafts it, you see a preview, and it is written only if absent or you confirm, with a backup. Tests first: an existing `CLAUDE.md` is untouched without confirmation.
 
 ### Phase 5: Git isolation
 - [ ] **T5.1 Git service.** Files: `enoy/gitwork.py`, `tests/test_gitwork.py`, using real temporary repositories.

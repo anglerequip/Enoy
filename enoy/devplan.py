@@ -319,8 +319,8 @@ class Planner:
             return True
         return not self.orc.cfg["build"]["providers"][model["provider"]].get("local")
 
-    def _ask(self, model: dict, ws: Workspace, user: str) -> str:
-        messages = [ChatMessage("system", PLANNER_SYSTEM), ChatMessage("user", user)]
+    def _ask(self, model: dict, ws: Workspace, user: str, system: str = PLANNER_SYSTEM) -> str:
+        messages = [ChatMessage("system", system), ChatMessage("user", user)]
         self.orc._act(None, "build.plan", f"Asking {model['id']} for a plan ({len(user):,} characters).", "system",
                       "plan")
         if model["provider"] == "claude_cli":
@@ -404,6 +404,8 @@ class Planner:
             approved = self.store.approve_version(plan_id, version)
         except TransitionError as exc:
             raise PlanError(str(exc)) from exc
+        from . import planfile
+        planfile.archive_version(self.store, plan_id, version)
         self.orc._act(None, "build.plan", f"You approved plan {plan_id} version {version}.", "user", "plan",
                       outcome="approved")
-        return approved
+        return approved | {"planning_md": planfile.sync(self.orc, plan_id)}
