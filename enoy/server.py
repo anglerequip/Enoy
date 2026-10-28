@@ -22,7 +22,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__, activity, artifacts as art_mod, config as config_mod, diagnostics, hardware, images, knowledge, paths
-from . import pccontrol as pc
+from . import pccontrol as pc, updates as updates_mod
 from .backends.base import CLAUDE, CODEX, BackendError, ChatMessage, ChatRequest
 from .orchestrator import Orchestrator, TaskError
 from .project import PathError
@@ -135,6 +135,13 @@ class App:
         @r("GET", "/api/updates")
         def update_status(q, body):
             return self.updates.snapshot()
+
+        @r("GET", "/api/updates/latest")
+        def latest_release(q, body):
+            try:
+                return updates_mod.latest_release()
+            except Exception as exc:
+                raise ApiError(502, "Latest release notes are temporarily unavailable.") from exc
 
         @r("POST", "/api/updates")
         def check_updates(q, body):

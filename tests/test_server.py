@@ -120,6 +120,14 @@ def test_update_api_requires_auth_and_handles_active_tasks(server, monkeypatch):
     assert call(server, 'POST', '/api/updates', {}) == (200, {'status': 'checking'})
 
 
+def test_latest_release_notes_route_returns_release_metadata(server, monkeypatch):
+    from enoy import updates
+    release = {'version': '0.6.10', 'name': 'Enoy 0.6.10', 'notes': '## What changed\n- A clean summary',
+               'published_at': '2026-10-28T10:00:00Z', 'release_url': updates.RELEASES_URL + '/tag/v0.6.10'}
+    monkeypatch.setattr(updates, 'latest_release', lambda: release)
+    assert server.app.dispatch('GET', '/api/updates/latest', {}, {}) == release
+
+
 def test_regular_chat_launch_never_calls_a_backend(server, monkeypatch):
     from enoy import provider_launch
     opened = []

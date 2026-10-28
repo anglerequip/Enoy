@@ -39,6 +39,7 @@ jobs:
           tests/test_markdown_js.py tests/test_project.py tests/test_redact.py
           tests/test_updates.py tests/test_virtual_chat_project.py tests/test_winshell.py
           tests/test_usage.py::test_savings_only_completed_requests
+          tests/test_server.py::test_latest_release_notes_route_returns_release_metadata
           tests/test_server.py::test_chat_attachment_upload_is_bounded_and_stays_in_project
       - name: Install installer compiler
         run: choco install innosetup --version=6.7.1 --yes --no-progress
@@ -74,5 +75,5 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release/* --clobber
           else
-            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_TARGET" --title "Enoy $RELEASE_VERSION" --notes "Automatic stable Windows release from main commit $RELEASE_TARGET."
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_TARGET" --title "Enoy $RELEASE_VERSION" --generate-notes
           fi

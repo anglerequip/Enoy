@@ -19,8 +19,13 @@ def release_data(version='9.0.0', payload=b'installer'):
 
 def test_release_requires_stable_version_and_project_assets(monkeypatch):
     data = release_data()
+    data.update({'name': 'Enoy 9.0.0', 'body': "## What's Changed\n* [A clean patch summary](https://github.com/example) by @maintainer",
+                 'published_at': '2026-10-28T10:00:00Z'})
     monkeypatch.setattr(updates, '_open', lambda url: io.BytesIO(json.dumps(data).encode()))
-    assert updates.latest_release()['version'] == '9.0.0'
+    release = updates.latest_release()
+    assert release['version'] == '9.0.0'
+    assert release['name'] == 'Enoy 9.0.0' and 'clean patch summary' in release['notes']
+    assert release['published_at'] == '2026-10-28T10:00:00Z'
     data['assets'][0]['browser_download_url'] = 'https://example.com/installer.exe'
     with pytest.raises(ValueError, match='does not belong'):
         updates.latest_release()

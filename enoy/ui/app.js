@@ -16,7 +16,7 @@ const S = {
   status: null, projects: [], project: null, facts: null, chats: [], chatId: null, chat: null,
   model: lsGet("model") || "auto", attached: [], stream: {}, shown: {}, thinking: {}, drawer: false,
   tree: null, search: "", searchResults: null, preview: null, config: null, cfgMeta: null,
-  settingsTab: "general", images: [], streamDone: {},
+  settingsTab: "general", latestRelease: null, images: [], streamDone: {},
 };
 const MAX_IMAGES = 5;
 const SLASH_COMMANDS = [
@@ -1036,14 +1036,14 @@ async function openSettings(tab) {
 }
 
 function renderSettings() {
-  const tabs = [["general", "General"], ["appearance", "Colours"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
+  const tabs = [["general", "General"], ["updates", "Updates"], ["appearance", "Colours"], ["models", "Models"], ["tools", "Tools"], ["pc", "PC access"], ["safety", "Safety"], ["status", "Status & help"], ["activity", "Activity"]];
   openModal(`<div class="set-nav"><h2>Settings</h2>
     <button class="set-nav-about ${S.settingsTab === "about" ? "active" : ""}" data-action="settings-tab" data-tab="about">About Enoy</button>
     <div class="set-nav-divider" role="separator" aria-label="Settings sections">—</div>${tabs.map(([k, l]) =>
     `<button class="${S.settingsTab === k ? "active" : ""}" data-action="settings-tab" data-tab="${k}">${l}</button>`).join("")}
     <div class="grow"></div><button data-action="close-modal">Close</button></div>
     <div class="set-body" id="set-body"><div class="muted">Loading…</div></div>`, true);
-  ({ about: settingsAbout, general: settingsGeneral, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
+  ({ about: settingsAbout, general: settingsGeneral, updates: settingsUpdates, appearance: settingsAppearance, models: settingsModels, tools: settingsTools, pc: settingsMemoryPc, safety: settingsSafety, status: settingsStatus, activity: settingsActivity })[S.settingsTab]();
 }
 
 function settingsAbout() {
@@ -1119,11 +1119,7 @@ function settingsGeneral() {
       <div class="provider-actions"><button class="btn" data-action="install-providers">Install missing tools</button>
       <button class="btn" data-action="provider-status" data-provider="codex">Connect Codex</button>
       <button class="btn" data-action="provider-status" data-provider="claude">Connect Claude</button></div></div>
-    <div class="set-section"><h3>Updates</h3>
-      <p class="small muted">Checks GitHub for a newer stable release, installs it and restarts Enoy. Finish running tasks first. Your chats and settings are kept.</p>
-      <div class="provider-actions"><button id="update-check" class="btn" data-action="check-updates">Check for updates</button>
-      <a class="btn" href="https://github.com/anglerequip/Enoy/releases" target="_blank" rel="noopener noreferrer">Releases</a></div>
-      <p id="update-state" class="small muted" role="status">Updates are checked when you click.</p></div>`;
+    `;
   $("theme-select").addEventListener("change", e => {
     applyTheme(e.target.value); lsSet("theme", e.target.value);
     api("POST", "/api/appearance", {theme:e.target.value}).catch(error=>toast(error.message,true));
@@ -1131,7 +1127,55 @@ function settingsGeneral() {
   $("chat-experience").addEventListener("change", e => guarded(async () => {
     await setChatExperience(e.target.value);
   }));
+}
+
+function releaseSummaryItems(notes) {
+  const source = String(notes || "").trim();
+  if (/^Automatic stable Windows release from main commit [a-f\d]+\.?$/i.test(source)) {
+    return ["Stable Windows build with the latest Enoy changes."];
+  }
+  const lines = source.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const result = [];
+  let inChanges = !lines.some(line => /^#{1,4}\s*what.s changed\s*$/i.test(line.replace(/\*/g, "")));
+  for (const line of lines) {
+    const heading = line.replace(/^#+\s*/, "").replace(/\*/g, "").trim();
+    if (/^(new contributors|contributors|full changelog)/i.test(heading)) break;
+    if (/^what.s changed$/i.test(heading)) { inChanges = true; continue; }
+    if (/^#{1,4}\s/.test(line) && inChanges && result.length) break;
+    if (!inChanges) continue;
+    if (/^\*\*/.test(line) && !result.length) continue;
+    const item = line.replace(/^[-*+]\s+/, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/\s+by\s+@[\w-]+\s*$/i, "")
+      .replace(/[`*_]/g, "").trim();
+    if (item && !/^full changelog/i.test(item)) result.push(item);
+    if (result.length >= 5) break;
+  }
+  if (!result.length) return ["Release notes are not available for this version yet."];
+  return result;
+}
+
+async function settingsUpdates() {
+  const body = $("set-body");
+  body.innerHTML = `<div class="set-section"><h3>Updates</h3><p class="small muted">Check for the latest stable Enoy release. Update installs are verified and keep your chats and settings.</p><div class="update-release" id="update-release"><span class="small muted">Loading latest release…</span></div><p id="update-state" class="small muted" role="status">Updates are checked when you click.</p><div class="provider-actions"><button id="update-check" class="btn" data-action="check-updates">Check for updates</button><a class="btn" href="https://github.com/anglerequip/Enoy/releases" target="_blank" rel="noopener noreferrer">All releases</a></div></div>`;
   renderUpdateStatus(S.updates);
+  try {
+    const [release, status] = await Promise.all([api("GET", "/api/updates/latest"), api("GET", "/api/updates")]);
+    if (S.settingsTab !== "updates" || !$("update-release")) return;
+    S.latestRelease = release;
+    S.updates = status;
+    if (!release) {
+      $("update-release").innerHTML = `<p class="small muted">No stable Enoy release is available yet.</p>`;
+      renderUpdateStatus(S.updates);
+      return;
+    }
+    const date = release.published_at ? new Date(release.published_at).toLocaleDateString() : "Stable release";
+    const notes = releaseSummaryItems(release.notes).map(item => `<li>${esc(item)}</li>`).join("");
+    $("update-release").innerHTML = `<div class="update-release-top"><div><span class="small muted">Latest stable</span><h4>${esc(release.name || `Enoy ${release.version}`)}</h4></div><span class="update-version">v${esc(release.version)}</span></div><p class="small muted update-date">Installed v${esc(status.current_version || "unknown")} · ${esc(date)}</p><ul class="update-notes">${notes}</ul><a class="small settings-link" href="${esc(release.release_url)}" target="_blank" rel="noopener noreferrer">View release details</a>`;
+    renderUpdateStatus(S.updates);
+  } catch (_) {
+    if (S.settingsTab === "updates" && $("update-release")) $("update-release").innerHTML = `<p class="small muted">Couldn’t load the latest release notes. Check your connection or open the releases page.</p>`;
+  }
 }
 
 function settingsAppearance() {

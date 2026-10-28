@@ -58,7 +58,9 @@ def latest_release():
     size = installer.get("size")
     if not isinstance(size, int) or not 0 < size <= MAX_INSTALLER:
         raise ValueError("The update installer has an invalid size.")
-    return {"version": tag.removeprefix("v"), "url": installer["browser_download_url"],
+    return {"version": tag.removeprefix("v"), "name": str(data.get("name") or f"Enoy {tag}"),
+            "notes": str(data.get("body") or ""), "published_at": data.get("published_at"),
+            "url": installer["browser_download_url"],
             "checksum_url": checksum["browser_download_url"], "size": size,
             "digest": installer.get("digest"), "release_url": RELEASES_URL + "/tag/" + tag}
 
