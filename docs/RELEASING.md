@@ -4,7 +4,7 @@
 console helper for stdio MCP. It never includes local app data, provider credentials,
 project files or the build machine's virtual environment.
 
-On Windows with Python 3.12 and Inno Setup 6.7.3:
+On Windows with Python 3.12 and Inno Setup 6.7.1:
 
 ```powershell
 python -m pip install -r requirements-build.txt -r requirements-dev.txt

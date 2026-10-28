@@ -34,7 +34,7 @@ jobs:
       - name: Test
         run: python -m pytest -q
       - name: Install installer compiler
-        run: choco install innosetup --version=6.7.3 --yes --no-progress
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
       - name: Build Windows installer
         shell: pwsh
         run: ./launch/build-release.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
