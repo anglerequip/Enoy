@@ -27,7 +27,7 @@ TRANSITIONS: dict[str, tuple[str, ...]] = {
     "reviewing": ("merging", "ready", "failed", "waiting_network", "interrupted", "cancelled"),
     "merging": ("completed", "ready", "failed", "interrupted"),
     "waiting_network": ("ready", "cancelled"),
-    "interrupted": ("ready", "cancelled"),
+    "interrupted": ("ready", "cancelled", "completed"),  # Completed: its work was merged before Enoy stopped.
     "blocked": ("ready", "cancelled"),
     "failed": ("ready", "cancelled"),
     "completed": (),

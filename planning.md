@@ -314,9 +314,23 @@ Each task fits one fresh session. "Verify" is the exact command. Every task also
   *Original spec:* `report_blocker` tool. "Test spec wrong" sets `blocked` and asks for a plan revision. Tests first.
 
 ### Phase 7: Verification and review
-- [ ] **T7.1 Fixed gate.** Scope, hashes, a fresh re-run of the tests, syntax and lost-content checks, unfinished markers. Tests first: one failing case for each check.
-- [ ] **T7.2 Model review.** The reviewer model must differ from the implementer (enforced). The review cannot override a failed gate. Tests first.
-- [ ] **T7.3 Completion recorder.** Merge, commit ID, evidence, `planning.md` update. If the commit is already merged, completion is recorded without re-running. Tests first.
+- [x] **T7.1 Fixed gate.** *Done:* `enoy/devgate.py` `run_gate()` runs seven checks:
+  - scope: the test commit touches only `test_files`, and the implementation commit touches only `allowed_files`;
+  - frozen_tests: each test file's bytes at the implementation commit match its frozen SHA (line endings counted as LF, because git on this PC has `core.autocrlf=true`);
+  - tests and regression: re-run in a fresh, detached checkout of the implementation commit, which is removed afterwards;
+  - syntax and lost_content: `patches.check_syntax` and `lost_content` on every changed file;
+  - unfinished: added lines containing TODO, FIXME, XXX or NotImplementedError. A plain `pass` is not flagged, because it is often legitimate.
+  Each check has a test that fails it.
+  *Original spec:* Scope, hashes, a fresh re-run of the tests, syntax and lost-content checks, unfinished markers. Tests first: one failing case for each check.
+- [x] **T7.2 Model review.** *Done:* `review_task()` refuses a reviewer that is the same model as the implementer. When the gate failed it skips the review and does not call the model. Otherwise the reviewer gets the task facts, the gate results and the diff. Its JSON verdict (`approve`/`changes` plus findings) decides; an unclear answer counts as not approved. `devplan.ask_model()` is now shared by the planner and the reviewer and stays read-only.
+  *Original spec:* The reviewer model must differ from the implementer (enforced). The review cannot override a failed gate. Tests first.
+- [x] **T7.3 Completion recorder.** *Done:* `finish_task()` runs gate, optional review, merge and record:
+  - gate failure or requested changes: the task fails with the reasons;
+  - review cannot reach the network: the task waits;
+  - merge conflict: the task returns to ready for a new attempt, with the conflicting files named;
+  - success: the task completes with `commit_id` set to the implementation commit, evidence (fresh test results, checks, review, merge commit), released dependants and `planning.md` synced, and the clean worktree is removed while the branch is kept.
+  `record_if_merged()` marks an interrupted task completed without re-running when its commit is already on the integration branch; `interrupted → completed` is now an allowed transition. The user's branch is never touched. Full suite: 539 passed.
+  *Original spec:* Merge, commit ID, evidence, `planning.md` update. If the commit is already merged, completion is recorded without re-running. Tests first.
 
 ### Phase 8: Scheduler
 - [ ] **T8.1 Manual and automatic sequential runs.** Retries with a new worktree each time; `waiting_network` when offline; stop and cancel. Tests first.

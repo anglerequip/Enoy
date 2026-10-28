@@ -164,6 +164,33 @@ class GitWork:
         _git(worktree, "commit", "-q", "--no-verify", "-m", message, agent=True)
         return self.head(worktree)
 
+    def file_at(self, commit: str, path: str) -> bytes | None:
+        """A file's exact bytes at a commit, or None when it does not exist there."""
+        exe = shutil.which("git")
+        if not exe:
+            raise GitError("Git is not installed.")
+        out = subprocess.run([exe, "-C", str(self.repo), "show", f"{commit}:{path}"], capture_output=True,
+                             timeout=TIMEOUT_S, env=_env(), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return out.stdout if out.returncode == 0 else None
+
+    def parent(self, commit: str) -> str:
+        return _git(self.repo, "rev-parse", f"{commit}^").stdout.strip()
+
+    def is_ancestor(self, commit: str, of: str) -> bool:
+        return _git(self.repo, "merge-base", "--is-ancestor", commit, of, check=False).returncode == 0
+
+    def diff_text(self, a: str, b: str) -> str:
+        return _git(self.repo, "-c", "core.quotepath=false", "diff", a, b).stdout
+
+    def temp_worktree(self, commit: str, name: str) -> Path:
+        """A detached, clean checkout of a commit, for re-running checks without leftovers."""
+        path = self.base / name
+        if path.exists():
+            self.remove_worktree(path, confirm=True)
+        self.base.mkdir(parents=True, exist_ok=True)
+        _git(self.repo, "worktree", "add", "-q", "--detach", str(path), commit)
+        return path
+
     def diff_names(self, a: str, b: str) -> list[str]:
         out = _git(self.repo, "-c", "core.quotepath=false", "diff", "--name-only", a, b).stdout
         return sorted(line.strip() for line in out.splitlines() if line.strip())

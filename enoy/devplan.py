@@ -286,6 +286,29 @@ def planner_context(ws: Workspace, goal: str, max_chars: int = 60000) -> str:
     return redact(head + "".join(parts) + listing[:max(budget, 0)] + tail)[:max_chars]
 
 
+# Asking a read-only model ------------------------------------------------------------------
+
+def ask_model(orc, providers, model: dict, root, system: str, user: str, purpose: str, role: str) -> str:
+    """One read-only request to a Build model (planner or reviewer). It never gets write tools.
+
+    Claude through the CLI may read the folder with Enoy's read-only MCP tools; ChatGPT through the CLI gets
+    no tools; API models go through Providers.complete, so spending limits apply.
+    """
+    messages = [ChatMessage("system", system), ChatMessage("user", user)]
+    if model["provider"] == "claude_cli":
+        env = orc._mcp_env()
+        env["ENOY_MCP_WORKSPACE"] = str(root)
+        env["ENOY_MCP_FOLDERS"] = {"current": str(root), "known": []}
+        env["ENOY_MCP_PRIVATE"] = {"cloud_excluded_globs": orc.cfg["privacy"]["cloud_excluded_globs"],
+                                   "extra_excluded_globs": orc.cfg["permissions"]["extra_excluded_globs"]}
+        req = ChatRequest(messages, purpose=purpose, enoy_tools=list(READ_TOOLS), enoy_env=env,
+                          model=model.get("model") or None)
+        return orc.backends[CLAUDE].chat(req).text
+    if model["provider"] == "codex_cli":
+        return orc.backends[CODEX].chat(ChatRequest(messages, purpose=purpose, model=model.get("model") or None)).text
+    return providers.complete(model["id"], messages, max_output=16000, role=role, purpose=purpose).text
+
+
 # Planner service --------------------------------------------------------------------------
 
 class Planner:
@@ -320,22 +343,9 @@ class Planner:
         return not self.orc.cfg["build"]["providers"][model["provider"]].get("local")
 
     def _ask(self, model: dict, ws: Workspace, user: str, system: str = PLANNER_SYSTEM) -> str:
-        messages = [ChatMessage("system", system), ChatMessage("user", user)]
         self.orc._act(None, "build.plan", f"Asking {model['id']} for a plan ({len(user):,} characters).", "system",
                       "plan")
-        if model["provider"] == "claude_cli":
-            env = self.orc._mcp_env()
-            env["ENOY_MCP_WORKSPACE"] = str(ws.root)
-            env["ENOY_MCP_FOLDERS"] = {"current": str(ws.root), "known": []}
-            env["ENOY_MCP_PRIVATE"] = {"cloud_excluded_globs": self.orc.cfg["privacy"]["cloud_excluded_globs"],
-                                       "extra_excluded_globs": self.orc.cfg["permissions"]["extra_excluded_globs"]}
-            req = ChatRequest(messages, purpose="plan", enoy_tools=list(READ_TOOLS), enoy_env=env,
-                              model=model.get("model") or None)
-            return self.orc.backends[CLAUDE].chat(req).text
-        if model["provider"] == "codex_cli":
-            return self.orc.backends[CODEX].chat(ChatRequest(messages, purpose="plan",
-                                                             model=model.get("model") or None)).text
-        return self.providers.complete(model["id"], messages, max_output=16000, role="planner", purpose="plan").text
+        return ask_model(self.orc, self.providers, model, ws.root, system, user, "plan", "planner")
 
     def _generate(self, model: dict, ws: Workspace, user: str) -> dict:
         allow = self.orc.cfg["permissions"]["command_allowlist"]

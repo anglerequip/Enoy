@@ -352,8 +352,13 @@ class PhaseResult:
     evidence: dict = field(default_factory=dict)
 
 
+def content_sha(data: bytes) -> str:
+    """SHA-256 of a file's content with Windows line endings counted as LF, because Git may convert them."""
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def _sha(path: Path) -> str | None:
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    return content_sha(path.read_bytes()) if path.is_file() else None
 
 
 def _tail(text: str, n: int = 3000) -> str:
